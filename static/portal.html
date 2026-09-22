@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <title>Report an issue — LabCare</title>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <style>
+    :root {
+      --bg: #f3f5f9; --card: #fff; --ink: #0f172a; --soft: #64748b; --line: #e2e8f0;
+      --brand: #0f766e; --brand2: #14b8a6; --brand-soft: #ccfbf1; --danger: #dc2626;
+      --danger-soft: #fee2e2; --ok: #16a34a; --ok-soft: #dcfce7; --info: #2563eb; --info-soft: #dbeafe;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg); color: var(--ink); font-size: 15px; line-height: 1.45; min-height: 100dvh;
+    }
+    .wrap { max-width: 520px; margin: 0 auto; padding: 16px 16px 40px; }
+    .hero {
+      background: linear-gradient(135deg, #0f766e, #0d9488); color: #fff;
+      border-radius: 18px; padding: 22px 20px; box-shadow: 0 12px 32px rgba(15,118,110,.28);
+    }
+    .hero .brand { font-size: 12px; font-weight: 700; letter-spacing: .6px; opacity: .9; }
+    .hero h1 { font-size: 21px; font-weight: 800; margin-top: 6px; }
+    .hero .meta { margin-top: 10px; font-size: 13px; opacity: .95; }
+    .hero .tag {
+      display: inline-block; background: rgba(255,255,255,.18); border-radius: 999px;
+      padding: 4px 11px; font-size: 11.5px; font-weight: 700; margin-top: 8px;
+    }
+    .section-title { font-size: 13px; font-weight: 800; color: var(--soft); text-transform: uppercase; letter-spacing: .6px; margin: 20px 2px 8px; }
+    .card { background: var(--card); border-radius: 14px; box-shadow: 0 1px 3px rgba(15,23,42,.07), 0 6px 22px rgba(15,23,42,.05); padding: 16px; }
+    .field { display: block; margin-bottom: 13px; }
+    .field > span { display: block; font-size: 12.5px; font-weight: 700; color: var(--soft); margin-bottom: 6px; }
+    .field input, .field select, .field textarea {
+      width: 100%; padding: 12px 13px; border: 1.5px solid var(--line); border-radius: 12px;
+      background: #fbfcfe; font-size: 15px; outline: none; font-family: inherit; color: inherit;
+    }
+    .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--brand2); background: #fff; }
+    .field textarea { min-height: 92px; resize: vertical; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 13px 18px; border-radius: 12px; border: none; cursor: pointer;
+      font-weight: 700; font-size: 15px; width: 100%;
+    }
+    .btn:active { opacity: .85; }
+    .btn-primary { background: linear-gradient(135deg, var(--brand2), var(--brand)); color: #fff; }
+    .btn:disabled { opacity: .5; pointer-events: none; }
+    .form-error { background: var(--danger-soft); color: var(--danger); padding: 10px 12px; border-radius: 10px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+    .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+    .b-open { background: var(--danger-soft); color: var(--danger); }
+    .b-in_progress { background: var(--info-soft); color: var(--info); }
+    .b-resolved { background: var(--ok-soft); color: var(--ok); }
+    .b-closed { background: #e2e8f0; color: #475569; }
+    .b-critical { background: var(--danger-soft); color: var(--danger); }
+    .b-high { background: #ffedd5; color: #c2410c; }
+    .b-medium { background: #fef9c3; color: #a16207; }
+    .b-low { background: #e0e7ff; color: #4338ca; }
+    .ticket { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-bottom: 1px dashed var(--line); }
+    .ticket:last-child { border-bottom: none; }
+    .ticket .t-title { font-weight: 700; font-size: 14px; }
+    .ticket .t-sub { color: var(--soft); font-size: 12px; }
+    .ticket .t-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .toast-host { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 200; width: calc(100% - 32px); max-width: 420px; }
+    .toast { background: #0f172a; color: #fff; padding: 12px 16px; border-radius: 12px; font-size: 14px; font-weight: 600; margin-bottom: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.3); }
+    .toast.success { background: var(--ok); }
+    .toast.error { background: var(--danger); }
+    .empty { text-align: center; padding: 26px 10px; color: var(--soft); }
+    .eq-chip { display: flex; align-items: center; gap: 10px; background: var(--brand-soft); color: var(--brand); border-radius: 12px; padding: 10px 12px; font-weight: 700; font-size: 13.5px; }
+    .hidden { display: none !important; }
+    footer { text-align: center; color: var(--soft); font-size: 11.5px; margin-top: 26px; }
+  </style>
+</head>
+<body>
+  <div class="toast-host" id="toastHost"></div>
+  <div class="wrap">
+    <div id="content"><div class="empty">Loading…</div></div>
+    <footer>Powered by 🔬 LabCare</footer>
+  </div>
+  <script>
+    "use strict";
+    const token = new URLSearchParams(location.search).get("t") || "";
+    const $ = (s) => document.querySelector(s);
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+    const STATUS = {
+      open: { label: "Open", cls: "b-open" }, in_progress: { label: "In Progress", cls: "b-in_progress" },
+      resolved: { label: "Resolved", cls: "b-resolved" }, closed: { label: "Closed", cls: "b-closed" },
+    };
+    const PRIO = {
+      low: { label: "Low", cls: "b-low" }, medium: { label: "Medium", cls: "b-medium" },
+      high: { label: "High", cls: "b-high" }, critical: { label: "Critical", cls: "b-critical" },
+    };
+    const badge = (m, v) => `<span class="badge ${m[v].cls}">${m[v].label}</span>`;
+    function toast(msg, type) {
+      const t = document.createElement("div");
+      t.className = "toast " + (type || "");
+      t.textContent = msg;
+      $("#toastHost").appendChild(t);
+      setTimeout(() => t.remove(), 3400);
+    }
+
+    async function api(path, opts) {
+      opts = opts || {};
+      const res = await fetch(path, {
+        method: opts.method || "GET",
+        headers: opts.body ? { "Content-Type": "application/json" } : {},
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      let data = {};
+      try { data = await res.json(); } catch (e) {}
+      if (!res.ok) throw new Error(data.error || "Something went wrong");
+      return data;
+    }
+
+    async function boot() {
+      const box = $("#content");
+      if (!token) {
+        box.innerHTML = `<div class="empty"><div style="font-size:44px">⚠️</div>
+          <h2 style="color:var(--ink);margin:8px 0 4px">Invalid link</h2><p>This reporting link is missing its code.</p></div>`;
+        return;
+      }
+      try {
+        const info = await api("/api/portal/" + token);
+        render(info);
+      } catch (e) {
+        box.innerHTML = `<div class="empty"><div style="font-size:44px">🔒</div>
+          <h2 style="color:var(--ink);margin:8px 0 4px">Link unavailable</h2><p>${esc(e.message)}. Please contact your service provider for a new QR code.</p></div>`;
+      }
+    }
+
+    function render(info) {
+      const box = $("#content");
+      const eq = info.equipment;
+      const eqLabel = eq
+        ? `${eq.name}${eq.model ? " — " + eq.model : ""}${eq.serial_number ? " · S/N " + eq.serial_number : ""}`
+        : (info.equipment_name || "");
+
+      box.innerHTML = `
+        <div class="hero">
+          <div class="brand">🔬 LABCARE SERVICE PORTAL</div>
+          <h1>Report an equipment issue</h1>
+          <div class="meta">${esc(info.customer_name || "")}</div>
+          ${eqLabel ? `<div class="tag">⚙ ${esc(eqLabel)}</div>` : ""}
+        </div>
+
+        <div class="section-title">New complaint</div>
+        <form id="repForm" class="card">
+          <div id="formError" class="form-error hidden"></div>
+          <label class="field"><span>What's the problem? *</span>
+            <input id="fSubject" placeholder="e.g. Centrifuge making loud noise" required></label>
+          <label class="field"><span>Details</span>
+            <textarea id="fDesc" placeholder="Describe the symptom, when it started, error messages…"></textarea></label>
+          <label class="field"><span>How urgent?</span>
+            <select id="fPriority">
+              <option value="low">Low — not urgent</option>
+              <option value="medium" selected>Medium — normal</option>
+              <option value="high">High — affecting work</option>
+              <option value="critical">Critical — equipment down</option>
+            </select></label>
+          <button type="submit" class="btn btn-primary" id="submitBtn">Send report</button>
+        </form>
+
+        <div class="section-title">Open reports</div>
+        <div class="card" id="openTickets">${renderOpen(info.open_complaints || [])}</div>
+
+        <div class="section-title">Recent activity</div>
+        <div class="card" id="history">${renderHistory("")}</div>
+      `;
+
+      $("#repForm").addEventListener("submit", submitComplaint);
+      fetchHistory();
+    }
+
+    function renderOpen(list) {
+      if (!list.length) return `<p style="color:var(--soft);font-size:13px">No open reports for this equipment. 🎉</p>`;
+      return list.map((t) => `
+        <div class="ticket">
+          <div class="t-title">${esc(t.subject)}</div>
+          <div class="t-sub">${esc(t.code)} · ${esc(t.created_at || "")}</div>
+          <div class="t-meta">${badge(STATUS, t.status)} ${badge(PRIO, t.priority)}</div>
+        </div>`).join("");
+    }
+
+    function renderHistory(list) {
+      if (!list) return `<p style="color:var(--soft);font-size:13px">Loading…</p>`;
+      if (!list.length) return `<p style="color:var(--soft);font-size:13px">No reports yet.</p>`;
+      return list.slice(0, 8).map((t) => `
+        <div class="ticket">
+          <div class="t-title">${esc(t.subject)}</div>
+          <div class="t-sub">${esc(t.code)} · ${esc(t.created_at || "")}</div>
+          <div class="t-meta">${badge(STATUS, t.status)} ${badge(PRIO, t.priority)}</div>
+        </div>`).join("");
+    }
+
+    async function fetchHistory() {
+      try {
+        const h = await api("/api/portal/" + token + "/history");
+        $("#history").innerHTML = renderHistory(h);
+      } catch (e) { $("#history").innerHTML = `<p style="color:var(--soft)">Couldn't load history.</p>`; }
+    }
+
+    async function submitComplaint(e) {
+      e.preventDefault();
+      const err = $("#formError");
+      err.classList.add("hidden");
+      const subject = $("#fSubject").value.trim();
+      if (!subject) { err.textContent = "Please describe the problem."; err.classList.remove("hidden"); return; }
+      const btn = $("#submitBtn");
+      btn.disabled = true; btn.textContent = "Sending…";
+      try {
+        const c = await api("/api/portal/" + token + "/complaints", {
+          method: "POST",
+          body: {
+            subject,
+            description: $("#fDesc").value.trim(),
+            priority: $("#fPriority").value,
+          },
+        });
+        toast("Report sent — ref " + c.code, "success");
+        $("#fSubject").value = "";
+        $("#fDesc").value = "";
+        const info = await api("/api/portal/" + token);
+        renderOpenAndRefresh(info);
+      } catch (err2) {
+        err.textContent = err2.message;
+        err.classList.remove("hidden");
+      }
+      btn.disabled = false; btn.textContent = "Send report";
+    }
+
+    function renderOpenAndRefresh(info) {
+      // re-render only the open tickets + history
+      $("#openTickets").innerHTML = renderOpen(info.open_complaints || []);
+      fetchHistory();
+    }
+
+    boot();
+  </script>
+</body>
+</html>

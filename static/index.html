@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <title>LabCare — Complaints &amp; Breakdowns</title>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/styles.css?v=6">
+</head>
+<body>
+  <div id="app" class="hidden">
+    <!-- Header -->
+    <header id="topbar">
+      <button id="backBtn" class="icon-btn hidden" aria-label="Back">‹</button>
+      <div class="topbar-title">
+        <div id="tbApp" class="tb-brand">🔬 LabCare</div>
+        <h1 id="tbTitle">Dashboard</h1>
+      </div>
+      <button id="bellBtn" class="icon-btn" aria-label="Notifications">🔔<span id="bellDot" class="bell-dot hidden"></span></button>
+      <button id="profileBtn" class="avatar-btn" aria-label="Account">
+        <span id="avatarInitials">?</span>
+      </button>
+    </header>
+
+    <!-- Main view -->
+    <main id="view"></main>
+
+    <!-- Bottom navigation -->
+    <nav id="bottomnav">
+      <div class="side-brand"><span class="side-logo">🔬</span><span>LabCare<small>Complaints &amp; Breakdowns</small></span></div>
+      <button class="bn-item" data-view="dashboard"><span class="bn-ico">▦</span><span class="bn-label">Home</span></button>
+      <button class="bn-item" data-view="complaints"><span class="bn-ico">✉</span><span class="bn-label">Complaints</span></button>
+      <button class="bn-item" data-view="breakdowns"><span class="bn-ico">⚠</span><span class="bn-label">Breakdowns</span></button>
+      <button class="bn-item" data-view="equipment"><span class="bn-ico">⚙</span><span class="bn-label">Equipment</span></button>
+      <button class="bn-item" data-view="more"><span class="bn-ico">☰</span><span class="bn-label">More</span></button>
+      <div class="side-create">
+        <button class="side-create-btn" onclick="openComplaintEditor(false)">✉️ New complaint</button>
+        <button class="side-create-btn" onclick="openBreakdownEditor(false)">⚠️ New breakdown</button>
+      </div>
+    </nav>
+
+    <!-- Floating action button -->
+    <button id="fab" class="fab hidden" aria-label="Create">＋</button>
+  </div>
+
+  <!-- Login screen -->
+  <div id="loginScreen" class="login-screen hidden">
+    <div class="login-wrap">
+      <aside class="login-brand">
+        <div class="login-logo">🔬</div>
+        <h1 class="login-title">LabCare</h1>
+        <p class="login-sub">Customer Complaints &amp; Equipment Breakdowns</p>
+        <ul class="login-points">
+          <li>📋 Log complaints &amp; breakdowns in seconds</li>
+          <li>🔔 Sound alerts &amp; email notifications</li>
+          <li>📎 Photos, files &amp; service reports</li>
+          <li>📈 Trends, reports &amp; CSV exports</li>
+        </ul>
+      </aside>
+      <div class="login-card">
+      <div class="login-logo card-logo">🔬</div>
+      <h1 class="login-title card-title">LabCare</h1>
+      <p class="login-sub card-sub">Customer Complaints &amp; Equipment Breakdowns</p>
+      <form id="loginForm" autocomplete="off">
+        <label class="field">
+          <span>Email</span>
+          <input type="email" id="loginEmail" placeholder="you@lab.com" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" id="loginPassword" placeholder="••••••••" required>
+        </label>
+        <div id="loginError" class="form-error hidden"></div>
+        <button type="submit" class="btn btn-primary btn-block" id="loginBtn">Sign in</button>
+      </form>
+      <div id="joinNote"></div>
+      <button class="btn btn-ghost btn-block" id="showJoinBtn" style="margin-top:10px">Request an account</button>
+
+      <!-- Join request form (hidden until toggled) -->
+      <div id="joinPanel" class="hidden" style="margin-top:14px;text-align:left">
+        <div class="section-title">Request account</div>
+        <p id="joinHint" class="join-hint">Technician and customer accounts are approved by an admin before you can sign in.</p>
+        <form id="joinForm" autocomplete="off">
+          <label class="field"><span>Full name *</span><input id="jnName" placeholder="Your name" required></label>
+          <label class="field"><span>Email *</span><input id="jnEmail" type="email" placeholder="you@lab.com" required></label>
+          <label class="field"><span>Phone</span><input id="jnPhone" placeholder="optional"></label>
+          <label class="field"><span>I am a…</span>
+            <select id="jnRole">
+              <option value="customer">Customer (lab staff)</option>
+              <option value="technician">Technician / Engineer</option>
+            </select>
+          </label>
+          <div id="jnCustomerBlock">
+            <label class="field"><span>Organisation *</span>
+              <select id="jnCustomer" onchange="onJoinCust()"><option value="">— Select your organisation —</option></select>
+            </label>
+            <label class="field"><span>Location *</span>
+              <select id="jnLocation" onchange="onJoinLoc()"><option value="">— Select location —</option></select>
+            </label>
+            <label class="field"><span>Department *</span>
+              <select id="jnDepartment"><option value="">— Select department —</option></select>
+            </label>
+          </div>
+          <label class="field"><span>Password *</span><input id="jnPassword" type="password" placeholder="Min 6 characters" required></label>
+          <div id="joinError" class="form-error hidden"></div>
+          <div id="joinOk" class="form-error hidden" style="color:var(--good,#16a34a)"></div>
+          <button type="submit" class="btn btn-primary-2 btn-block">Submit for approval</button>
+        </form>
+      </div>
+
+      <div class="login-demo">
+        <p class="demo-title">Demo accounts (password <b>Demo123!</b>)</p>
+        <div class="demo-row"><span class="chip chip-admin">Admin</span><code>admin@labcare.com</code></div>
+        <div class="demo-row"><span class="chip chip-tech">Tech</span><code>aidil@labcare.com</code></div>
+        <div class="demo-row"><span class="chip chip-cust">Customer</span><code>kavita@bioref.com</code></div>
+      </div>
+      </div><!-- /login-card -->
+    </div><!-- /login-wrap -->
+  </div>
+
+  <!-- Loading overlay -->
+  <div id="loading" class="loading hidden"><div class="spinner"></div></div>
+
+  <!-- Toasts -->
+  <div id="toasts" class="toasts"></div>
+
+  <!-- Modal host -->
+  <div id="modalHost" class="modal-host hidden"></div>
+
+  <script src="/app.js?v=12"></script>
+</body>
+</html>

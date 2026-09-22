@@ -1,0 +1,44 @@
+# =============================================================================
+# Netlify config for https://labcareassist.netlify.app
+# -----------------------------------------------------------------------------
+# Netlify hosts the FRONTEND (static/). Netlify cannot run the Python backend,
+# so every /api/* request is proxied to your self-hosted backend, which runs
+# the Flask app (Docker or systemd — see deploy/DEPLOY.md).
+#
+#   SETUP (one time)
+#     1. Deploy a backend somewhere with a public HTTPS URL, e.g.
+#        https://labcare-backend.some-vps.com   (nginx + certbot, or any PaaS)
+#     2. Replace BACKEND_BASE_URL below with that URL.
+#     3. Deploy this folder to Netlify (publish dir already set to "static"):
+#           netlify deploy --prod --dir=static
+#        (or connect this Git repo to Netlify — same result)
+#
+#    The frontend calls only relative /api/... URLs, so the proxy below is the
+#    only thing tying the frontend to the backend. Session auth also flows
+#    through the proxy (token is sent in the Authorization header and ?token=).
+# =============================================================================
+
+[build]
+  publish = "static"
+  command = "echo 'static build — nothing to compile'"
+
+# ---- API proxy → backend ---------------------------------------------------
+# Replace BACKEND_BASE_URL with your real backend URL (keep the trailing path).
+# Query strings (?token=..., ?entity_type=...) are forwarded automatically.
+[[redirects]]
+  from = "/api/*"
+  to = "https://BACKEND_BASE_URL.example.com/api/:splat"
+  status = 200
+  force = true
+
+# ---- QR portal short link ---------------------------------------------------
+[[redirects]]
+  from = "/portal"
+  to = "/portal.html"
+  status = 200
+
+# ---- SPA fallback (any unknown path → app shell) ---------------------------
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

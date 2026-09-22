@@ -1,0 +1,41 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+
+# ---- Runtime data (never commit user data or secrets) ----
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+server/labcare.db
+ticket_history.log
+server/ticket_history.log
+outbox.log
+server/outbox.log
+uploads/
+server/uploads/
+
+# ---- Environment / secrets ----
+.env
+.env.*
+
+# ---- Netlify ----
+.netlify/
+
+# ---- OS / editor noise ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

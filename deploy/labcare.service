@@ -1,0 +1,28 @@
+[Unit]
+Description=LabCare — Complaint & Breakdown Management
+After=network.target
+
+[Service]
+# --- Edit the two paths below to where you installed the project -----------
+WorkingDirectory=/opt/labcare/server
+# ---------------------------------------------------------------------------
+User=www-data
+Group=www-data
+
+# Environment variables (all optional)
+#   LABCARE_DB=/var/lib/labcare/labcare.db
+#   LABCARE_TICKET_CAP=2000
+#   LABCARE_HISTORY_LOG=/var/lib/labcare/ticket_history.log
+#   LABCARE_SECURE_COOKIES=1     <- enable behind HTTPS (recommended)
+Environment=PORT=8000
+Environment=LABCARE_SECURE_COOKIES=1
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/usr/bin/python3 run.py
+
+# Restart policy
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,2871 @@
+/* LabCare — mobile web app (complaints & breakdowns for lab equipment) */
+"use strict";
+
+// ---------------------------------------------------------------- Safe storage
+// localStorage can throw (e.g. sandboxed iframes, private mode); degrade to memory.
+const store = (() => {
+  let mem = {};
+  let ok = false;
+  try {
+    const t = "__labcare_test__";
+    localStorage.setItem(t, "1");
+    localStorage.removeItem(t);
+    ok = true;
+  } catch (e) { ok = false; }
+  return {
+    get(k) {
+      try { return ok ? localStorage.getItem(k) : (k in mem ? mem[k] : null); }
+      catch (e) { return k in mem ? mem[k] : null; }
+    },
+    set(k, v) {
+      try { if (ok) localStorage.setItem(k, v); } catch (e) {}
+      mem[k] = v;
+    },
+    remove(k) {
+      try { if (ok) localStorage.removeItem(k); } catch (e) {}
+      delete mem[k];
+    },
+  };
+})();
+
+// ---------------------------------------------------------------- API client
+// The preview may run in a sandboxed iframe with an opaque origin: cookies
+// can't be set and reverse proxies may strip the Authorization header. To keep
+// sessions working everywhere we send the token through three channels at once
+// (header, cookie, and ?token= query — the server accepts any of them).
+function withToken(path, token) {
+  const t = token != null ? token : API.token;
+  if (!t) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return path + sep + "token=" + encodeURIComponent(t);
+}
+
+const API = {
+  token: store.get("labcare_token"),
+  async req(method, path, body) {
+    const headers = { "Content-Type": "application/json" };
+    if (this.token) headers["Authorization"] = "Bearer " + this.token;
+    const res = await fetch(withToken(path), {
+      method,
+      headers,
+      credentials: "same-origin", // send the auth cookie (belt & suspenders)
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    let data = {};
+    try { data = await res.json(); } catch (e) { /* ignore */ }
+    if (!res.ok) throw new Error(data.error || "Something went wrong");
+    return data;
+  },
+  get(p) { return this.req("GET", p); },
+  post(p, b) { return this.req("POST", p, b); },
+  put(p, b) { return this.req("PUT", p, b); },
+  patch(p, b) { return this.req("PATCH", p, b); },
+  del(p) { return this.req("DELETE", p); },
+};
+
+// ---------------------------------------------------------------- State
+const state = {
+  user: null,
+  view: "dashboard",
+  history: [],
+  // caches
+  complaints: null,
+  breakdowns: null,
+  equipment: null,
+  customers: null,
+  users: null,
+  locations: null,
+  departments: null,
+  orgTab: "customers",
+  complaintFilter: "open",
+  breakdownFilter: "open",
+  pmFilter: "due",
+  complaintDetail: null,
+  breakdownDetail: null,
+  signup: null,
+  pm: null,
+  portals: null,
+};
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+));
+
+const ROLE_LABELS = { admin: "Admin", technician: "Technician", customer: "Customer" };
+const roleChip = (role) => `<span class="chip chip-${role === "admin" ? "admin" : role === "technician" ? "tech" : "cust"}">${ROLE_LABELS[role] || role}</span>`;
+
+const STATUS_META = {
+  open: { label: "Open", cls: "b-open" },
+  in_progress: { label: "In Progress", cls: "b-in_progress" },
+  resolved: { label: "Resolved", cls: "b-resolved" },
+  closed: { label: "Closed", cls: "b-closed" },
+  reported: { label: "Reported", cls: "b-reported" },
+  diagnosed: { label: "Diagnosed", cls: "b-diagnosed" },
+  on_hold: { label: "On Hold", cls: "b-on_hold" },
+};
+const PRIORITY_META = {
+  low: { label: "Low", cls: "b-low" },
+  medium: { label: "Medium", cls: "b-medium" },
+  high: { label: "High", cls: "b-high" },
+  critical: { label: "Critical", cls: "b-critical" },
+};
+const AUDIT_META = {
+  created: { t: "Opened ticket", ico: "➕" },
+  assigned: { t: "Changed assignee", ico: "👤" },
+  status: { t: "Changed status", ico: "🔁" },
+  resolution: { t: "Resolution", ico: "✅" },
+  updated: { t: "Updated", ico: "✏️" },
+  comment: { t: "Commented", ico: "💬" },
+  attachment: { t: "Added file", ico: "📎" },
+};
+const badge = (type, value) => {
+  const m = (type === "status" ? STATUS_META : PRIORITY_META)[value] || { label: value, cls: "" };
+  return `<span class="badge ${m.cls}">${m.label}</span>`;
+};
+
+const fmtDate = (s) => {
+  if (!s) return "—";
+  const d = new Date(s.replace(" ", "T"));
+  if (isNaN(d)) return s;
+  return d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+};
+const fmtDateShort = (s) => {
+  if (!s) return "—";
+  const d = new Date(s.replace(" ", "T"));
+  if (isNaN(d)) return s;
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+};
+const initials = (name) => (name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+const timeAgo = (s) => {
+  if (!s) return "";
+  const d = new Date(s.replace(" ", "T"));
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+  if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+  if (diff < 86400 * 30) return Math.floor(diff / 86400) + "d ago";
+  return fmtDateShort(s);
+};
+
+// ---------------------------------------------------------------- Toasts & modals & loading
+function toast(msg, type = "") {
+  const t = document.createElement("div");
+  t.className = "toast " + type;
+  t.textContent = msg;
+  $("#toasts").appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+
+function showLoading() { $("#loading").classList.remove("hidden"); }
+function hideLoading() { $("#loading").classList.add("hidden"); }
+
+function openSheet(html) {
+  const host = $("#modalHost");
+  host.innerHTML = `<div class="sheet">${html}</div>`;
+  host.classList.remove("hidden");
+  host.querySelector(".sheet").addEventListener("click", (e) => e.stopPropagation());
+}
+function closeSheet() {
+  $("#modalHost").classList.add("hidden");
+  $("#modalHost").innerHTML = "";
+}
+$("#modalHost").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeSheet(); });
+
+function confirmDialog(title, message, dangerText, onConfirm) {
+  openSheet(`
+    <div class="sheet-head"><h3>${esc(title)}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body"><p style="font-size:14.5px;color:var(--ink-soft)">${esc(message)}</p></div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn ${dangerText ? "btn-danger" : "btn-primary"}" id="confirmYes">${esc(dangerText || "Confirm")}</button>
+    </div>
+  `);
+  $("#confirmYes").addEventListener("click", async () => {
+    closeSheet();
+    onConfirm && onConfirm();
+  });
+}
+
+// ---------------------------------------------------------------- Auth
+async function login(email, password) {
+  const data = await API.post("/api/login", { email, password });
+  API.token = data.token;
+  store.set("labcare_token", data.token);   // best effort; the HttpOnly cookie
+                                            // is the reliable fallback path
+  state.user = data.user;
+}
+
+function logout() {
+  API.post("/api/logout", {}).catch(() => {});
+  API.token = null;
+  store.remove("labcare_token");
+  state.user = null;
+  state.view = "dashboard";
+  state.history = [];
+  state.complaints = state.breakdowns = state.equipment = state.customers = state.users = null;
+  render();
+}
+
+// ---------------------------------------------------------------- Router
+const MAIN_VIEWS = ["dashboard", "complaints", "breakdowns", "equipment", "more"];
+
+function navigate(view, params) {
+  if (state.view !== view) {
+    // only push history when drilling into a sub-view from a main view
+    if (!MAIN_VIEWS.includes(view)) {
+      state.history.push({ view: state.view, params: state.viewParams });
+      if (state.history.length > 20) state.history.shift();
+    } else {
+      state.history = []; // switching main tabs resets the stack
+    }
+  }
+  state.view = view;
+  state.viewParams = params || {};
+  render();
+}
+
+function goBack() {
+  const prev = state.history.pop();
+  if (prev) {
+    state.view = prev.view;
+    state.viewParams = prev.params || {};
+  } else {
+    state.view = "dashboard";
+    state.viewParams = {};
+  }
+  render();
+}
+
+const isAdmin = () => state.user && state.user.role === "admin";
+const isTech = () => state.user && (state.user.role === "technician" || state.user.role === "admin");
+const isCust = () => state.user && state.user.role === "customer";
+
+// ---------------------------------------------------------------- Render root
+function render() {
+  const signedIn = !!state.user;
+  $("#loginScreen").classList.toggle("hidden", signedIn);
+  $("#app").classList.toggle("hidden", !signedIn);
+  if (!signedIn) return;
+
+  $("#avatarInitials").textContent = initials(state.user.name);
+  const backVisible = state.history.length > 0;
+  $("#backBtn").classList.toggle("hidden", !backVisible);
+
+  // bottom nav active state
+  const navViews = ["dashboard", "complaints", "breakdowns", "equipment", "more"];
+  $$(".bn-item").forEach((b) => b.classList.toggle("active", b.dataset.view === state.view));
+  const fabViews = isCust() ? ["dashboard", "complaints", "breakdowns"] : ["dashboard", "complaints", "breakdowns", "equipment", "pm"];
+  $("#fab").classList.toggle("hidden", !fabViews.includes(state.view));
+
+  // detail-like screens (single records) are kept to a readable width on desktop
+  const narrowViews = ["complaintDetail", "breakdownDetail", "equipmentDetail", "customerDetail", "profile", "pmDetail"];
+  $("#view").classList.toggle("narrow", narrowViews.includes(state.view));
+
+  // titles
+  const titles = {
+    dashboard: "Dashboard", complaints: "Complaints", breakdowns: "Breakdowns",
+    equipment: "Equipment", equipmentDetail: "Equipment", more: "Menu",
+    customers: "Organizations", customerDetail: "Customer", users: "Team",
+    complaintDetail: "Complaint", breakdownDetail: "Breakdown", profile: "My Account",
+    pm: "Maintenance", pmDetail: "Maintenance", portals: "QR Portal",
+    locations: "Organizations", departments: "Organizations", org: "Organizations",
+    onboarding: "Join requests", categories: "Categories",
+  };
+  $("#tbTitle").textContent = titles[state.view] || "LabCare";
+
+  renderView();
+}
+
+async function renderView() {
+  const v = $("#view");
+  switch (state.view) {
+    case "dashboard": await viewDashboard(v); break;
+    case "complaints": await viewComplaints(v); break;
+    case "complaintDetail": await viewComplaintDetail(v); break;
+    case "breakdowns": await viewBreakdowns(v); break;
+    case "breakdownDetail": await viewBreakdownDetail(v); break;
+    case "equipment": await viewEquipment(v); break;
+    case "equipmentDetail": await viewEquipmentDetail(v); break;
+    case "org": await viewOrg(v); break;
+    case "customers": await viewOrg(v, "customers"); break;
+    case "customerDetail": await viewCustomerDetail(v); break;
+    case "users": await viewUsers(v); break;
+    case "locations": await viewOrg(v, "locations"); break;
+    case "departments": await viewOrg(v, "departments"); break;
+    case "onboarding": await viewOnboarding(v); break;
+    case "categories": await viewCategories(v); break;
+    case "profile": viewProfile(v); break;
+    case "pm": await viewPM(v); break;
+    case "pmDetail": await viewPMDetail(v); break;
+    case "portals": await viewPortals(v); break;
+    case "more": viewMore(v); break;
+    default: v.innerHTML = "";
+  }
+}
+
+// ---------------------------------------------------------------- Dashboard
+async function viewDashboard(v) {
+  try {
+    const d = await API.get("/api/dashboard");
+    const c = d.counts;
+    const nowHour = new Date().getHours();
+    const greet = nowHour < 12 ? "Good morning" : nowHour < 18 ? "Good afternoon" : "Good evening";
+    const firstName = (state.user.name || "").split(" ")[0];
+
+    v.innerHTML = `
+      <div class="hero">
+        <h2>${greet}, ${esc(firstName)} 👋</h2>
+        <p>${isCust() ? "Track your equipment complaints and breakdowns below." : "Here's what needs your attention today."}</p>
+      </div>
+
+      <div class="section-title">At a glance <span style="font-weight:400;text-transform:none">· tap to open</span></div>
+      <div class="stats-grid">
+        <div class="stat tone-red clickable" onclick="goComplaints('active')"><span class="stat-num">${c.open_complaints}</span><span class="stat-label">Open complaints ›</span></div>
+        <div class="stat tone-amber clickable" onclick="goBreakdowns('active')"><span class="stat-num">${c.open_breakdowns}</span><span class="stat-label">Active breakdowns ›</span></div>
+        <div class="stat ${c.critical_complaints ? "tone-red" : "tone-green"} clickable" onclick="goComplaints('critical')"><span class="stat-num">${c.critical_complaints}</span><span class="stat-label">Critical complaints ›</span></div>
+        <div class="stat tone-blue clickable" onclick="goEquipment()"><span class="stat-num">${c.total_equipment}</span><span class="stat-label">Equipment tracked ›</span></div>
+      </div>
+
+      ${!isCust() ? `
+      <div class="section-title">Customer base &amp; maintenance</div>
+      <div class="stats-grid">
+        <div class="stat tone-brand"><span class="stat-num">${c.total_customers}</span><span class="stat-label">Customers</span></div>
+        <div class="stat tone-green"><span class="stat-num">${c.resolved_complaints}</span><span class="stat-label">Resolved complaints</span></div>
+        <div class="stat ${c.pm_due ? "tone-amber" : "tone-green"}" onclick="navigate('pm')" style="cursor:pointer"><span class="stat-num">${c.pm_due}</span><span class="stat-label">PM due</span></div>
+        <div class="stat tone-blue" onclick="navigate('pm')" style="cursor:pointer"><span class="stat-num">${c.pm_total}</span><span class="stat-label">PM schedules</span></div>
+      </div>` : ""}
+
+      ${renderBarChart("Complaints — last 3 months", d.monthly_complaints, "month", "n", "var(--brand-2)")}
+      ${renderHBars("Open complaints by priority", d.complaints_by_priority, "priority", prioColorKey)}
+      ${!isCust() ? renderHBars("Most problem-prone equipment", d.top_equipment, "name", () => "#d97706") : ""}
+
+      ${renderDashboardBreakdown("Complaints by status", d.complaints_by_status)}
+      ${renderDashboardBreakdown("Breakdowns by status", d.breakdowns_by_status)}
+
+      ${renderTimeline(d)}
+    `;
+  } catch (e) {
+    v.innerHTML = `<div class="empty"><div class="e-ico">⚠️</div><h3>Couldn't load dashboard</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+const prioColorKey = {
+  low: "#4338ca", medium: "#a16207", high: "#c2410c", critical: "#dc2626",
+};
+const prioLabelKey = { low: "Low", medium: "Medium", high: "High", critical: "Critical" };
+
+function renderBarChart(title, rows, keyField, valField, color) {
+  if (!rows || !rows.length) return "";
+  const max = Math.max(...rows.map((r) => r[valField])) || 1;
+  return `
+    <div class="section-title">${esc(title)}</div>
+    <div class="card">
+      <div class="chart">
+        ${rows.map((r) => `
+          <div class="bar-col">
+            <span class="bar-tick">${r[valField]}</span>
+            <div class="bar" style="height:${Math.max(6, Math.round((r[valField] / max) * 76))}px;background:${color}"></div>
+            <span class="bar-lab">${esc(monthShort(r[keyField]))}</span>
+          </div>`).join("")}
+      </div>
+    </div>`;
+}
+
+function renderHBars(title, rows, keyField, colorFn) {
+  if (!rows || !rows.length) return "";
+  const max = Math.max(...rows.map((r) => r.n)) || 1;
+  // colorFn may be a function (e.g. top equipment) or a key→color lookup
+  // object (e.g. priority) — support both.
+  const colorFor = typeof colorFn === "function"
+    ? colorFn
+    : (k) => (colorFn && colorFn[k]) || "#64748b";
+  return `
+    <div class="section-title">${esc(title)}</div>
+    <div class="card">
+      ${rows.map((r) => `
+        <div class="hbar-row">
+          <span class="hbar-lab">${esc(hbarLabel(keyField, r))}</span>
+          <div class="hbar-track"><div class="hbar-fill" style="width:${Math.max(6, Math.round((r.n / max) * 100))}%;background:${colorFor(r[keyField])}"></div></div>
+          <span class="hbar-num">${r.n}</span>
+        </div>`).join("")}
+    </div>`;
+}
+
+const monthShort = (m) => {
+  if (!m) return "";
+  const [y, mo] = String(m).split("-");
+  return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString(undefined, { month: "short" }) + " " + y.slice(2);
+};
+const hbarLabel = (key, r) => {
+  if (key === "priority") return prioLabelKey[r.priority] || r.priority;
+  if (key === "name") return r.name;
+  return r[key];
+};
+
+function renderDashboardBreakdown(title, rows) {
+  const total = rows.reduce((s, r) => s + r.n, 0) || 1;
+  const bars = rows
+    .map((r) => {
+      const m = STATUS_META[r.status] || { label: r.status };
+      const pct = Math.round((r.n / total) * 100);
+      const color = r.status === "resolved" || r.status === "closed" ? "var(--ok)" : r.status === "open" || r.status === "reported" ? "var(--danger)" : "var(--info)";
+      return `
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px">
+            <span style="font-weight:600">${esc(m.label || r.status)}</span><span style="color:var(--ink-soft)">${r.n}</span>
+          </div>
+          <div style="height:8px;background:var(--bg);border-radius:99px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:${color};border-radius:99px"></div>
+          </div>
+        </div>`;
+    })
+    .join("");
+  if (!rows.length) bars = `<p style="color:var(--ink-soft);font-size:12.5px">No records yet.</p>`;
+  return `
+    <div class="section-title">${esc(title)}</div>
+    <div class="card">${bars}</div>`;
+}
+
+function renderTimeline(d) {
+  const items = [];
+  (d.recent_complaints || []).slice(0, 4).forEach((r) => {
+    items.push(`
+      <li class="tl-item" onclick="navigate('complaintDetail',{id:${r.id}})">
+        <div class="tl-title"><span style="color:var(--brand)">Complaint</span> · ${esc(r.subject)}</div>
+        <div class="tl-time">${esc(r.code)} · ${timeAgo(r.created_at)} · ${badge("status", r.status)} ${badge("priority", r.priority)}</div>
+      </li>`);
+  });
+  (d.recent_breakdowns || []).slice(0, 4).forEach((r) => {
+    items.push(`
+      <li class="tl-item" onclick="navigate('breakdownDetail',{id:${r.id}})">
+        <div class="tl-title"><span style="color:#d97706">Breakdown</span> · ${esc(truncate(r.fault_description, 70))}</div>
+        <div class="tl-time">${esc(r.code)} · ${timeAgo(r.created_at)} · ${badge("status", r.status)}</div>
+      </li>`);
+  });
+  if (!items.length) items.push(`<li class="tl-item"><div class="tl-title">No recent activity</div></li>`);
+
+  return `
+    <div class="section-title">Recent activity</div>
+    <div class="card"><ul class="timeline" style="padding-top:6px">${items.join("")}</ul></div>`;
+}
+
+const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + "…" : s);
+
+// ---------------------------------------------------------------- Complaints list
+async function viewComplaints(v) {
+  const f = state.complaintFilter;
+  v.innerHTML = `
+    <div class="filter-row">
+      ${["active", "open", "in_progress", "critical", "resolved", "closed", "all"].map((k) => `
+        <button class="filter-chip ${f === k ? "active" : ""}" onclick="setComplaintFilter('${k}')">
+          ${({ "active": "Active", "critical": "Critical", "all": "All" }[k] || (STATUS_META[k] || {}).label || k)}
+        </button>`).join("")}
+    </div>
+    <div id="cmpList"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>`;
+  await refreshComplaints();
+}
+
+function setComplaintFilter(k) {
+  state.complaintFilter = k;
+  viewComplaints($("#view"));
+}
+
+// Dashboard "At a glance" shortcuts
+function goComplaints(f) {
+  state.history = [];
+  state.complaintFilter = f;
+  navigate("complaints");
+}
+function goBreakdowns(f) {
+  state.history = [];
+  state.breakdownFilter = f;
+  navigate("breakdowns");
+}
+function goEquipment() {
+  state.history = [];
+  navigate("equipment");
+}
+
+async function refreshComplaints() {
+  const box = $("#cmpList");
+  try {
+    let list = await API.get("/api/complaints");
+    const f = state.complaintFilter;
+    if (f === "active") list = list.filter((c) => c.status === "open" || c.status === "in_progress");
+    else if (f === "critical") list = list.filter((c) => c.priority === "critical" && (c.status === "open" || c.status === "in_progress"));
+    else if (f !== "all") list = list.filter((c) => c.status === f);
+    state.complaints = list;
+    box.innerHTML = list.length
+      ? `<div class="list">${list.map(complaintCard).join("")}</div>`
+      : emptyState("📭", "No complaints here", 'Tap the ＋ button to log a new complaint.', isCust() ? "Log complaint" : "New complaint");
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function complaintCard(c) {
+  const passed = isCust() ? "" : `<span class="mono">${esc(c.code)}</span>`;
+  const scope = isCust()
+    ? [c.location_name, c.department_name].filter(Boolean).join(" · ")
+    : (c.location_name ? c.location_name + (c.department_name ? " · " + c.department_name : "") : "");
+  return `
+    <div class="item" onclick="navigate('complaintDetail',{id:${c.id}})">
+      <div class="item-top">
+        <div class="item-main">
+          <div class="item-title">${esc(c.subject)}</div>
+          <div class="item-sub">${isCust() ? "" : "<b>" + esc(c.customer_name || "") + "</b> · "}${esc(c.equipment_name || "General")}</div>
+          ${scope ? `<div class="item-sub">📍 ${esc(scope)}</div>` : ""}
+        </div>
+      </div>
+      <div class="item-meta">
+        ${passed}
+        ${badge("status", c.status)}
+        ${badge("priority", c.priority)}
+        <span class="item-time">${timeAgo(c.created_at)}</span>
+      </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- Complaint detail
+async function viewComplaintDetail(v) {
+  const id = state.viewParams.id;
+  v.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+  try {
+    const c = await API.get("/api/complaints/" + id);
+    state.complaintDetail = c;
+    v.innerHTML = complaintDetailHtml(c);
+    loadPhotos("complaint", id);
+    loadHistory("complaint", id);
+  } catch (e) {
+    v.innerHTML = `<div class="empty"><div class="e-ico">⚠️</div><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function complaintDetailHtml(c) {
+  const canEdit = isTech() || isCust();
+  const statusActions = statusButtons("complaint", c);
+
+  return `
+    <div class="detail-head">
+      <button class="back-link" onclick="goBack()">‹ Back</button>
+      <div class="card" style="margin-top:8px">
+        <div class="item-meta" style="margin:0 0 8px">
+          <span class="mono">${esc(c.code)}</span>
+          ${badge("status", c.status)}
+          ${badge("priority", c.priority)}
+        </div>
+        <h2 style="font-size:17px;line-height:1.35">${esc(c.subject)}</h2>
+        <div class="item-sub" style="margin-top:6px">
+          ${esc(c.customer_name || "")} · ${esc(c.equipment_name || "General equipment")}
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title">Details</div>
+    <div class="card">
+      <div class="kv"><span class="k">Category</span><span class="v">${esc(c.category || "General")}</span></div>
+      <div class="kv"><span class="k">Location</span><span class="v">${esc(c.location_name || "—")}</span></div>
+      <div class="kv"><span class="k">Department</span><span class="v">${esc(c.department_name || "—")}</span></div>
+      <div class="kv"><span class="k">Reported by</span><span class="v">${esc(c.created_by_name || "—")}</span></div>
+      <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
+      <div class="kv"><span class="k">Created</span><span class="v">${fmtDate(c.created_at)}</span></div>
+      ${c.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(c.resolved_at)}</span></div>` : ""}
+    </div>
+
+    <div class="section-title">Description</div>
+    <div class="card"><div class="desc-box">${esc(c.description || "No description provided.")}</div></div>
+
+    <div class="section-title">Actions</div>
+    <div class="card">
+      <div class="action-panel">
+        ${statusActions}
+      </div>
+      ${canEdit ? `<div class="action-panel" style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="openComplaintEditor(true)">✏️ Edit</button>
+      </div>` : ""}
+      ${isAdmin() ? `<div class="action-panel" style="margin-top:10px">
+        <button class="btn btn-danger btn-sm" onclick="deleteTicket('complaint',${c.id})">🗑 Delete ticket</button>
+      </div>` : ""}
+    </div>
+
+    <div class="section-title">Photos &amp; files</div>
+    <div class="card" id="photosBox"><div class="empty" style="padding:12px"><div class="spinner" style="margin:0 auto"></div></div></div>
+
+    <div class="section-title">History</div>
+    <div class="card" id="historyBox"><div class="empty" style="padding:12px"><div class="spinner" style="margin:0 auto"></div></div></div>
+
+    <div class="section-title">Conversation</div>
+    <div class="card" id="commentsBox">
+      ${(c.comments || []).map(commentHtml).join("") || '<p style="color:var(--ink-soft);font-size:13px">No comments yet.</p>'}
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <input id="commentInput" placeholder="Add a comment…" onkeydown="if(event.key==='Enter')addComment()">
+        <button class="btn btn-primary btn-sm" onclick="addComment()">Send</button>
+      </div>
+    </div>
+
+    <div class="section-title">Report</div>
+    <div class="card">
+      <div class="action-panel">
+        <button class="btn btn-ghost btn-sm" onclick="downloadReport('/api/complaints/${c.id}/report.pdf')">📄 Service report (PDF)</button>
+      </div>
+    </div>`;
+}
+
+function commentHtml(cm) {
+  return `
+    <div class="comment">
+      <div class="c-avatar">${esc(initials(cm.user_name))}</div>
+      <div class="c-body">
+        <div class="c-head"><span class="c-name">${esc(cm.user_name)}</span><span class="c-time">${timeAgo(cm.created_at)}</span></div>
+        <div class="c-text">${esc(cm.text)}</div>
+      </div>
+    </div>`;
+}
+
+async function addComment() {
+  const input = $("#commentInput");
+  const text = (input.value || "").trim();
+  if (!text) return;
+  const c = state.complaintDetail;
+  const entity = state.view === "complaintDetail" ? "complaint" : "breakdown";
+  const id = state.viewParams.id;
+  showLoading();
+  try {
+    await API.post("/api/comments", { entity_type: entity, entity_id: id, text });
+    input.value = "";
+    await viewComplaintDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+function statusButtons(entity, rec) {
+  const b = [];
+  if (entity === "complaint") {
+    if (isTech() && rec.status === "open") {
+      b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setComplaintStatus(${rec.id},'in_progress')">▶ Start work</button>`);
+      b.push(`<button class="btn btn-ghost btn-sm" onclick="openAssignSheet('complaint',${rec.id})">👤 Assign</button>`);
+    }
+    if (isTech() && rec.status === "in_progress") {
+      b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setComplaintStatus(${rec.id},'resolved')">✔ Mark resolved</button>`);
+    }
+    if (rec.status === "resolved" && (isTech() || isCust())) {
+      b.push(`<button class="btn btn-ghost btn-sm" onclick="setComplaintStatus(${rec.id},'closed')">Close complaint</button>`);
+    }
+    if ((rec.status === "resolved" || rec.status === "closed") && isTech()) {
+      b.push(`<button class="btn btn-ghost btn-sm" onclick="setComplaintStatus(${rec.id},'open')">↺ Reopen</button>`);
+    }
+    if (isTech() && ["open", "in_progress"].includes(rec.status)) {
+      b.push(`<button class="btn btn-ghost btn-sm" onclick="linkBreakdown(${rec.id})">⚠ Create breakdown</button>`);
+    }
+  } else {
+    // breakdown statuses
+    if (isTech() && rec.status === "reported") {
+      b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setBreakdownStatus(${rec.id},'diagnosed')">🔍 Diagnosing</button>`);
+      b.push(`<button class="btn btn-ghost btn-sm" onclick="openAssignSheet('breakdown',${rec.id})">👤 Assign</button>`);
+    }
+    if (isTech() && rec.status === "diagnosed") {
+      b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setBreakdownStatus(${rec.id},'in_progress')">🛠 Repair in progress</button>`);
+    }
+    if (isTech() && ["reported", "diagnosed", "in_progress"].includes(rec.status)) {
+      b.push(`<button class="btn btn-ghost btn-sm" onclick="setBreakdownStatus(${rec.id},'on_hold')">⏸ On hold</button>`);
+      b.push(`<button class="btn btn-primary-2 btn-sm" onclick="openResolveSheet(${rec.id})">✔ Resolve</button>`);
+    }
+    if (isTech() && rec.status === "on_hold") {
+      b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setBreakdownStatus(${rec.id},'in_progress')">▶ Resume</button>`);
+      b.push(`<button class="btn btn-ghost btn-sm" onclick="openResolveSheet(${rec.id})">✔ Resolve</button>`);
+    }
+  }
+  if (!b.length) return `<p style="color:var(--ink-soft);font-size:13px">No actions available for the current status${isCust() ? " — the support team will update this" : ""}.</p>`;
+  return b.join("");
+}
+
+async function setComplaintStatus(id, status) {
+  showLoading();
+  try {
+    await API.patch("/api/complaints/" + id, { status });
+    toast("Complaint updated", "success");
+    state.complaints = null;
+    await viewComplaintDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function setBreakdownStatus(id, status) {
+  showLoading();
+  try {
+    await API.patch("/api/breakdowns/" + id, { status });
+    toast("Breakdown updated", "success");
+    state.breakdowns = null;
+    await viewBreakdownDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function deleteTicket(entity, id) {
+  confirmDialog(
+    `Delete ${entity}?`,
+    "This permanently deletes the ticket and all its comments, photos and activity. This cannot be undone.",
+    "Delete",
+    async () => {
+      showLoading();
+      try {
+        await API.del(`/api/${entity === "complaint" ? "complaints" : "breakdowns"}/` + id);
+        toast(entity === "complaint" ? "Complaint deleted" : "Breakdown deleted", "success");
+        state.complaints = state.breakdowns = null;
+        state.history = [];
+        navigate(entity === "complaint" ? "complaints" : "breakdowns");
+      } catch (e) { toast(e.message, "error"); }
+      hideLoading();
+    }
+  );
+}
+
+async function openAssignSheet(entity, id) {
+  let techs = [];
+  try { techs = await API.get("/api/technicians"); } catch (e) {}
+  openSheet(`
+    <div class="sheet-head"><h3>Assign to technician</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body" style="padding-bottom:24px">
+      ${techs.map((t) => `
+        <button class="menu-item" onclick="assignTech('${entity}',${id},${t.id})">
+          <span class="c-avatar">${esc(initials(t.name))}</span> ${esc(t.name)}
+          <span class="mi-arrow">›</span>
+        </button>`).join("") || "<p>No technicians found.</p>"}
+    </div>`);
+}
+
+async function assignTech(entity, id, techId) {
+  closeSheet();
+  showLoading();
+  try {
+    if (entity === "complaint") await API.patch("/api/complaints/" + id, { assigned_to: techId });
+    else await API.patch("/api/breakdowns/" + id, { assigned_to: techId });
+    toast("Assigned", "success");
+    state.view === "complaintDetail" ? await viewComplaintDetail($("#view")) : await viewBreakdownDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function linkBreakdown(complaintId) {
+  const c = state.complaintDetail;
+  openBreakdownEditor(true, { complaint_id: complaintId, customer_id: c.customer_id, equipment_id: c.equipment_id, subject: c.subject });
+}
+
+// ---------------------------------------------------------------- Breakdowns list
+async function viewBreakdowns(v) {
+  const f = state.breakdownFilter;
+  v.innerHTML = `
+    <div class="filter-row">
+      ${["active", "reported", "diagnosed", "in_progress", "on_hold", "resolved", "all"].map((k) => `
+        <button class="filter-chip ${f === k ? "active" : ""}" onclick="setBreakdownFilter('${k}')">
+          ${({ "active": "Active", "all": "All" }[k] || (STATUS_META[k] || {}).label || k)}
+        </button>`).join("")}
+    </div>
+    <div id="brkList"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>`;
+  await refreshBreakdowns();
+}
+
+function setBreakdownFilter(k) {
+  state.breakdownFilter = k;
+  viewBreakdowns($("#view"));
+}
+
+async function refreshBreakdowns() {
+  const box = $("#brkList");
+  try {
+    let list = await API.get("/api/breakdowns");
+    const f = state.breakdownFilter;
+    if (f === "active") list = list.filter((b) => b.status !== "resolved");
+    else if (f !== "all") list = list.filter((b) => b.status === f);
+    state.breakdowns = list;
+    box.innerHTML = list.length
+      ? `<div class="list">${list.map(breakdownCard).join("")}</div>`
+      : emptyState("🔧", "No breakdowns here", "Equipment faults appear here when reported.", "Report breakdown");
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function breakdownCard(b) {
+  const passed = isCust() ? "" : `<span class="mono">${esc(b.code)}</span>`;
+  return `
+    <div class="item" onclick="navigate('breakdownDetail',{id:${b.id}})">
+      <div class="item-top">
+        <div class="item-main">
+          <div class="item-title">${esc(b.equipment_name || "Equipment")}</div>
+          <div class="item-sub">${esc(truncate(b.fault_description, 90))}</div>
+        </div>
+      </div>
+      <div class="item-meta">
+        ${passed}
+        ${badge("status", b.status)}
+        ${badge("priority", b.priority)}
+        <span class="item-time">${timeAgo(b.created_at)}</span>
+      </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- Breakdown detail
+async function viewBreakdownDetail(v) {
+  const id = state.viewParams.id;
+  v.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+  try {
+    const b = await API.get("/api/breakdowns/" + id);
+    state.breakdownDetail = b;
+    v.innerHTML = breakdownDetailHtml(b);
+    loadPhotos("breakdown", id);
+    loadHistory("breakdown", id);
+  } catch (e) {
+    v.innerHTML = `<div class="empty"><div class="e-ico">⚠️</div><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function breakdownDetailHtml(b) {
+  const statusActions = statusButtons("breakdown", b);
+  return `
+    <div class="detail-head">
+      <button class="back-link" onclick="goBack()">‹ Back</button>
+      <div class="card" style="margin-top:8px">
+        <div class="item-meta" style="margin:0 0 8px">
+          <span class="mono">${esc(b.code)}</span>
+          ${badge("status", b.status)}
+          ${badge("priority", b.priority)}
+        </div>
+        <h2 style="font-size:17px;line-height:1.35">${esc(b.equipment_name || "Equipment")}</h2>
+        <div class="item-sub" style="margin-top:6px">${esc(b.customer_name || "")}</div>
+      </div>
+    </div>
+
+    <div class="section-title">Fault description</div>
+    <div class="card"><div class="desc-box">${esc(b.fault_description)}</div></div>
+
+    <div class="section-title">Details</div>
+    <div class="card">
+      ${b.complaint_id ? `<div class="kv"><span class="k">Source complaint</span><span class="v" style="color:var(--brand);text-decoration:underline" onclick="navigate('complaintDetail',{id:${b.complaint_id}})">${esc("View")}</span></div>` : ""}
+      <div class="kv"><span class="k">Reported by</span><span class="v">${esc(b.reported_by_name || "—")}</span></div>
+      <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(b.assigned_to_name || "Unassigned")}</span></div>
+      <div class="kv"><span class="k">Reported</span><span class="v">${fmtDate(b.created_at)}</span></div>
+      ${b.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(b.resolved_at)}</span></div>` : ""}
+      ${b.root_cause ? `<div class="kv"><span class="k">Root cause</span><span class="v">${esc(b.root_cause)}</span></div>` : ""}
+    </div>
+
+    ${b.resolution_notes ? `
+    <div class="section-title">Resolution notes</div>
+    <div class="card"><div class="desc-box">${esc(b.resolution_notes)}</div></div>` : ""}
+
+    <div class="section-title">Actions</div>
+    <div class="card">
+      <div class="action-panel">${statusActions}</div>
+      ${isTech() ? `<div class="action-panel" style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="openBreakdownEditor(true)">✏️ Edit</button>
+      </div>` : ""}
+      ${isAdmin() ? `<div class="action-panel" style="margin-top:10px">
+        <button class="btn btn-danger btn-sm" onclick="deleteTicket('breakdown',${b.id})">🗑 Delete ticket</button>
+      </div>` : ""}
+    </div>
+
+    <div class="section-title">Photos &amp; files</div>
+    <div class="card" id="photosBox"><div class="empty" style="padding:12px"><div class="spinner" style="margin:0 auto"></div></div></div>
+
+    <div class="section-title">History</div>
+    <div class="card" id="historyBox"><div class="empty" style="padding:12px"><div class="spinner" style="margin:0 auto"></div></div></div>
+
+    <div class="section-title">Work log</div>
+    <div class="card" id="commentsBox">
+      ${(b.comments || []).map(commentHtml).join("") || '<p style="color:var(--ink-soft);font-size:13px">No updates yet.</p>'}
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <input id="commentInput" placeholder="Add an update…" onkeydown="if(event.key==='Enter')addBrokComment()">
+        <button class="btn btn-primary btn-sm" onclick="addBrokComment()">Send</button>
+      </div>
+    </div>`;
+}
+
+async function addBrokComment() {
+  const input = $("#commentInput");
+  const text = (input.value || "").trim();
+  if (!text) return;
+  const id = state.viewParams.id;
+  showLoading();
+  try {
+    await API.post("/api/comments", { entity_type: "breakdown", entity_id: id, text });
+    input.value = "";
+    await viewBreakdownDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+function openResolveSheet(id) {
+  openSheet(`
+    <div class="sheet-head"><h3>Resolve breakdown</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Root cause</span><input id="resRootCause" placeholder="e.g. Failed power supply unit"></label>
+      <label class="field"><span>Resolution notes</span><textarea id="resNotes" placeholder="What was done to fix it?"></textarea></label>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="confirmResolve(${id})">Mark resolved</button>
+    </div>`);
+}
+
+async function confirmResolve(id) {
+  const root_cause = $("#resRootCause").value.trim();
+  const resolution_notes = $("#resNotes").value.trim();
+  closeSheet();
+  showLoading();
+  try {
+    await API.patch("/api/breakdowns/" + id, { status: "resolved", root_cause, resolution_notes });
+    toast("Breakdown resolved", "success");
+    state.breakdowns = null;
+    await viewBreakdownDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+// ---------------------------------------------------------------- Equipment
+async function viewEquipment(v) {
+  v.innerHTML = `
+    ${isTech() ? `<div class="btn-row" style="margin-bottom:12px">
+      <button class="btn btn-primary" onclick="openEquipmentEditor(false)">＋ Add equipment</button>
+    </div>` : ""}
+    <div id="eqList"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>`;
+  await refreshEquipment();
+}
+
+async function refreshEquipment() {
+  const box = $("#eqList");
+  try {
+    const list = await API.get("/api/equipment");
+    state.equipment = list;
+    box.innerHTML = list.length
+      ? renderEquipmentGrouped(list)
+      : emptyState("⚙️", "No equipment", "Register lab equipment to start linking complaints.", "Add equipment");
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+// Group equipment by Location, then Department — each asset identified by its
+// own serial number within its location/department.
+function renderEquipmentGrouped(list) {
+  const groups = new Map();
+  for (const e of list) {
+    const loc = e.location_name || "No location";
+    const dept = e.department_name || "No department";
+    const key = loc + "||" + dept;
+    if (!groups.has(key)) groups.set(key, { loc, dept, items: [] });
+    groups.get(key).items.push(e);
+  }
+  let html = "";
+  for (const g of groups.values()) {
+    html += `
+      <div class="section-title" style="margin-top:14px">📍 ${esc(g.loc)} › ${esc(g.dept)} <span style="color:var(--ink-soft);font-weight:400">(${g.items.length})</span></div>
+      <div class="list">${g.items.map(equipmentCard).join("")}</div>`;
+  }
+  return html;
+}
+
+function equipmentCard(e) {
+  const warranty = e.warranty_expiry ? new Date(e.warranty_expiry.replace(" ", "T")) : null;
+  const expired = warranty && warranty < new Date();
+  const nearExp = warranty && !expired && (warranty - new Date()) < 1000 * 60 * 60 * 24 * 90;
+  const scope = isCust()
+    ? ""
+    : `${esc(e.customer_name || "")} · ${esc(e.location_name || "—")} › ${esc(e.department_name || "—")}`;
+  return `
+    <div class="item" onclick="navigate('equipmentDetail',{id:${e.id}})">
+      <div class="item-top">
+        <div class="item-main">
+          <div class="item-title">${esc(e.name)}</div>
+          <div class="item-sub mono">S/N ${esc(e.serial_number || "not assigned")} · ${esc(e.model || "No model")}</div>
+          ${scope ? `<div class="item-sub">${scope}</div>` : ""}
+        </div>
+      </div>
+      <div class="item-meta">
+        ${e.category ? `<span class="badge" style="background:var(--bg);color:var(--ink-soft)">${esc(e.category)}</span>` : ""}
+        ${warranty ? `<span class="badge ${expired ? "b-closed" : nearExp ? "b-high" : "b-resolved"}">${expired ? "Warranty expired" : nearExp ? "Warranty expiring" : "In warranty"}</span>` : ""}
+        ${e.status === "retired" ? `<span class="badge b-closed">Retired</span>` : ""}
+      </div>
+    </div>`;
+}
+
+// equipment detail inline view
+async function viewEquipmentDetail(v) {
+  const id = state.viewParams.id;
+  v.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+  try {
+    const list = await API.get("/api/equipment");
+    state.equipment = list;
+    const e = list.find((x) => x.id === id);
+    if (!e) throw new Error("Equipment not found");
+    v.innerHTML = `
+      <div class="detail-head">
+        <button class="back-link" onclick="goBack()">‹ Back</button>
+        <div class="card" style="margin-top:8px">
+          <h2 style="font-size:18px">${esc(e.name)}</h2>
+          <div class="item-sub">${esc(e.model || "—")}${e.serial_number ? " · S/N " + esc(e.serial_number) : ""}</div>
+          <div class="item-meta" style="margin-top:8px">
+            ${e.category ? `<span class="badge" style="background:var(--bg);color:var(--ink-soft)">${esc(e.category)}</span>` : ""}
+            ${e.status === "retired" ? '<span class="badge b-closed">Retired</span>' : '<span class="badge b-resolved">Active</span>'}
+          </div>
+        </div>
+      </div>
+      <div class="section-title">Asset details</div>
+      <div class="card">
+        <div class="kv"><span class="k">Customer</span><span class="v">${esc(e.customer_name || "—")}</span></div>
+        <div class="kv"><span class="k">Location</span><span class="v">${esc(e.location_name || "—")}</span></div>
+        <div class="kv"><span class="k">Department</span><span class="v">${esc(e.department_name || "—")}</span></div>
+        <div class="kv"><span class="k">Installed</span><span class="v">${fmtDateShort(e.installed_date)}</span></div>
+        <div class="kv"><span class="k">Warranty until</span><span class="v">${fmtDateShort(e.warranty_expiry)}</span></div>
+      </div>
+      ${e.notes ? `<div class="section-title">Notes</div><div class="card"><div class="desc-box">${esc(e.notes)}</div></div>` : ""}
+      ${isTech() ? `<div class="action-panel" style="margin-top:14px"><button class="btn btn-ghost" onclick="openEquipmentEditor(true)">✏️ Edit</button></div>` : ""}
+    `;
+  } catch (err) {
+    v.innerHTML = `<div class="empty"><h3>Could not load</h3><p>${esc(err.message)}</p></div>`;
+  }
+}
+
+// ---------------------------------------------------------------- Organizations (Customers + Locations + Departments)
+async function viewOrg(v, tab) {
+  if (tab) state.orgTab = tab;
+  const t = state.orgTab;
+  const tabs = isAdmin() || isTech()
+    ? [["customers", "🏢 Customers"], ["locations", "📍 Locations"], ["departments", "🏥 Departments"]]
+    : [["customers", "🏢 My organisation"]];
+  const addBtn = t === "customers"
+    ? (isAdmin() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
+    : t === "locations"
+      ? (isTech() ? `<button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location</button>` : "")
+      : (isTech() ? `<button class="btn btn-primary" onclick="openDepartmentEditor(false)">＋ Add department</button>` : "");
+  v.innerHTML = `
+    <div class="hero" style="background:linear-gradient(135deg,#134e4a,#0f766e)">
+      <h2>Organizations</h2>
+      <p>Customers, sites (locations) and departments in one place.</p>
+    </div>
+    <div class="seg" style="margin:14px 0 12px">
+      ${tabs.map(([k, label]) => `<button class="${t === k ? "active" : ""}" onclick="setOrgTab('${k}')">${label}</button>`).join("")}
+    </div>
+    ${addBtn ? `<div class="btn-row" style="margin-bottom:12px">${addBtn}</div>` : ""}
+    <div id="custList" class="${t === "customers" ? "" : "hidden"}"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>
+    <div id="locList" class="${t === "locations" ? "" : "hidden"}"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>
+    <div id="deptList" class="${t === "departments" ? "" : "hidden"}"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>`;
+  if (t === "customers") await refreshCustomers();
+  else if (t === "locations") await refreshLocations();
+  else if (t === "departments") await refreshDepartments();
+}
+
+function setOrgTab(tab) {
+  state.orgTab = tab;
+  viewOrg($("#view"));
+}
+
+// ---------------------------------------------------------------- Customers
+async function viewCustomers(v) {
+  await viewOrg(v, "customers");
+}
+
+async function refreshCustomers() {
+  const box = $("#custList");
+  try {
+    const list = await API.get("/api/customers");
+    state.customers = list;
+    box.innerHTML = list.length
+      ? `<div class="list">${list.map((cu) => `
+        <div class="item" onclick="navigate('customerDetail',{id:${cu.id}})">
+          <div class="item-top">
+            <div class="c-avatar" style="width:40px;height:40px;font-size:14px">${esc(initials(cu.name))}</div>
+            <div class="item-main">
+              <div class="item-title">${esc(cu.name)}</div>
+              <div class="item-sub">${esc(cu.contact_name || "—")} · ${esc(cu.city || "")}</div>
+            </div>
+          </div>
+          <div class="item-meta">
+            <span class="badge" style="background:var(--bg);color:var(--ink-soft)">${cu.equipment_count} equipment</span>
+            <span class="badge b-open">${cu.open_complaints} open complaints</span>
+          </div>
+        </div>`).join("")}</div>`
+      : emptyState("🏢", "No customers yet", "Add your first customer to start tracking.", "Add customer");
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+async function viewCustomerDetail(v) {
+  const id = state.viewParams.id;
+  v.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+  try {
+    const list = await API.get("/api/customers");
+    state.customers = list;
+    const cu = list.find((x) => x.id === id);
+    const eq = await API.get("/api/equipment?customer_id=" + id);
+    const cmp = await API.get("/api/complaints?customer_id=" + id);
+    const brk = await API.get("/api/breakdowns?customer_id=" + id);
+    if (!cu) throw new Error("Customer not found");
+    v.innerHTML = `
+      <div class="detail-head">
+        <button class="back-link" onclick="goBack()">‹ Back</button>
+        <div class="card" style="margin-top:8px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <div class="c-avatar" style="width:48px;height:48px;font-size:16px">${esc(initials(cu.name))}</div>
+            <div>
+              <h2 style="font-size:18px">${esc(cu.name)}</h2>
+              <div class="item-sub">${esc(cu.city || "")}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="section-title">Contact</div>
+      <div class="card">
+        <div class="kv"><span class="k">Contact person</span><span class="v">${esc(cu.contact_name || "—")}</span></div>
+        <div class="kv"><span class="k">Email</span><span class="v">${esc(cu.email || "—")}</span></div>
+        <div class="kv"><span class="k">Phone</span><span class="v">${esc(cu.phone || "—")}</span></div>
+        <div class="kv"><span class="k">Address</span><span class="v">${esc(cu.address || "—")}</span></div>
+      </div>
+      <div class="section-title">Equipment (${eq.length})</div>
+      ${eq.length ? `<div class="list">${eq.map(equipmentCard).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">No equipment registered.</p></div>`}
+      <div class="section-title">Recent complaints (${cmp.length})</div>
+      ${cmp.length ? `<div class="list">${cmp.slice(0, 3).map(complaintCard).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">None.</p></div>`}
+      ${isAdmin() ? `<div class="action-panel" style="margin-top:14px"><button class="btn btn-ghost" onclick="openCustomerEditor(true)">✏️ Edit customer</button></div>` : ""}
+    `;
+  } catch (e) {
+    v.innerHTML = `<div class="empty"><h3>Could not load</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+// ---------------------------------------------------------------- Locations & Departments
+async function viewLocations(v) {
+  v.innerHTML = `
+    ${isTech() ? `<div class="btn-row" style="margin-bottom:12px">
+      <button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location</button>
+    </div>` : ""}
+    <div id="locList"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>`;
+  await refreshLocations();
+}
+
+async function refreshLocations() {
+  const box = $("#locList");
+  try {
+    const list = await API.get("/api/locations");
+    state.locations = list;
+    box.innerHTML = list.length
+      ? `<div class="list">${list.map((l) => `
+        <div class="item" onclick="${isTech() ? `openLocationEditor(true, ${l.id})` : ""}">
+          <div class="item-top">
+            <div class="c-avatar">📍</div>
+            <div class="item-main">
+              <div class="item-title">${esc(l.name)}</div>
+              <div class="item-sub">${esc(l.customer_name || "")}${l.city ? " · " + esc(l.city) : ""}</div>
+            </div>
+          </div>
+          <div class="item-meta">
+            <span class="badge" style="background:var(--bg);color:var(--ink-soft)">${l.department_count} departments</span>
+            <span class="badge" style="background:var(--bg);color:var(--ink-soft)">${l.equipment_count} equipment</span>
+          </div>
+        </div>`).join("")}</div>`
+      : emptyState("📍", "No locations", "Add your first site / building.", "Add location");
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+async function openLocationEditor(edit, id) {
+  let customers = [];
+  try { customers = await API.get("/api/customers"); } catch (e) {}
+  const l = edit ? state.locations?.find((x) => x.id === id) : null;
+  openSheet(`
+    <div class="sheet-head"><h3>${edit ? "Edit location" : "Add location"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Location name *</span><input id="locName" value="${esc(l ? l.name : "")}" placeholder="e.g. Main Laboratory"></label>
+      <label class="field"><span>Customer *</span>
+        <select id="locCustomer">
+          ${customers.map((x) => `<option value="${x.id}" ${l && l.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select></label>
+      <label class="field"><span>City</span><input id="locCity" value="${esc(l ? l.city : "")}" placeholder="e.g. Kuala Lumpur"></label>
+      <label class="field"><span>Address</span><input id="locAddress" value="${esc(l ? l.address : "")}"></label>
+    </div>
+    <div class="sheet-foot">
+      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteLocation(${l.id})">Delete</button>` : ""}
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="saveLocation(${edit ? l.id : "null"})">${edit ? "Save" : "Add location"}</button>
+    </div>`);
+}
+
+async function saveLocation(id) {
+  const body = {
+    name: $("#locName").value.trim(),
+    customer_id: $("#locCustomer").value,
+    city: $("#locCity").value.trim(),
+    address: $("#locAddress").value.trim(),
+  };
+  if (!body.name) { toast("Location name is required", "error"); return; }
+  if (!body.customer_id) { toast("Customer is required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.put("/api/locations/" + id, body);
+    else await API.post("/api/locations", body);
+    toast(id ? "Location updated" : "Location added", "success");
+    await refreshLocations();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function deleteLocation(id) {
+  confirmDialog("Delete location?", "Locations with departments or equipment cannot be deleted.", "Delete", async () => {
+    showLoading();
+    try {
+      await API.del("/api/locations/" + id);
+      toast("Location deleted", "success");
+      await refreshLocations();
+    } catch (e) { toast(e.message, "error"); }
+    hideLoading();
+  });
+}
+
+async function viewDepartments(v) {
+  v.innerHTML = `
+    ${isTech() ? `<div class="btn-row" style="margin-bottom:12px">
+      <button class="btn btn-primary" onclick="openDepartmentEditor(false)">＋ Add department</button>
+    </div>` : ""}
+    <div id="deptList"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>`;
+  await refreshDepartments();
+}
+
+async function refreshDepartments() {
+  const box = $("#deptList");
+  try {
+    const list = await API.get("/api/departments");
+    state.departments = list;
+    box.innerHTML = list.length
+      ? `<div class="list">${list.map((d) => `
+        <div class="item" onclick="${isTech() ? `openDepartmentEditor(true, ${d.id})` : ""}">
+          <div class="item-top">
+            <div class="c-avatar">🏥</div>
+            <div class="item-main">
+              <div class="item-title">${esc(d.name)}</div>
+              <div class="item-sub">${esc(d.customer_name || "")} · ${esc(d.location_name || "")}</div>
+            </div>
+          </div>
+          <div class="item-meta">
+            <span class="badge" style="background:var(--bg);color:var(--ink-soft)">${d.equipment_count} equipment</span>
+          </div>
+        </div>`).join("")}</div>`
+      : emptyState("🏥", "No departments", "Add departments within each location.", "Add department");
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+async function openDepartmentEditor(edit, id) {
+  let locations = [];
+  try { locations = await API.get("/api/locations"); } catch (e) {}
+  const d = edit ? state.departments?.find((x) => x.id === id) : null;
+  openSheet(`
+    <div class="sheet-head"><h3>${edit ? "Edit department" : "Add department"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Department name *</span><input id="deptName" value="${esc(d ? d.name : "")}" placeholder="e.g. Molecular Diagnostics"></label>
+      <label class="field"><span>Location *</span>
+        <select id="deptLocation">
+          ${locations.map((x) => `<option value="${x.id}" ${d && d.location_id === x.id ? "selected" : ""}>${esc(x.customer_name || "")} — ${esc(x.name)}</option>`).join("")}
+        </select></label>
+    </div>
+    <div class="sheet-foot">
+      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteDepartment(${d.id})">Delete</button>` : ""}
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="saveDepartment(${edit ? d.id : "null"})">${edit ? "Save" : "Add department"}</button>
+    </div>`);
+}
+
+async function saveDepartment(id) {
+  const body = {
+    name: $("#deptName").value.trim(),
+    location_id: $("#deptLocation").value,
+  };
+  if (!body.name) { toast("Department name is required", "error"); return; }
+  if (!body.location_id) { toast("Location is required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.put("/api/departments/" + id, body);
+    else await API.post("/api/departments", body);
+    toast(id ? "Department updated" : "Department added", "success");
+    await refreshDepartments();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function deleteDepartment(id) {
+  confirmDialog("Delete department?", "Departments with equipment cannot be deleted.", "Delete", async () => {
+    showLoading();
+    try {
+      await API.del("/api/departments/" + id);
+      toast("Department deleted", "success");
+      await refreshDepartments();
+    } catch (e) { toast(e.message, "error"); }
+    hideLoading();
+  });
+}
+
+// ---------------------------------------------------------------- Users
+async function viewUsers(v) {
+  v.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+  try {
+    const list = await API.get("/api/users");
+    state.users = list;
+    v.innerHTML = `
+      ${isAdmin() ? `<div class="btn-row" style="margin-bottom:12px"><button class="btn btn-primary" onclick="openUserEditor(false)">＋ Add user</button></div>` : ""}
+      <div class="list list-grid">${list.map((u) => `
+        <div class="item" onclick="${isAdmin() ? `openUserEditor(true, ${u.id})` : ""}">
+          <div class="item-top">
+            <div class="c-avatar">${esc(initials(u.name))}</div>
+            <div class="item-main">
+              <div class="item-title">${esc(u.name)}</div>
+              <div class="item-sub">${esc(u.email)}${u.customer_name ? " · " + esc(u.customer_name) : ""}${u.location_name ? " · " + esc(u.location_name) : ""}${u.department_name ? " · " + esc(u.department_name) : ""}</div>
+            </div>
+            ${roleChip(u.role)}
+          </div>
+        </div>`).join("")}</div>`;
+  } catch (e) {
+    v.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+// ---------------------------------------------------------------- Categories
+async function viewCategories(v) {
+  v.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+  try {
+    const cats = await API.get("/api/categories");
+    v.innerHTML = `
+      <div class="hero" style="background:linear-gradient(135deg,#3f6212,#4d7c0f)">
+        <h2>Equipment categories</h2>
+        <p>Manage the categories used when adding equipment.</p>
+      </div>
+      ${isAdmin() ? `<div class="btn-row" style="margin-bottom:12px">
+        <button class="btn btn-primary" onclick="openCategoryEditor(false)">＋ Add category</button>
+      </div>` : ""}
+      <div class="list list-grid">${cats.map((c) => `
+        <div class="item" onclick="${isAdmin() ? `openCategoryEditor(true, ${c.id}, '${esc(c.name)}')` : ""}">
+          <div class="item-top">
+            <div class="c-avatar">🏷️</div>
+            <div class="item-main">
+              <div class="item-title">${esc(c.name)}</div>
+              <div class="item-sub">${c.equipment_count} equipment</div>
+            </div>
+          </div>
+        </div>`).join("")}</div>`;
+  } catch (e) {
+    v.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function openCategoryEditor(edit, id, name) {
+  openSheet(`
+    <div class="sheet-head"><h3>${edit ? "Edit category" : "Add category"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Category name *</span><input id="catName" value="${esc(edit ? name : "")}" placeholder="e.g. Incubators"></label>
+      ${edit ? `<label class="field"><span style="color:var(--ink-soft)">Renaming keeps existing equipment linked.</span></label>` : ""}
+    </div>
+    <div class="sheet-foot">
+      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteCategory(${id}, '${esc(name)}')">Delete</button>` : ""}
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="saveCategory(${edit ? id : "null"})">${edit ? "Save" : "Add category"}</button>
+    </div>`);
+}
+
+async function saveCategory(id) {
+  const name = $("#catName").value.trim();
+  if (!name) { toast("Category name is required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.put("/api/categories/" + id, { name });
+    else await API.post("/api/categories", { name });
+    toast(id ? "Category updated" : "Category added", "success");
+    await viewCategories($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function deleteCategory(id, name) {
+  confirmDialog("Delete category?", `Equipment in “${name}” will move to “Other”.`, "Delete", async () => {
+    showLoading();
+    try {
+      await API.del("/api/categories/" + id);
+      toast("Category deleted", "success");
+      await viewCategories($("#view"));
+    } catch (e) { toast(e.message, "error"); }
+    hideLoading();
+  });
+}
+
+// ---------------------------------------------------------------- Onboarding
+async function viewOnboarding(v) {
+  v.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+  try {
+    const apps = await API.get("/api/onboarding");
+    const pending = apps.filter((a) => a.status === "pending").length;
+    v.innerHTML = `
+      <div class="hero" style="background:linear-gradient(135deg,#164e63,#155e75)">
+        <h2>Join requests</h2>
+        <p>${pending ? `<b>${pending}</b> awaiting approval` : "Nothing waiting — you're all caught up"}</p>
+      </div>
+      ${apps.length ? `<div class="list list-grid">${apps.map(onboardingCard).join("")}</div>`
+        : emptyState("📥", "No join requests", "When someone requests a customer or technician account, it will appear here.", "")}`;
+  } catch (e) {
+    v.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function onboardingCard(a) {
+  const s = a.status;
+  const badgeCls = s === "pending" ? "b-open" : s === "approved" ? "b-resolved" : "b-closed";
+  const badgeLabel = s === "pending" ? "Pending" : s === "approved" ? "Approved" : "Rejected";
+  const scope = a.customer_name
+    ? `${esc(a.customer_name)} › ${esc(a.location_name || "—")} › ${esc(a.department_name || "—")}`
+    : "—";
+  const actions = s === "pending"
+    ? `<div class="btn-row" style="margin-top:12px">
+        <button class="btn btn-danger btn-sm" onclick="reviewJoin(${a.id},'reject')">✕ Reject</button>
+        <button class="btn btn-primary-2 btn-sm" onclick="reviewJoin(${a.id},'approve')">✔ Approve</button>
+      </div>`
+    : "";
+  return `
+    <div class="item">
+      <div class="item-top">
+        <div class="c-avatar">${esc(initials(a.name))}</div>
+        <div class="item-main">
+          <div class="item-title">${esc(a.name)} ${roleChip(a.role)}</div>
+          <div class="item-sub">${esc(a.email)}${a.phone ? " · " + esc(a.phone) : ""}</div>
+          <div class="item-sub">${a.role === "customer" ? "Scope: " + scope : "LabCare technician"}</div>
+        </div>
+        <span class="badge ${badgeCls}">${badgeLabel}</span>
+      </div>
+      ${actions}
+    </div>`;
+}
+
+async function reviewJoin(id, decision) {
+  showLoading();
+  try {
+    await API.post(`/api/onboarding/${id}/review`, { decision });
+    toast(decision === "approve" ? "Request approved — the user can now sign in" : "Request rejected", "success");
+    await viewOnboarding($("#view"));
+    refreshBell();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+// ---------------------------------------------------------------- Profile & More
+function viewProfile(v) {
+  const u = state.user;
+  v.innerHTML = `
+    <div class="card" style="text-align:center;padding:26px 16px">
+      <div class="c-avatar" style="width:72px;height:72px;font-size:26px;margin:0 auto">${esc(initials(u.name))}</div>
+      <h2 style="font-size:20px;margin-top:10px">${esc(u.name)}</h2>
+      <p style="color:var(--ink-soft);font-size:13.5px">${esc(u.email)}</p>
+      <div style="margin-top:10px">${roleChip(u.role)}</div>
+    </div>
+    <div class="section-title">Account</div>
+    <div class="card">
+      <div class="kv"><span class="k">Phone</span><span class="v">${esc(u.phone || "—")}</span></div>
+      <div class="kv"><span class="k">Role</span><span class="v">${ROLE_LABELS[u.role]}</span></div>
+      ${u.customer_name ? `<div class="kv"><span class="k">Organisation</span><span class="v">${esc(u.customer_name)}</span></div>` : ""}
+      ${u.location_name ? `<div class="kv"><span class="k">Location</span><span class="v">${esc(u.location_name)}</span></div>` : ""}
+      ${u.department_name ? `<div class="kv"><span class="k">Department</span><span class="v">${esc(u.department_name)}</span></div>` : ""}
+    </div>
+    <div class="action-panel" style="margin-top:16px">
+      <button class="btn btn-danger" onclick="logout()">Sign out</button>
+    </div>`;
+}
+
+function viewMore(v) {
+  const items = [];
+  items.push(`<button class="menu-item" onclick="navigate('profile')"><span class="mi-ico">👤</span> My account <span class="mi-arrow">›</span></button>`);
+  if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Customers, locations &amp; departments <span class="mi-arrow">›</span></button>`);
+  if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('categories')"><span class="mi-ico">🏷️</span> Categories <span class="mi-arrow">›</span></button>`);
+  if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('users')"><span class="mi-ico">👥</span> Team & users <span class="mi-arrow">›</span></button>`);
+  if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('onboarding')"><span class="mi-ico">📥</span> Join requests <span class="mi-arrow">›</span></button>`);
+
+  // Create new: quick access from the menu (same as the ＋ button)
+  const createItems = [];
+  if (isCust() || isTech() || isAdmin()) createItems.push(`<button class="menu-item create-new" onclick="openComplaintEditor(false)"><span class="mi-ico">✉️</span> New complaint <span class="mi-arrow">＋</span></button>`);
+  if (isCust() || isTech() || isAdmin()) createItems.push(`<button class="menu-item create-new" onclick="openBreakdownEditor(false)"><span class="mi-ico">⚠️</span> New breakdown <span class="mi-arrow">＋</span></button>`);
+
+  // Maintenance & portal
+  items.push(`<button class="menu-item" onclick="navigate('pm')"><span class="mi-ico">🗓</span> Preventive maintenance <span class="mi-arrow">›</span></button>`);
+  if (isTech()) {
+    items.push(`<button class="menu-item" onclick="navigate('portals')"><span class="mi-ico">📱</span> Customer portal &amp; QR <span class="mi-arrow">›</span></button>`);
+  }
+
+  // Reports & export
+  items.push(`<button class="menu-item" onclick="downloadReport('/api/reports/trend.pdf')"><span class="mi-ico">📈</span> Trend report (PDF) <span class="mi-arrow">›</span></button>`);
+  if (isTech()) {
+    items.push(`<button class="menu-item" onclick="openExportSheet()"><span class="mi-ico">📊</span> Export data (CSV) <span class="mi-arrow">›</span></button>`);
+  }
+
+  // Sound alerts
+  const alertOn = store.get("labcare_alert_sound") !== "off";
+  items.push(`<button class="menu-item" id="alertSoundToggle" onclick="toggleAlertSound()"><span class="mi-ico">${alertOn ? "🔊" : "🔇"}</span> ${alertOn ? "Alerts on" : "Alerts off"} <span class="mi-arrow">›</span></button>`);
+
+  items.push(`<button class="menu-item danger" onclick="logout()"><span class="mi-ico">🚪</span> Sign out <span class="mi-arrow">›</span></button>`);
+
+  v.innerHTML = `
+    <div class="hero" style="background:linear-gradient(135deg,#365314,#3f6212)">
+      <h2>${esc(state.user.name)}</h2>
+      <p>${ROLE_LABELS[state.user.role]} · ${esc(state.user.email)}</p>
+    </div>
+    <div class="section-title">Create new</div>
+    <div class="menu-group">${createItems.join("")}</div>
+    <div class="section-title">Menu</div>
+    <div class="menu-group">${items.join("")}</div>
+    <div class="card" style="margin-top:6px">
+      <p style="font-size:12.5px;color:var(--ink-soft)">LabCare v1.1 — complaints &amp; breakdowns, photos, reports &amp; notifications.</p>
+    </div>`;
+}
+
+function openExportSheet() {
+  openSheet(`
+    <div class="sheet-head"><h3>Export data</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <p style="font-size:13.5px;color:var(--ink-soft);margin-bottom:14px">Download all records as CSV to open in Excel / Google Sheets.</p>
+      <button class="menu-item" onclick="downloadReport('/api/export.csv?type=complaints')">✉ Complaints CSV <span class="mi-arrow">›</span></button>
+      <button class="menu-item" onclick="downloadReport('/api/export.csv?type=breakdowns')">⚠ Breakdowns CSV <span class="mi-arrow">›</span></button>
+    </div>`);
+}
+
+// ---------------------------------------------------------------- Editors (sheets)
+async function openComplaintEditor(edit) {
+  let customers = [], equipment = [], techs = [];
+  if (isTech()) {
+    try {
+      [customers, equipment, techs, state.locations, state.departments] = await Promise.all([
+        API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/technicians"),
+        API.get("/api/locations"), API.get("/api/departments"),
+      ]);
+    } catch (e) {}
+  } else if (isCust()) {
+    try { equipment = await API.get("/api/equipment"); } catch (e) {}
+  }
+  const c = edit ? state.complaintDetail : null;
+
+  openSheet(`
+    <div class="sheet-head"><h3>${edit ? "Edit complaint" : "Log complaint"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Subject *</span><input id="fSubject" value="${esc(c ? c.subject : "")}" placeholder="What went wrong?"></label>
+      <label class="field"><span>Description</span><textarea id="fDesc" placeholder="Details, symptoms, when it started…">${esc(c ? c.description : "")}</textarea></label>
+      ${isTech() ? `
+      <label class="field"><span>Customer *</span>
+        <select id="fCustomer" onchange="onCustPickComplaint()">
+          ${customers.map((x) => `<option value="${x.id}" ${c && c.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select></label>
+      <label class="field"><span>Location</span>
+        <select id="fLocation" onchange="onLocPickComplaint()">
+          ${locOpts(state.locations || [], c && c.location_id, c && c.customer_id)}
+        </select></label>
+      <label class="field"><span>Department</span>
+        <select id="fDepartment">
+          ${deptOpts(state.departments || [], c && c.department_id, c && c.location_id)}
+        </select></label>` : ""}
+      <label class="field"><span>Related equipment</span>
+        <select id="fEquipment">
+          <option value="">— None / general —</option>
+          ${equipment.map((x) => `<option value="${x.id}" ${c && c.equipment_id === x.id ? "selected" : ""}>${esc(x.name)} (${esc(x.serial_number || "n/a")})</option>`).join("")}
+        </select></label>
+      <label class="field"><span>Category</span>
+        <select id="fCategory">
+          ${["General", "Centrifuges", "PCR", "Cold Storage", "Chromatography", "Spectroscopy", "Sterilization", "Analyzers", "Histology", "Other"].map((x) => `<option ${c && c.category === x ? "selected" : ""}>${x}</option>`).join("")}
+        </select></label>
+      <label class="field"><span>Priority</span>
+        <div class="priority-pick" id="fPriority">
+          ${["low", "medium", "high", "critical"].map((p) => `<button class="${(c ? c.priority === p : p === "medium") ? "active" : ""}" style="color:${prioColor(p)}" data-p="${p}">${PRIORITY_META[p].label}</button>`).join("")}
+        </div></label>
+      ${isTech() ? `
+      <label class="field"><span>Assign to</span>
+        <select id="fAssignee">
+          <option value="">Unassigned</option>
+          ${techs.map((t) => `<option value="${t.id}" ${c && c.assigned_to === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+        </select></label>` : ""}
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="saveComplaint(${edit ? c.id : "null"})">${edit ? "Save changes" : "Log complaint"}</button>
+    </div>`);
+
+  $$("#fPriority button").forEach((b) =>
+    b.addEventListener("click", () => {
+      $$("#fPriority button").forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+    })
+  );
+}
+
+const prioColor = (p) => ({ low: "#4338ca", medium: "#a16207", high: "#c2410c", critical: "#dc2626" }[p]);
+
+async function saveComplaint(id) {
+  const body = {
+    subject: $("#fSubject").value.trim(),
+    description: $("#fDesc").value.trim(),
+    equipment_id: $("#fEquipment").value || null,
+    category: $("#fCategory").value,
+    priority: ($("#fPriority button.active")?.dataset.p || "medium"),
+  };
+  if (isTech()) {
+    body.customer_id = $("#fCustomer").value;
+    body.location_id = $("#fLocation").value || null;
+    body.department_id = $("#fDepartment").value || null;
+    body.assigned_to = ($("#fAssignee").value || null);
+  }
+  if (!body.subject) { toast("Subject is required", "error"); return; }
+  if (isTech() && !body.customer_id) { toast("Customer is required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.patch("/api/complaints/" + id, body);
+    else await API.post("/api/complaints", body);
+    toast(id ? "Complaint updated" : "Complaint logged", "success");
+    state.complaints = null;
+    if (state.view === "complaintDetail" && id) await viewComplaintDetail($("#view"));
+    else await refreshComplaintsInside();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function refreshComplaintsInside() {
+  if (state.view === "complaints") await refreshComplaints();
+}
+
+async function openBreakdownEditor(edit, prefill) {
+  let customers = [], equipment = [], techs = [], complaints = [];
+  if (isTech()) {
+    try {
+      [customers, equipment, techs, complaints, state.locations, state.departments] = await Promise.all([
+        API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/technicians"), API.get("/api/complaints"),
+        API.get("/api/locations"), API.get("/api/departments"),
+      ]);
+    } catch (e) {}
+  } else if (isCust()) {
+    try { equipment = await API.get("/api/equipment"); } catch (e) {}
+  }
+  const b = edit && !prefill ? state.breakdownDetail : null;
+  const p = prefill || {};
+
+  openSheet(`
+    <div class="sheet-head"><h3>${edit && !prefill ? "Edit breakdown" : "Report breakdown"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Affected equipment</span>
+        <select id="bEquipment">
+          <option value="">— Select —</option>
+          ${equipment.map((x) => `<option value="${x.id}" ${(b ? b.equipment_id === x.id : p.equipment_id === x.id) ? "selected" : ""}>${esc(x.name)} (${esc(x.serial_number || "n/a")})</option>`).join("")}
+        </select></label>
+      ${isTech() ? `
+      <label class="field"><span>Customer *</span>
+        <select id="bCustomer" onchange="onCustPickBreakdown()">
+          ${customers.map((x) => `<option value="${x.id}" ${(b ? b.customer_id === x.id : p.customer_id === x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select></label>
+      <label class="field"><span>Location</span>
+        <select id="bLocation" onchange="onLocPickBreakdown()">
+          ${locOpts(state.locations || [], (b && b.location_id) || null, (b ? b.customer_id : p.customer_id))}
+        </select></label>
+      <label class="field"><span>Department</span>
+        <select id="bDepartment">
+          ${deptOpts(state.departments || [], (b && b.department_id) || null, (b && b.location_id) || null)}
+        </select></label>
+      <label class="field"><span>Linked complaint (optional)</span>
+        <select id="bComplaint">
+          <option value="">— None —</option>
+          ${complaints.map((x) => `<option value="${x.id}" ${(b ? b.complaint_id === x.id : p.complaint_id === x.id) ? "selected" : ""}>${esc(x.code)} — ${esc(x.subject)}</option>`).join("")}
+        </select></label>` : ""}
+      <label class="field"><span>Fault description *</span><textarea id="bFault" placeholder="Symptom, error code, affected usage…">${esc(b ? b.fault_description : p.subject ? "Linked to complaint: " + p.subject + "\n" : "")}</textarea></label>
+      <label class="field"><span>Priority</span>
+        <div class="priority-pick" id="bPriority">
+          ${["low", "medium", "high", "critical"].map((x) => `<button class="${(b && b.priority === x) || (!b && x === "medium") ? "active" : ""}" style="color:${prioColor(x)}" data-p="${x}">${PRIORITY_META[x].label}</button>`).join("")}
+        </div></label>
+      ${isTech() ? `
+      <label class="field"><span>Assign to</span>
+        <select id="bAssignee">
+          <option value="">Unassigned</option>
+          ${techs.map((t) => `<option value="${t.id}" ${b && b.assigned_to === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+        </select></label>` : ""}
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="saveBreakdown(${edit && !prefill ? b.id : "null"})">${edit && !prefill ? "Save changes" : "Report breakdown"}</button>
+    </div>`);
+
+  $$("#bPriority button").forEach((b2) =>
+    b2.addEventListener("click", () => {
+      $$("#bPriority button").forEach((x) => x.classList.remove("active"));
+      b2.classList.add("active");
+    })
+  );
+}
+
+async function saveBreakdown(id) {
+  const body = {
+    equipment_id: $("#bEquipment").value || null,
+    fault_description: $("#bFault").value.trim(),
+    priority: ($("#bPriority button.active")?.dataset.p || "medium"),
+  };
+  if (isTech()) {
+    body.customer_id = $("#bCustomer").value;
+    body.location_id = $("#bLocation").value || null;
+    body.department_id = $("#bDepartment").value || null;
+    body.complaint_id = $("#bComplaint").value || null;
+    body.assigned_to = ($("#bAssignee").value || null);
+  }
+  if (!body.fault_description) { toast("Fault description is required", "error"); return; }
+  if (isTech() && !body.customer_id) { toast("Customer is required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.patch("/api/breakdowns/" + id, body);
+    else await API.post("/api/breakdowns", body);
+    toast(id ? "Breakdown updated" : "Breakdown reported", "success");
+    state.breakdowns = null;
+    if (state.view === "breakdownDetail" && id) await viewBreakdownDetail($("#view"));
+    else if (state.view === "breakdowns") await refreshBreakdowns();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function openEquipmentEditor(edit) {
+  let cats = [];
+  try {
+    const p = [API.get("/api/categories")];
+    if (isTech()) p.push(API.get("/api/locations"), API.get("/api/departments"), API.get("/api/customers"));
+    const [c, ...rest] = await Promise.all(p);
+    cats = c;
+    if (isTech()) {
+      [state.locations, state.departments, state.customers] = rest;
+    }
+  } catch (e) {}
+  const e = edit ? state.equipment?.find((x) => x.id === state.viewParams.id) : null;
+  const currentCat = (e && e.category) || "";
+  // pick the category from the list, otherwise add the current value as an option
+  let catNames = cats.map((x) => x.name);
+  if (currentCat && !catNames.includes(currentCat)) catNames.push(currentCat);
+  openSheet(`
+    <div class="sheet-head"><h3>${edit ? "Edit equipment" : "Add equipment"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Equipment name *</span><input id="eqName" value="${esc(e ? e.name : "")}" placeholder="e.g. HPLC System"></label>
+      <label class="field"><span>Model</span><input id="eqModel" value="${esc(e ? e.model : "")}" placeholder="e.g. Agilent 1260"></label>
+      <label class="field"><span>Serial number</span><input id="eqSerial" value="${esc(e ? e.serial_number : "")}" placeholder="S/N"></label>
+      <label class="field"><span>Category</span>
+        <select id="eqCategory" onchange="eqCategoryPick()">
+          <option value="">— Select —</option>
+          ${catNames.map((x) => `<option value="${esc(x)}" ${currentCat === x ? "selected" : ""}>${esc(x)}</option>`).join("")}
+          <option value="__custom__">＋ New category…</option>
+        </select></label>
+      <label class="field" id="eqCategoryCustomWrap" style="display:none"><span>New category name</span><input id="eqCategoryCustom" placeholder="Type a new category"></label>
+      ${isTech() ? `
+      <label class="field"><span>Customer *</span>
+        <select id="eqCustomer" onchange="onCustPick('eqCustomer')">
+          ${(state.customers || []).map((x) => `<option value="${x.id}" ${e && e.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select></label>
+      <label class="field"><span>Location *</span>
+        <select id="eqLocation" onchange="onLocPick('eqLocation')">
+          ${locOpts(state.locations || [], e && e.location_id, e && e.customer_id)}
+        </select></label>
+      <label class="field"><span>Department *</span>
+        <select id="eqDepartment">
+          ${deptOpts(state.departments || [], e && e.department_id, e && e.location_id)}
+        </select></label>` : ""}
+      <label class="field"><span>Warranty expiry</span><input id="eqWarranty" type="date" value="${e && e.warranty_expiry ? e.warranty_expiry.slice(0, 10) : ""}"></label>
+      <label class="field"><span>Notes</span><textarea id="eqNotes">${esc(e ? e.notes : "")}</textarea></label>
+    </div>
+    <div class="sheet-foot">
+      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteEquipment(${e.id})">Delete</button>` : ""}
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="saveEquipment(${edit ? e.id : "null"})">${edit ? "Save changes" : "Add equipment"}</button>
+    </div>`);
+}
+
+function eqCategoryPick() {
+  const sel = $("#eqCategory");
+  const custom = sel.value === "__custom__";
+  $("#eqCategoryCustomWrap").style.display = custom ? "" : "none";
+}
+
+async function deleteEquipment(id) {
+  confirmDialog("Delete equipment?", "Equipment referenced by complaints or breakdowns cannot be deleted.", "Delete", async () => {
+    showLoading();
+    try {
+      await API.del("/api/equipment/" + id);
+      toast("Equipment deleted", "success");
+      closeSheet();
+      state.equipment = null;
+      if (state.view === "equipmentDetail") navigate("equipment");
+      else await refreshEquipment();
+    } catch (e) { toast(e.message, "error"); }
+    hideLoading();
+  });
+}
+
+// --- shared cascading helpers for the customer → location → department chain ---
+function locOpts(locations, selectedId, customerId) {
+  const list = customerId ? locations.filter((l) => String(l.customer_id) === String(customerId)) : locations;
+  return `<option value="">— Select location —</option>` + list.map((l) =>
+    `<option value="${l.id}" ${String(selectedId) === String(l.id) ? "selected" : ""}>${esc(l.name)}</option>`).join("");
+}
+
+function deptOpts(departments, selectedId, locationId) {
+  const list = locationId ? departments.filter((d) => String(d.location_id) === String(locationId)) : departments;
+  return `<option value="">— Select department —</option>` + list.map((d) =>
+    `<option value="${d.id}" ${String(selectedId) === String(d.id) ? "selected" : ""}>${esc(d.name)}</option>`).join("");
+}
+
+function onCustPick(custSelId) {
+  const cust = $("#" + custSelId).value;
+  $("#eqLocation").innerHTML = locOpts(state.locations || [], null, cust);
+  $("#eqLocation").value = "";
+  $("#eqDepartment").innerHTML = deptOpts(state.departments || [], null, null);
+  $("#eqDepartment").value = "";
+}
+
+function onLocPick(locSelId) {
+  const loc = $("#" + locSelId).value;
+  $("#eqDepartment").innerHTML = deptOpts(state.departments || [], null, loc);
+  $("#eqDepartment").value = "";
+}
+
+function onCustPickComplaint() {
+  const cust = $("#fCustomer").value;
+  $("#fLocation").innerHTML = locOpts(state.locations || [], null, cust);
+  $("#fLocation").value = "";
+  $("#fDepartment").innerHTML = deptOpts(state.departments || [], null, null);
+  $("#fDepartment").value = "";
+}
+
+function onLocPickComplaint() {
+  const loc = $("#fLocation").value;
+  $("#fDepartment").innerHTML = deptOpts(state.departments || [], null, loc);
+  $("#fDepartment").value = "";
+}
+
+function onCustPickBreakdown() {
+  const cust = $("#bCustomer").value;
+  $("#bLocation").innerHTML = locOpts(state.locations || [], null, cust);
+  $("#bLocation").value = "";
+  $("#bDepartment").innerHTML = deptOpts(state.departments || [], null, null);
+  $("#bDepartment").value = "";
+}
+
+function onLocPickBreakdown() {
+  const loc = $("#bLocation").value;
+  $("#bDepartment").innerHTML = deptOpts(state.departments || [], null, loc);
+  $("#bDepartment").value = "";
+}
+
+async function saveEquipment(id) {
+  let category = $("#eqCategory").value;
+  if (category === "__custom__") {
+    category = ($("#eqCategoryCustom").value || "").trim();
+    if (!category) { toast("Please name the new category", "error"); return; }
+    // register the new category so it shows in the list for everyone
+    try { await API.post("/api/categories", { name: category }); } catch (e) { /* duplicate — fine */ }
+  }
+  const body = {
+    name: $("#eqName").value.trim(),
+    model: $("#eqModel").value.trim(),
+    serial_number: $("#eqSerial").value.trim(),
+    category,
+    location_id: $("#eqLocation").value || null,
+    department_id: $("#eqDepartment").value || null,
+    warranty_expiry: $("#eqWarranty").value || "",
+    notes: $("#eqNotes").value.trim(),
+  };
+  if (isTech()) body.customer_id = $("#eqCustomer").value;
+  if (!body.name) { toast("Equipment name is required", "error"); return; }
+  if (isTech() && !body.customer_id) { toast("Customer is required", "error"); return; }
+  if (isTech() && !body.location_id) { toast("Location is required", "error"); return; }
+  if (isTech() && !body.department_id) { toast("Department is required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.put("/api/equipment/" + id, body);
+    else await API.post("/api/equipment", body);
+    toast(id ? "Equipment updated" : "Equipment added", "success");
+    state.equipment = null;
+    if (state.view === "equipmentDetail" && id) await viewEquipmentDetail($("#view"));
+    else await refreshEquipment();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function openCustomerEditor(edit) {
+  const cu = edit ? state.customers?.find((x) => x.id === state.viewParams.id) : null;
+  openSheet(`
+    <div class="sheet-head"><h3>${edit ? "Edit customer" : "Add customer"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Organisation name *</span><input id="cuName" value="${esc(cu ? cu.name : "")}" placeholder="e.g. BioReference Labs"></label>
+      <label class="field"><span>Contact person</span><input id="cuContact" value="${esc(cu ? cu.contact_name : "")}"></label>
+      <label class="field"><span>Email</span><input id="cuEmail" type="email" value="${esc(cu ? cu.email : "")}"></label>
+      <label class="field"><span>Phone</span><input id="cuPhone" value="${esc(cu ? cu.phone : "")}"></label>
+      <label class="field"><span>City</span><input id="cuCity" value="${esc(cu ? cu.city : "")}"></label>
+      <label class="field"><span>Address</span><input id="cuAddress" value="${esc(cu ? cu.address : "")}"></label>
+    </div>
+    <div class="sheet-foot">
+      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteCustomer(${cu.id})">Delete</button>` : ""}
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="saveCustomer(${edit ? cu.id : "null"})">${edit ? "Save changes" : "Add customer"}</button>
+    </div>`);
+}
+
+async function deleteCustomer(id) {
+  confirmDialog("Delete customer?", "Customers with linked locations, equipment, complaints or breakdowns cannot be deleted.", "Delete", async () => {
+    showLoading();
+    try {
+      await API.del("/api/customers/" + id);
+      toast("Customer deleted", "success");
+      closeSheet();
+      state.customers = null;
+      if (state.view === "customerDetail") navigate("customers");
+      else await refreshCustomers();
+    } catch (e) { toast(e.message, "error"); }
+    hideLoading();
+  });
+}
+
+async function saveCustomer(id) {
+  const body = {
+    name: $("#cuName").value.trim(),
+    contact_name: $("#cuContact").value.trim(),
+    email: $("#cuEmail").value.trim(),
+    phone: $("#cuPhone").value.trim(),
+    city: $("#cuCity").value.trim(),
+    address: $("#cuAddress").value.trim(),
+  };
+  if (!body.name) { toast("Organisation name is required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.put("/api/customers/" + id, body);
+    else await API.post("/api/customers", body);
+    toast(id ? "Customer updated" : "Customer added", "success");
+    state.customers = null;
+    if (state.view === "customerDetail" && id) await viewCustomerDetail($("#view"));
+    else if (state.view === "customers" || state.view === "org") await refreshCustomers();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function openUserEditor(edit, id) {
+  let customers = [];
+  try {
+    [customers, state.locations, state.departments] = await Promise.all([
+      API.get("/api/customers"), API.get("/api/locations"), API.get("/api/departments"),
+    ]);
+  } catch (e) {}
+  const u = edit ? state.users?.find((x) => x.id === id) : null;
+  openSheet(`
+    <div class="sheet-head"><h3>${edit ? "Edit user" : "Add user"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Full name *</span><input id="uName" value="${esc(u ? u.name : "")}"></label>
+      <label class="field"><span>Email *</span><input id="uEmail" type="email" value="${esc(u ? u.email : "")}"></label>
+      <label class="field"><span>Phone</span><input id="uPhone" value="${esc(u ? u.phone : "")}"></label>
+      <label class="field"><span>Role</span>
+        <select id="uRole" onchange="toggleCustomerSelect()">
+          ${["admin", "technician", "customer"].map((r) => `<option value="${r}" ${u && u.role === r ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("")}
+        </select></label>
+      <div id="uCustomerFields" style="${u && u.role === "customer" ? "" : "display:none"}">
+        <label class="field"><span>Linked customer</span>
+          <select id="uCustomer" onchange="onUserCustPick()">
+            ${customers.map((x) => `<option value="${x.id}" ${u && u.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+          </select></label>
+        <label class="field"><span>Linked location</span>
+          <select id="uLocation" onchange="onUserLocPick()">
+            ${locOpts(state.locations || [], u && u.location_id, u && u.customer_id)}
+          </select></label>
+        <label class="field"><span>Linked department</span>
+          <select id="uDepartment">
+            ${deptOpts(state.departments || [], u && u.department_id, u && u.location_id)}
+          </select></label>
+      </div>
+      <label class="field"><span>${edit ? "New password (leave blank to keep)" : "Password *"}</span><input id="uPassword" type="password" placeholder="${edit ? "••••••••" : "Set a password"}"></label>
+    </div>
+    <div class="sheet-foot">
+      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteUser(${id})">Delete</button>` : ""}
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="saveUser(${edit ? id : "null"})">${edit ? "Save changes" : "Add user"}</button>
+    </div>`);
+}
+
+function toggleCustomerSelect() {
+  const show = $("#uRole").value === "customer";
+  $("#uCustomerFields").style.display = show ? "" : "none";
+}
+
+function onUserCustPick() {
+  const cust = $("#uCustomer").value;
+  $("#uLocation").innerHTML = locOpts(state.locations || [], null, cust);
+  $("#uLocation").value = "";
+  $("#uDepartment").innerHTML = deptOpts(state.departments || [], null, null);
+  $("#uDepartment").value = "";
+}
+
+function onUserLocPick() {
+  const loc = $("#uLocation").value;
+  $("#uDepartment").innerHTML = deptOpts(state.departments || [], null, loc);
+  $("#uDepartment").value = "";
+}
+
+async function saveUser(id) {
+  const body = {
+    name: $("#uName").value.trim(),
+    email: $("#uEmail").value.trim(),
+    phone: $("#uPhone").value.trim(),
+    role: $("#uRole").value,
+  };
+  if (body.role === "customer") {
+    body.customer_id = $("#uCustomer").value;
+    body.location_id = $("#uLocation").value || null;
+    body.department_id = $("#uDepartment").value || null;
+    if (!body.customer_id) { toast("Linked customer is required for customer accounts", "error"); return; }
+  } else {
+    body.customer_id = null;
+    body.location_id = null;
+    body.department_id = null;
+  }
+  const pw = $("#uPassword").value;
+  if (pw) body.password = pw;
+  if (!body.name || !body.email || (!id && !pw)) { toast("Name, email and password required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.patch("/api/users/" + id, body);
+    else await API.post("/api/users", body);
+    toast(id ? "User updated" : "User added", "success");
+    await viewUsers($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function deleteUser(id) {
+  confirmDialog("Delete user?", "This removes the user account permanently.", "Delete", async () => {
+    showLoading();
+    try {
+      await API.del("/api/users/" + id);
+      toast("User deleted", "success");
+      await viewUsers($("#view"));
+    } catch (e) { toast(e.message, "error"); }
+    hideLoading();
+  });
+}
+
+// ---------------------------------------------------------------- Preventive maintenance
+async function viewPM(v) {
+  v.innerHTML = `
+    <div class="filter-row">
+      ${["due", "all"].map((k) => `
+        <button class="filter-chip ${state.pmFilter === k ? "active" : ""}" onclick="setPMFilter('${k}')">
+          ${k === "due" ? "Due / overdue" : "All schedules"}
+        </button>`).join("")}
+    </div>
+    ${isTech() ? `<div class="btn-row" style="margin-bottom:10px">
+      <button class="btn btn-primary" onclick="openPMEditor(false)">＋ New schedule</button>
+    </div>` : ""}
+    <div id="pmList"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>`;
+  await refreshPM();
+}
+
+function setPMFilter(k) {
+  state.pmFilter = k;
+  viewPM($("#view"));
+}
+
+function pmDueState(p) {
+  if (!p.next_due_at) return { label: "Not scheduled", cls: "b-closed", urgent: false };
+  const due = new Date(p.next_due_at.replace(" ", "T"));
+  const now = new Date();
+  const diffDays = Math.ceil((due - now) / 86400000);
+  if (diffDays < 0) return { label: `Overdue ${Math.abs(diffDays)}d`, cls: "b-critical", urgent: true };
+  if (diffDays <= 14) return { label: `Due in ${diffDays}d`, cls: "b-high", urgent: true };
+  if (diffDays <= 30) return { label: `Due in ${diffDays}d`, cls: "b-medium", urgent: false };
+  return { label: "Scheduled", cls: "b-resolved", urgent: false };
+}
+
+async function refreshPM() {
+  const box = $("#pmList");
+  try {
+    let list = await API.get("/api/pms");
+    state.pm = list;
+    if (state.pmFilter === "due") list = list.filter((p) => pmDueState(p).urgent || !p.next_due_at);
+    box.innerHTML = list.length
+      ? `<div class="list">${list.map(pmCard).join("")}</div>`
+      : emptyState("🗓", "Nothing due", isCust() ? "Your scheduled maintenance will appear here." : "Create a maintenance schedule with the ＋ button.", "New schedule");
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function pmCard(p) {
+  const due = pmDueState(p);
+  return `
+    <div class="item" onclick="navigate('pmDetail',{id:${p.id}})">
+      <div class="item-top">
+        <div class="item-main">
+          <div class="item-title">${esc(p.title)}</div>
+          <div class="item-sub">${esc(p.equipment_name || "—")}${isCust() ? "" : " · " + esc(p.customer_name || "")}</div>
+        </div>
+      </div>
+      <div class="item-meta">
+        <span class="badge ${due.cls}">${esc(due.label)}</span>
+        <span class="badge" style="background:var(--bg);color:var(--ink-soft)">${p.interval_days}d cycle</span>
+        ${p.assigned_to_name ? `<span style="font-size:11.5px;color:var(--ink-soft)">👤 ${esc(p.assigned_to_name)}</span>` : ""}
+        <span class="item-time">${p.next_due_at ? fmtDateShort(p.next_due_at) : ""}</span>
+      </div>
+    </div>`;
+}
+
+async function viewPMDetail(v) {
+  const id = state.viewParams.id;
+  v.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+  try {
+    const list = await API.get("/api/pms");
+    const p = list.find((x) => x.id === id);
+    if (!p) throw new Error("Schedule not found");
+    const logs = isTech() || isCust() ? await API.get("/api/pms/" + id + "/logs") : [];
+    const due = pmDueState(p);
+    v.innerHTML = `
+      <div class="detail-head">
+        <button class="back-link" onclick="goBack()">‹ Back</button>
+        <div class="card" style="margin-top:8px">
+          <div class="item-meta" style="margin:0 0 8px"><span class="badge ${due.cls}">${esc(due.label)}</span> ${p.active ? '<span class="badge b-resolved">Active</span>' : '<span class="badge b-closed">Paused</span>'}</div>
+          <h2 style="font-size:17px">${esc(p.title)}</h2>
+          <div class="item-sub" style="margin-top:6px">${esc(p.equipment_name || "—")} · ${esc(p.customer_name || "")}</div>
+        </div>
+      </div>
+      <div class="section-title">Schedule</div>
+      <div class="card">
+        <div class="kv"><span class="k">Interval</span><span class="v">${p.interval_days} days</span></div>
+        <div class="kv"><span class="k">Last done</span><span class="v">${fmtDate(p.last_done_at)}</span></div>
+        <div class="kv"><span class="k">Next due</span><span class="v">${fmtDate(p.next_due_at)}</span></div>
+        <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(p.assigned_to_name || "Unassigned")}</span></div>
+      </div>
+      ${p.description ? `<div class="section-title">Description</div><div class="card"><div class="desc-box">${esc(p.description)}</div></div>` : ""}
+      ${isTech() ? `<div class="section-title">Actions</div>
+      <div class="card"><div class="action-panel">
+        <button class="btn btn-primary-2 btn-sm" onclick="openPMComplete(${p.id})">✔ Mark completed</button>
+        <button class="btn btn-ghost btn-sm" onclick="openPMEditor(true)">✏️ Edit</button>
+      </div></div>` : ""}
+      <div class="section-title">Service history (${logs.length})</div>
+      <div class="card">
+        ${logs.length ? logs.map((l) => `
+          <div class="comment">
+            <div class="c-avatar">${esc(initials(l.performed_by_name))}</div>
+            <div class="c-body">
+              <div class="c-head"><span class="c-name">${esc(l.performed_by_name)}</span><span class="c-time">${fmtDate(l.performed_at)}</span></div>
+              <div class="c-text">${esc(l.notes || "Completed.")}</div>
+            </div>
+          </div>`).join("") : '<p style="color:var(--ink-soft);font-size:13px">No service history yet.</p>'}
+      </div>`;
+  } catch (e) {
+    v.innerHTML = `<div class="empty"><h3>Could not load</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+async function openPMEditor(edit) {
+  let customers = [], equipment = [], techs = [];
+  if (isTech()) {
+    try {
+      [customers, equipment, techs] = await Promise.all([
+        API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/technicians"),
+      ]);
+    } catch (e) {}
+  }
+  const p = edit ? state.pm?.find((x) => x.id === state.viewParams.id) : null;
+  const defaultNext = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+  openSheet(`
+    <div class="sheet-head"><h3>${edit ? "Edit schedule" : "New PM schedule"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Title *</span><input id="pmTitle" value="${esc(p ? p.title : "")}" placeholder="e.g. Centrifuge annual service"></label>
+      <label class="field"><span>Description</span><textarea id="pmDesc">${esc(p ? p.description : "")}</textarea></label>
+      ${isTech() ? `<label class="field"><span>Customer *</span>
+        <select id="pmCustomer">
+          ${customers.map((x) => `<option value="${x.id}" ${p && p.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select></label>` : ""}
+      <label class="field"><span>Equipment</span>
+        <select id="pmEquipment">
+          <option value="">— None / general —</option>
+          ${equipment.map((x) => `<option value="${x.id}" ${p && p.equipment_id === x.id ? "selected" : ""}>${esc(x.name)} (${esc(x.serial_number || "n/a")})</option>`).join("")}
+        </select></label>
+      <label class="field"><span>Interval (days) *</span><input id="pmInterval" type="number" min="1" value="${p ? p.interval_days : 90}"></label>
+      <label class="field"><span>Next due date</span><input id="pmNext" type="date" value="${p && p.next_due_at ? p.next_due_at.slice(0, 10) : defaultNext}"></label>
+      ${isTech() ? `<label class="field"><span>Assign to</span>
+        <select id="pmAssignee">
+          <option value="">Unassigned</option>
+          ${techs.map((t) => `<option value="${t.id}" ${p && p.assigned_to === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+        </select></label>` : ""}
+    </div>
+    <div class="sheet-foot">
+      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deletePM(${p.id})">Delete</button>` : ""}
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="savePM(${edit ? p.id : "null"})">${edit ? "Save" : "Create"}</button>
+    </div>`);
+}
+
+async function savePM(id) {
+  const body = {
+    title: $("#pmTitle").value.trim(),
+    description: $("#pmDesc").value.trim(),
+    equipment_id: $("#pmEquipment").value || null,
+    interval_days: parseInt($("#pmInterval").value || "90"),
+    next_due_at: $("#pmNext").value || null,
+  };
+  if (isTech()) {
+    body.customer_id = $("#pmCustomer").value;
+    body.assigned_to = $("#pmAssignee").value || null;
+  }
+  if (!body.title) { toast("Title is required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.patch("/api/pms/" + id, body);
+    else await API.post("/api/pms", body);
+    toast(id ? "Schedule updated" : "Schedule created", "success");
+    state.pm = null;
+    if (state.view === "pmDetail" && id) await viewPMDetail($("#view"));
+    else await refreshPM();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function deletePM(id) {
+  confirmDialog("Delete schedule?", "This removes the maintenance schedule (history is kept).", "Delete", async () => {
+    showLoading();
+    try {
+      await API.del("/api/pms/" + id);
+      toast("Schedule deleted", "success");
+      navigate("pm");
+    } catch (e) { toast(e.message, "error"); }
+    hideLoading();
+  });
+}
+
+function openPMComplete(id) {
+  openSheet(`
+    <div class="sheet-head"><h3>Mark PM completed</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Performed on</span><input id="pmDoneAt" type="date" value="${new Date().toISOString().slice(0, 10)}"></label>
+      <label class="field"><span>Notes</span><textarea id="pmNotes" placeholder="What was done, parts replaced…"></textarea></label>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="confirmPMComplete(${state.viewParams.id})">Complete service</button>
+    </div>`);
+}
+
+async function confirmPMComplete(id) {
+  const performed_at = $("#pmDoneAt").value + " 12:00:00";
+  const notes = $("#pmNotes").value.trim();
+  closeSheet();
+  showLoading();
+  try {
+    await API.post("/api/pms/" + id + "/complete", { performed_at, notes });
+    toast("Service logged — next due date updated", "success");
+    state.pm = null;
+    await viewPMDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+// ---------------------------------------------------------------- Customer portal (QR)
+async function viewPortals(v) {
+  v.innerHTML = `
+    <div class="btn-row" style="margin-bottom:12px">
+      <button class="btn btn-primary" onclick="openPortalEditor(false)">＋ New QR link</button>
+    </div>
+    <div id="portalList"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>`;
+  await refreshPortals();
+}
+
+async function refreshPortals() {
+  const box = $("#portalList");
+  try {
+    const list = await API.get("/api/portal-links");
+    state.portals = list;
+    box.innerHTML = list.length
+      ? `<div class="list">${list.map((p) => `
+        <div class="item">
+          <div class="item-top">
+            <div class="item-main">
+              <div class="item-title">${esc(p.label || "QR link")}</div>
+              <div class="item-sub">${esc(p.customer_name || "")}${p.equipment_name ? " · " + esc(p.equipment_name) : ""}</div>
+              <div class="item-sub mono" style="margin-top:4px">${esc(p.token)}</div>
+            </div>
+            ${p.active ? '<span class="badge b-resolved">Active</span>' : '<span class="badge b-closed">Paused</span>'}
+          </div>
+          <div class="item-meta">
+            <button class="btn btn-primary-2 btn-sm" onclick="showPortalQR(${p.id})">🔳 Show QR</button>
+            <button class="btn btn-ghost btn-sm" onclick="copyPortalURL('${esc(p.token)}')">🔗 Copy link</button>
+            <button class="btn btn-danger btn-sm" onclick="deletePortal(${p.id})">🗑</button>
+          </div>
+        </div>`).join("")}</div>`
+      : emptyState("📱", "No QR links yet", "Create a QR code customers can scan to report issues directly.", "New QR link");
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function eqOpt(x, selectedId) {
+  const sel = selectedId === x.id ? "selected" : "";
+  return `<option value="${x.id}" ${sel}>${esc(x.name)} (${esc(x.customer_name || "")})</option>`;
+}
+
+async function openPortalEditor(edit) {
+  let customers = [], equipment = [];
+  try {
+    [customers, equipment] = await Promise.all([API.get("/api/customers"), API.get("/api/equipment")]);
+  } catch (e) {}
+  const p = edit ? state.portals?.find((x) => x.id === state.viewParams.id) : null;
+  openSheet(`
+    <div class="sheet-head"><h3>${edit ? "Edit QR link" : "New QR link"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Label</span><input id="plLabel" value="${esc(p ? p.label : "")}" placeholder="e.g. Freezer QR — Lab A"></label>
+      <label class="field"><span>Customer *</span>
+        <select id="plCustomer">
+          ${customers.map((x) => `<option value="${x.id}" ${p && p.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select></label>
+      <label class="field"><span>Specific equipment (optional)</span>
+        <select id="plEquipment">
+          <option value="">— All equipment for this customer —</option>
+          ${equipment.map((x) => eqOpt(x, p && p.equipment_id)).join("")}
+        </select></label>
+      <p class="hint" style="font-size:11.5px;color:var(--ink-soft)">Anyone scanning the QR opens a self-service portal to report issues on this equipment — no login needed.</p>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="savePortal(${edit ? p.id : "null"})">${edit ? "Save" : "Create QR link"}</button>
+    </div>`);
+}
+
+async function savePortal(id) {
+  const body = {
+    label: $("#plLabel").value.trim(),
+    customer_id: $("#plCustomer").value,
+    equipment_id: $("#plEquipment").value || null,
+  };
+  if (!body.customer_id) { toast("Customer is required", "error"); return; }
+  closeSheet();
+  showLoading();
+  try {
+    if (id) await API.patch("/api/portal-links/" + id, body);
+    else await API.post("/api/portal-links", body);
+    toast(id ? "Link updated" : "QR link created", "success");
+    await refreshPortals();
+    // if created new, show the QR immediately
+    if (!id) {
+      const list = await API.get("/api/portal-links");
+      const latest = list[0];
+      if (latest) showPortalQR(latest.id);
+    }
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+function showPortalQR(id) {
+  openSheet(`
+    <div class="sheet-head"><h3>Scan to report</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body" style="text-align:center;padding-top:20px">
+      <img id="qrImg" style="width:240px;height:240px;border-radius:16px;border:1px solid var(--line)" alt="QR code">
+      <p style="margin-top:14px;font-size:13px;color:var(--ink-soft)">Print this QR and stick it on the equipment.<br>Customers scan it to log a complaint instantly.</p>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-primary-2" onclick="downloadQR(${id})">⬇ Download PNG</button>
+    </div>`);
+  authedImage($("#qrImg"), `/api/portal-links/${id}/qr`);
+}
+
+function copyPortalURL(token) {
+  const url = location.origin + "/portal.html?t=" + token;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => toast("Link copied", "success")).catch(() => fallbackCopy(url));
+  } else {
+    fallbackCopy(url);
+  }
+}
+
+function fallbackCopy(url) {
+  const ta = document.createElement("textarea");
+  ta.value = url;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); toast("Link copied", "success"); } catch (e) { toast("Copy failed: " + url, "error"); }
+  ta.remove();
+}
+
+function downloadQR(id) {
+  // fetch the PNG with auth (header + cookie + query token) and download
+  fetch(withToken(`/api/portal-links/${id}/qr`), { headers: { "Authorization": "Bearer " + (API.token || "") }, credentials: "same-origin" })
+    .then((r) => r.blob())
+    .then((blob) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "labcare-qr.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    })
+    .catch(() => toast("Could not download QR", "error"));
+}
+
+async function deletePortal(id) {
+  confirmDialog("Delete QR link?", "The QR code will stop working immediately.", "Delete", async () => {
+    showLoading();
+    try {
+      await API.del("/api/portal-links/" + id);
+      toast("QR link deleted", "success");
+      await refreshPortals();
+    } catch (e) { toast(e.message, "error"); }
+    hideLoading();
+  });
+}
+
+// ---------------------------------------------------------------- History (audit)
+async function loadHistory(entity, id) {
+  const box = $("#historyBox");
+  if (!box) return;
+  try {
+    const rows = await API.get("/api/audit?entity_type=" + entity + "&entity_id=" + id);
+    box.innerHTML = rows.length
+      ? `<ul class="timeline" style="margin:4px 0">${rows.map(auditHtml).join("")}</ul>`
+      : '<p style="color:var(--ink-soft);font-size:13px">No activity recorded yet.</p>';
+  } catch (e) {
+    box.innerHTML = `<p style="color:var(--ink-soft);font-size:13px">History unavailable.</p>`;
+  }
+}
+
+function auditHtml(a) {
+  const label = AUDIT_META[a.action] || { t: a.action, ico: "•" };
+  return `
+    <li class="tl-item">
+      <div class="tl-title">${label.ico} <b>${esc(a.user_name || "System")}</b> · ${esc(label.t)}</div>
+      ${a.detail ? `<div class="tl-body">${esc(a.detail)}</div>` : ""}
+      <div class="tl-time">${timeAgo(a.created_at)}</div>
+    </li>`;
+}
+
+// ---------------------------------------------------------------- Photos & files
+async function loadPhotos(entity, id) {
+  const box = $("#photosBox");
+  if (!box) return;
+  try {
+    const list = await API.get(`/api/attachments?entity_type=${entity}&entity_id=${id}`);
+    if (!list.length) {
+      box.innerHTML = `<p style="color:var(--ink-soft);font-size:13px">No photos attached.</p>`;
+    } else {
+      box.innerHTML = `
+        <div class="photo-grid">
+          ${list.map((a) => {
+            const isImg = (a.mime || "").startsWith("image/");
+            return isImg
+              ? `<img class="photo-thumb" data-aid="${a.id}" onclick="viewPhoto(${a.id})" alt="${esc(a.filename)}">`
+              : `<div class="photo-file" onclick="downloadReport('/api/attachments/${a.id}/file')">📎<br>${esc(a.filename)}${isTech() ? `<br><span style="color:var(--danger)" onclick="event.stopPropagation();deleteAttachment(${a.id},'${entity}',${id})">remove</span>` : ""}</div>`;
+          }).join("")}
+        </div>`;
+      // load thumbnails with auth headers (img tags can't send them)
+      box.querySelectorAll("img[data-aid]").forEach((img) => authedImage(img, `/api/attachments/${img.dataset.aid}/file`));
+    }
+  } catch (e) {
+    box.innerHTML = `<p style="color:var(--ink-soft);font-size:13px">Couldn't load photos.</p>`;
+  }
+  // upload button
+  const actions = document.createElement("div");
+  actions.className = "photo-actions";
+  actions.innerHTML = `
+    <span style="font-size:12px;color:var(--ink-soft)">Photo · PDF · Word · Excel (max 8 MB)</span>
+    <label class="btn btn-ghost btn-sm" style="cursor:pointer">
+      📎 Attach file
+      <input type="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt" multiple="multiple" style="display:none"
+             onchange="uploadPhotos(event,'${entity}',${id})">
+    </label>`;
+  box.appendChild(actions);
+}
+
+async function authedImage(img, url) {
+  try {
+    const res = await fetch(withToken(url), { headers: { "Authorization": "Bearer " + (API.token || "") }, credentials: "same-origin" });
+    if (!res.ok) throw new Error("unauthorized");
+    const blob = await res.blob();
+    img.src = URL.createObjectURL(blob);
+  } catch (e) {
+    img.remove();
+  }
+}
+
+async function uploadPhotos(ev, entity, id) {
+  const files = Array.from(ev.target.files || []);
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append("entity_type", entity);
+    fd.append("entity_id", id);
+    fd.append("file", file);
+    showLoading();
+    try {
+      const res = await fetch(withToken("/api/attachments"), {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + (API.token || "") },
+        credentials: "same-origin",
+        body: fd,
+      });
+      if (!res.ok) {
+        let err = {};
+        try { err = await res.json(); } catch (_) {}
+        throw new Error(err.error || "Upload failed");
+      }
+      await loadPhotos(entity, id);
+      toast("Attachment added", "success");
+    } catch (e) {
+      toast(e.message || "Upload failed", "error");
+    }
+    hideLoading();
+  }
+}
+
+function viewPhoto(aid) {
+  openSheet(`
+    <div class="sheet-head"><h3>Photo</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body" style="text-align:center;background:#000;padding:12px">
+      <img id="bigPhoto" style="max-width:100%;max-height:70dvh;border-radius:10px">
+    </div>`);
+  authedImage($("#bigPhoto"), `/api/attachments/${aid}/file`);
+}
+
+async function deleteAttachment(aid, entity, id) {
+  showLoading();
+  try {
+    await API.del("/api/attachments/" + aid);
+    await loadPhotos(entity, id);
+    toast("Attachment removed", "success");
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+function downloadReport(url) {
+  // fetch with auth (header + cookie + query token), then trigger a download from a blob
+  fetch(withToken(url), { headers: { "Authorization": "Bearer " + (API.token || "") }, credentials: "same-origin" })
+    .then((res) => {
+      if (!res.ok) throw new Error("Failed to generate");
+      // try to keep the server-provided filename
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename="?([^";]+)"?/);
+      const name = m ? m[1] : blobName(res.headers.get("Content-Type"));
+      return res.blob().then((blob) => ({ blob, name }));
+    })
+    .then(({ blob, name }) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name || "download";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    })
+    .catch((e) => toast("Could not download file", "error"));
+}
+
+function blobName(contentType) {
+  const ct = (contentType || "").split(";")[0].trim();
+  const ext = { "application/pdf": "pdf", "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif",
+    "image/webp": "webp", "text/csv": "csv", "text/plain": "txt",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.ms-excel": "xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.ms-powerpoint": "ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx" }[ct];
+  if (ext) return "labcare-report." + ext;
+  if (ct.startsWith("image/")) return "labcare-image." + (ct.split("/")[1] || "png");
+  return "labcare-download";
+}
+
+// ---------------------------------------------------------------- Notifications
+const NOTIF_VIEWS = ["dashboard", "complaints", "breakdowns", "equipment", "more"];
+
+// Audible alert for new tickets/notifications — synthesised with the Web Audio
+// API so no external audio file is needed (works offline & in sandboxed previews).
+let _audioCtx = null;
+let _lastNotifId = null;
+let _notifSynced = false;
+
+function playAlertSound() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!_audioCtx) _audioCtx = new AC();
+    if (_audioCtx.state === "suspended") _audioCtx.resume();
+    const t0 = _audioCtx.currentTime;
+    // two-tone "ding-dong" chime
+    [[880, 0], [587.33, 0.16]].forEach(([freq, at], i) => {
+      const osc = _audioCtx.createOscillator();
+      const gain = _audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t0 + at);
+      gain.gain.exponentialRampToValueAtTime(0.35, t0 + at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.5);
+      osc.connect(gain).connect(_audioCtx.destination);
+      osc.start(t0 + at);
+      osc.stop(t0 + at + 0.55);
+    });
+  } catch (e) { /* audio blocked (autoplay policy) — ignore */ }
+}
+
+// Called on a real user gesture (sign-in click) so the AudioContext isn't
+// blocked by the browser's autoplay policy when an alert arrives later.
+function primeAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!_audioCtx) _audioCtx = new AC();
+    if (_audioCtx.state === "suspended") _audioCtx.resume();
+  } catch (e) { /* ignore */ }
+}
+
+async function refreshBell(silent) {
+  if (!state.user || !booted) return;
+  try {
+    const p = await API.get("/api/notifications/ping");
+    const dot = $("#bellDot");
+    state.unread = p.unread;
+    dot.classList.toggle("hidden", !p.unread);
+    // A *new* unread notification (e.g. a freshly logged complaint/breakdown)
+    // triggers the audible alarm — but only after the first sync, so users
+    // don't get a burst of sounds for pre-existing notifications on login.
+    if (p.latest && p.latest.id !== _lastNotifId) {
+      if (_notifSynced && !silent && p.unread > 0 && store.get("labcare_alert_sound") !== "off") {
+        playAlertSound();
+      }
+      _lastNotifId = p.latest.id;
+    }
+    _notifSynced = true;
+  } catch (e) { /* ignore */ }
+}
+
+function toggleAlertSound() {
+  const on = store.get("labcare_alert_sound") !== "off";
+  const next = !on;
+  store.set("labcare_alert_sound", next ? "on" : "off");
+  const el = $("#alertSoundToggle");
+  if (el) el.innerHTML = `<span class="mi-ico">${next ? "🔊" : "🔇"}</span> ${next ? "Alerts on" : "Alerts off"} <span class="mi-arrow">›</span>`;
+  toast(next ? "Alert sound on" : "Alert sound off", "success");
+}
+
+async function openNotifications() {
+  openSheet(`
+    <div class="sheet-head"><h3>Notifications</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <div id="notifList"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="markAllRead()">Mark all read</button>
+    </div>`);
+  const list = $("#notifList");
+  try {
+    const n = await API.get("/api/notifications");
+    list.innerHTML = n.length
+      ? n.map((x) => `
+        <div class="notif ${x.read ? "" : "unread"}" onclick="openNotif(${x.id}, '${esc(x.entity_type)}', ${x.entity_id || "null"})">
+          <div class="c-avatar">🔔</div>
+          <div class="n-body">
+            <div class="n-text">${esc(x.text)}</div>
+            <div class="n-time">${timeAgo(x.created_at)}</div>
+          </div>
+        </div>`).join("")
+      : `<div class="empty"><p>You're all caught up 🎉</p></div>`;
+  } catch (e) {
+    list.innerHTML = `<div class="empty"><p>Couldn't load notifications</p></div>`;
+  }
+}
+
+async function openNotif(nid, entityType, entityId) {
+  await API.post("/api/notifications/read", { id: nid });
+  closeSheet();
+  refreshBell();
+  if (entityType === "complaint" && entityId) navigate("complaintDetail", { id: entityId });
+  else if (entityType === "breakdown" && entityId) navigate("breakdownDetail", { id: entityId });
+}
+
+async function markAllRead() {
+  await API.post("/api/notifications/read", {});
+  refreshBell();
+  openNotifications();
+}
+
+// Poll for new notifications (and ring the audible alert) every 15s.
+setInterval(() => refreshBell(false), 15000);
+
+// ---------------------------------------------------------------- FAB + empty state
+function emptyState(ico, title, sub, ctaLabel) {
+  return `
+    <div class="empty">
+      <div class="e-ico">${ico}</div>
+      <h3>${esc(title)}</h3>
+      <p>${esc(sub)}</p>
+    </div>`;
+}
+
+function onFab() {
+  switch (state.view) {
+    case "complaints": openComplaintEditor(false); break;
+    case "breakdowns": openBreakdownEditor(false); break;
+    case "equipment": openEquipmentEditor(false); break;
+    case "pm": openPMEditor(false); break;
+    default: openComplaintEditor(false);
+  }
+}
+
+// ---------------------------------------------------------------- Join request
+async function loadJoinOptions() {
+  try {
+    const opts = await API.get("/api/lookup/options");
+    const custSel = $("#jnCustomer");
+    custSel.innerHTML = `<option value="">— Select your organisation —</option>` +
+      opts.customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    state.signup = { customers: opts.customers, locations: opts.locations, departments: opts.departments };
+  } catch (e) { /* ignore */ }
+}
+
+function onJoinCust() {
+  const cust = $("#jnCustomer").value;
+  const locs = (state.signup?.locations || []).filter((l) => String(l.customer_id) === String(cust));
+  $("#jnLocation").innerHTML = `<option value="">— Select location —</option>` + locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  $("#jnDepartment").innerHTML = `<option value="">— Select department —</option>`;
+}
+
+function onJoinLoc() {
+  const loc = $("#jnLocation").value;
+  const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(loc));
+  $("#jnDepartment").innerHTML = `<option value="">— Select department —</option>` + depts.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("");
+}
+
+function onJoinRoleChange() {
+  const isCust = $("#jnRole").value === "customer";
+  $("#jnCustomerBlock").classList.toggle("hidden", !isCust);
+}
+
+$("#showJoinBtn").addEventListener("click", () => {
+  const panel = $("#joinPanel");
+  panel.classList.toggle("hidden");
+  const open = !panel.classList.contains("hidden");
+  $("#loginScreen").classList.toggle("align-top", open);
+  if (open) loadJoinOptions();
+});
+
+$("#jnRole").addEventListener("change", onJoinRoleChange);
+
+$("#joinForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#joinError").classList.add("hidden");
+  $("#joinOk").classList.add("hidden");
+  const role = $("#jnRole").value;
+  const body = {
+    name: $("#jnName").value.trim(),
+    email: $("#jnEmail").value.trim(),
+    phone: $("#jnPhone").value.trim(),
+    password: $("#jnPassword").value,
+    role,
+  };
+  if (role === "customer") {
+    body.customer_id = $("#jnCustomer").value;
+    body.location_id = $("#jnLocation").value;
+    body.department_id = $("#jnDepartment").value;
+  }
+  try {
+    const res = await API.post("/api/signup", body);
+    $("#joinOk").textContent = res.message || "Submitted for approval ✓";
+    $("#joinOk").classList.remove("hidden");
+    $("#joinForm").reset();
+    $("#jnCustomerBlock").classList.remove("hidden");
+  } catch (err) {
+    const el = $("#joinError");
+    el.textContent = err.message;
+    el.classList.remove("hidden");
+  }
+});
+
+// ---------------------------------------------------------------- Event wiring
+$("#loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#loginError").classList.add("hidden");
+  const note = $("#joinNote");
+  note.textContent = "";
+  const btn = $("#loginBtn");
+  btn.disabled = true;
+  btn.textContent = "Signing in…";
+  try {
+    await login($("#loginEmail").value.trim(), $("#loginPassword").value);
+    $("#loginEmail").value = "";
+    $("#loginPassword").value = "";
+    primeAudio();
+    render();
+  } catch (err) {
+    const el = $("#loginError");
+    el.textContent = err.message;
+    el.classList.remove("hidden");
+    if (/awaiting approval|approval/i.test(err.message)) {
+      note.textContent = "Your account has been submitted but an administrator must approve it first.";
+      note.style.cssText = "font-size:12.5px;color:var(--ink-soft);margin-top:10px;text-align:center";
+    }
+  }
+  btn.disabled = false;
+  btn.textContent = "Sign in";
+});
+
+$$(".bn-item").forEach((b) =>
+  b.addEventListener("click", () => {
+    // switching main tabs clears the drill-down history
+    state.history = [];
+    navigate(b.dataset.view);
+  })
+);
+$("#backBtn").addEventListener("click", goBack);
+$("#profileBtn").addEventListener("click", () => navigate("profile"));
+$("#fab").addEventListener("click", onFab);
+$("#bellBtn").addEventListener("click", openNotifications);
+
+// expose functions used by inline handlers
+Object.assign(window, {
+  navigate, goBack, closeSheet, setComplaintFilter, setBreakdownFilter,
+  goComplaints, goBreakdowns, goEquipment,
+  setComplaintStatus, setBreakdownStatus, deleteTicket, openAssignSheet, assignTech, linkBreakdown,
+  addComment, addBrokComment, openResolveSheet, confirmResolve,
+  openComplaintEditor, saveComplaint, openBreakdownEditor, saveBreakdown,
+  openEquipmentEditor, saveEquipment, deleteEquipment, openCustomerEditor, saveCustomer, deleteCustomer,
+  openUserEditor, saveUser, deleteUser, toggleCustomerSelect, logout,
+  viewOnboarding, reviewJoin, toggleAlertSound, playAlertSound,
+  uploadPhotos, viewPhoto, deleteAttachment, downloadReport, openExportSheet,
+  openNotifications, openNotif, markAllRead,
+  setPMFilter, openPMEditor, savePM, deletePM, openPMComplete, confirmPMComplete,
+  openPortalEditor, savePortal, showPortalQR, copyPortalURL, downloadQR, deletePortal,
+  viewOrg, setOrgTab,
+  openLocationEditor, saveLocation, deleteLocation,
+  openDepartmentEditor, saveDepartment, deleteDepartment,
+  viewCategories, openCategoryEditor, saveCategory, deleteCategory, eqCategoryPick,
+  onCustPick, onLocPick, locOpts, deptOpts,
+  onCustPickComplaint, onLocPickComplaint,
+  onCustPickBreakdown, onLocPickBreakdown,
+  onUserCustPick, onUserLocPick,
+  onJoinCust, onJoinLoc, onJoinRoleChange, loadJoinOptions, primeAudio,
+});
+
+async function boot() {
+  // Try to restore a session. Even without a stored token, the HttpOnly auth
+  // cookie may still be valid, so always ask the server who we are.
+  try {
+    state.user = await API.get("/api/me");
+  } catch (e) {
+    API.token = null;
+    store.remove("labcare_token");
+  }
+  render();
+  booted = true;
+  if (state.user) refreshBell(true); // baseline sync — no sound on login
+}
+
+let booted = false;
+boot();
