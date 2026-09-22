@@ -36,12 +36,20 @@ docker run -d --name labcare \
 ### Option 1B: systemd (no Docker)
 
 ```bash
+# on your server, from the project root
 sudo mkdir -p /opt/labcare && sudo cp -r server static /opt/labcare/
 cd /opt/labcare && python3 -m venv venv && venv/bin/pip install -r requirements.txt
+
+sudo mkdir -p /var/lib/labcare && sudo chown www-data:www-data /var/lib/labcare
+
 sudo cp deploy/labcare.service /etc/systemd/system/labcare.service
-# edit the unit: ExecStart=/opt/labcare/venv/bin/python3 run.py, WorkingDirectory=/opt/labcare/server
 sudo systemctl daemon-reload && sudo systemctl enable --now labcare
+sudo systemctl status labcare
 ```
+
+The unit already sets `ExecStart=/opt/labcare/venv/bin/python3 run.py`,
+`WorkingDirectory=/opt/labcare/server`, and stores data in `/var/lib/labcare/`
+(`labcare.db` + `ticket_history.log`), with `LABCARE_SECURE_COOKIES=1` on.
 
 Verify the backend directly (HTTP, before TLS):
 
@@ -51,50 +59,58 @@ curl -s http://127.0.0.1:8000/api/ping      # → {"ok": true, "db": "ok"}
 
 ### Step 2 — Put nginx + TLS in front of the backend
 
-You need a **valid public HTTPS URL** for Netlify to proxy to.
+You need a **valid public HTTPS URL** for Netlify to proxy to. You **must have
+your own domain** (or a subdomain of one): `labcareassist.netlify.app` is owned
+by Netlify and cannot be pointed at your VPS or get a cert there.
 
 ```bash
+# 0. Point a DNS record at your server first, e.g.
+#      api.labcare.mycompany.com   A    <your server IP>
+
 sudo apt update && sudo apt install -y nginx certbot python3-certbot-nginx
 
 # edit deploy/nginx-labcare.conf:
-#   - server_name → your real backend domain (e.g. labcare-backend.mydomain.com)
-#   - comment the "C: self-signed" lines if any remain
+#   - replace BOTH "BACKEND-DOMAIN.example.com" with your real domain
 
 sudo cp deploy/nginx-labcare.conf /etc/nginx/sites-available/labcare
 sudo ln -s /etc/nginx/sites-available/labcare /etc/nginx/sites-enabled/labcare
 sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d labcare-backend.mydomain.com      # automatic TLS
+
+sudo certbot --nginx -d api.labcare.mycompany.com      # automatic TLS
 ```
 
-Check it works: `curl -s https://labcare-backend.mydomain.com/api/ping`.
+Check it works (from anywhere on the internet):
 
-> **No domain?** Any host behind HTTPS works — e.g. a Render/Fly.io/Railway
-> deployment of the same Docker image. Note: the Netlify proxy needs **HTTPS**
-> with a valid cert (not self-signed), otherwise Netlify's edge will refuse the
+```bash
+curl -s https://api.labcare.mycompany.com/api/ping     # → {"ok":true,"db":"ok"}
+```
+
+> **No domain?** Any host behind HTTPS works — e.g. a Render/Railway deployment
+> of the same code (see Option 1C). The Netlify proxy needs **HTTPS with a
+> valid cert (not self-signed)**, otherwise Netlify's edge will refuse the
 > connection.
 
-### Option 1C: PaaS backend — no VPS at all (recommended if you don't run servers)
+### Option 1C: PaaS backend — no VPS at all (no server admin)
 
 Point the Netlify `/api` proxy at any PaaS that gives a public HTTPS URL.
 
-**Render**
-```bash
-# from the repo root — render.yaml is a Blueprint text file you can also paste
-# into the Render dashboard (New → Blueprint), or use render.yaml as-is.
-# It builds with pip, runs run.py, health-checks /api/ping, and mounts a 5 GB
-# persistent disk at /data for SQLite + the history log.
-```
+**Render** (`deploy/render.yaml` — Blueprint, builds with pip, runs `run.py`,
+health-checks `/api/ping`, mounts a 5 GB persistent disk at `/data` for SQLite +
+history log, `plan: starter` ~$7/mo + disk):
+- Render **Free** shuts down after 15 idle minutes and has **no persistent
+  disk**, so it would wipe `labcare.db` — don't use it for real data.
+- `plan: starter` is the cheapest instance that can attach the disk the DB needs.
 
-**Railway**
+**Railway** (`railway.toml` — build = NIXPACKS, start = `run.py`):
 ```bash
-railway up          # reads railway.toml (build = NIXPACKS, start = run.py)
+railway up
 # In the dashboard: attach a volume at /data, and add env vars
 #   LABCARE_DB=/data/labcare.db
 #   LABCARE_HISTORY_LOG=/data/ticket_history.log
 #   LABCARE_SECURE_COOKIES=1
 ```
 
-Both give you a `https://<app>.<region>.railway.app` / `onrender.com` URL —
+Both give you a public `https://…onrender.com` / `https://…up.railway.app` URL —
 use that HTTPS URL as the `to =` target in `netlify.toml`.
 
 ---

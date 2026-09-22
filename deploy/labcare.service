@@ -1,24 +1,26 @@
 [Unit]
-Description=LabCare — Complaint & Breakdown Management
+Description=LabCare — Complaint & Breakdown Management (backend)
 After=network.target
 
 [Service]
-# --- Edit the two paths below to where you installed the project -----------
-WorkingDirectory=/opt/labcare/server
 # ---------------------------------------------------------------------------
+# Edit these two lines to where you installed the project on the VPS.
+# Recommended: a virtualenv so system Python is untouched.
+# ---------------------------------------------------------------------------
+WorkingDirectory=/opt/labcare/server
+ExecStart=/opt/labcare/venv/bin/python3 run.py
+# ---------------------------------------------------------------------------
+
 User=www-data
 Group=www-data
 
-# Environment variables (all optional)
-#   LABCARE_DB=/var/lib/labcare/labcare.db
-#   LABCARE_TICKET_CAP=2000
-#   LABCARE_HISTORY_LOG=/var/lib/labcare/ticket_history.log
-#   LABCARE_SECURE_COOKIES=1     <- enable behind HTTPS (recommended)
+# Data lives in /var/lib/labcare so it's easy to back up (create it first:
+#   sudo mkdir -p /var/lib/labcare && sudo chown www-data:www-data /var/lib/labcare)
 Environment=PORT=8000
-Environment=LABCARE_SECURE_COOKIES=1
+Environment=LABCARE_DB=/var/lib/labcare/labcare.db
+Environment=LABCARE_HISTORY_LOG=/var/lib/labcare/ticket_history.log
+Environment=LABCARE_SECURE_COOKIES=1          # behind HTTPS — keep enabled
 Environment=PYTHONUNBUFFERED=1
-
-ExecStart=/usr/bin/python3 run.py
 
 # Restart policy
 Restart=always

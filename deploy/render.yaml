@@ -10,6 +10,9 @@ services:
     name: labcare-backend
     env: python
     region: singapore            # closest to your George Town, MY users
+    # `starter` is deliberate: Render's free tier has NO persistent disk, so
+    # SQLite would be wiped on every spin-down/redeploy. starter (~$7/mo) is
+    # the cheapest instance that can attach the persistent disk below.
     plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: cd server && python3 run.py
