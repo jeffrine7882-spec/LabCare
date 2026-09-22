@@ -277,6 +277,15 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
 .tl-time { color: var(--ink-soft); font-size: 11.5px; margin-top: 1px; }
 .tl-body { font-size: 13px; margin-top: 3px; }
 
+/* Backend-unreachable banner (split deployments) */
+.backend-warn {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 500;
+  background: #b45309; color: #fff;
+  font-size: 12.5px; line-height: 1.4; padding: 10px 16px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25);
+}
+.backend-warn code { background: rgba(0,0,0,.25); padding: 1px 5px; border-radius: 5px; }
+
 /* ---------- Login ---------- */
 .login-screen {
   min-height: 100dvh; display: flex; align-items: center; justify-content: center;

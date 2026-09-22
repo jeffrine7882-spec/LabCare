@@ -121,7 +121,6 @@ The frontend calls only relative `/api/...` URLs, so `netlify.toml`'s
 ---
 
 ## Verify end-to-end
-
 1. Open `https://labcareassist.netlify.app`.
 2. Sign in (demo: `admin@labcare.com` / `Demo123!`).
 3. Create a complaint → it appears instantly (requests go Netlify → backend).
@@ -136,6 +135,19 @@ The frontend calls only relative `/api/...` URLs, so `netlify.toml`'s
 | Session cookie | Backend runs with `LABCARE_SECURE_COOKIES=1`; cookie is `Secure`, sent over TLS only |
 | Uploads | In-app cap 8 MB; Netlify proxy forwards body; nginx `client_max_body_size 12m` |
 | Backend uptime | `docker restart policy` or systemd `Restart=always` — already configured |
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| **Cannot sign in after pushing to Netlify** | The API backend is not connected. Check `https://labcareassist.netlify.app/api/ping` — a **502** means the `/api/*` proxy in `netlify.toml` still has the placeholder, or the backend host is down. Write the real backend HTTPS URL into the `to =` line, redeploy, and re-test. The app now shows a ⚠️ "Backend not connected" banner when this happens |
+| 502/504 from `/api/*` | Backend service down — `systemctl status labcare` or `docker ps`; probe `curl http://127.0.0.1:8000/api/ping`. On Render/Railway check the service health + logs |
+| Certificate expiry | `certbot renew` is automatic; verify with `systemctl list-timers` |
+| Changes not showing | Static assets are cache-busted (`?v=N`), but hard-refresh (Ctrl/Cmd-Shift-R) if needed |
+
+> ⚠️ Netlify proxy target must be a **valid, public HTTPS URL** (Netlify's edge
+> rejects self-signed backends), and it is written **literally** into the
+> `to = "..."` line — Netlify redirects cannot read environment variables.
 
 ## Files
 

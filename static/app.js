@@ -45,15 +45,35 @@ const API = {
   async req(method, path, body) {
     const headers = { "Content-Type": "application/json" };
     if (this.token) headers["Authorization"] = "Bearer " + this.token;
-    const res = await fetch(withToken(path), {
-      method,
-      headers,
-      credentials: "same-origin", // send the auth cookie (belt & suspenders)
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(withToken(path), {
+        method,
+        headers,
+        credentials: "same-origin", // send the auth cookie (belt & suspenders)
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (e) {
+      throw new Error("Cannot reach the server. Check your internet connection.");
+    }
+    // 502/503/504 = the frontend is up but the API backend behind it is not
+    // (e.g. an unset/wrong netlify.toml /api proxy target).
+    if (!res.ok || res.status >= 500) {
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        throw new Error("Backend not connected (error " + res.status + "). The API server is unreachable — check that the /api proxy points to a running backend.");
+      }
+    }
     let data = {};
-    try { data = await res.json(); } catch (e) { /* ignore */ }
-    if (!res.ok) throw new Error(data.error || "Something went wrong");
+    const ct = (res.headers.get("content-type") || "");
+    if (ct.includes("application/json")) {
+      try { data = await res.json(); } catch (e) { /* keep {} */ }
+    } else {
+      // Netlify error page or proxy HTML — don't dump it into the toast
+      data = { error: "Unexpected response from server (" + res.status + ")." };
+    }
+    if (!res.ok) {
+      throw new Error((typeof data.error === "string" && data.error) || "Request failed (" + res.status + ")");
+    }
     return data;
   },
   get(p) { return this.req("GET", p); },
@@ -2865,6 +2885,27 @@ async function boot() {
   render();
   booted = true;
   if (state.user) refreshBell(true); // baseline sync — no sound on login
+
+  // Detect a Netlify-style split deployment where the frontend is live but the
+  // /api proxy target is missing or down — show a clear banner instead of a
+  // mysterious "cannot sign in". Only probe when not signed in.
+  if (!state.user && location.hostname.includes("netlify.app")) {
+    try {
+      const r = await fetch("/api/ping", { cache: "no-store" });
+      if (!r.ok) showBackendBanner();
+    } catch (e) {
+      showBackendBanner();
+    }
+  }
+}
+
+function showBackendBanner() {
+  const ls = $("#loginScreen");
+  if (!ls || ls.querySelector(".backend-warn")) return;
+  const bar = document.createElement("div");
+  bar.className = "backend-warn";
+  bar.innerHTML = `<b>⚠️ Backend not connected.</b> This site is serving the frontend only — the API server is unreachable (login will fail). Check that <code>netlify.toml</code>'s <code>/api/*</code> proxy points to a running HTTPS backend.`;
+  ls.prepend(bar);
 }
 
 let booted = false;
