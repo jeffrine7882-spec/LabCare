@@ -19,6 +19,10 @@ is served by Netlify itself, the final architecture is:
 
 ## Step 1 — Backend on a VPS (choose Docker or systemd)
 
+> **Prefer $0/month on Google Cloud?** See **`deploy/GCE-FREE.md`** — a complete
+> walkthrough of the always-free `e2-micro` VM (30 GB disk, static IP) with
+> nginx + Let's Encrypt, including the free DuckDNS-domain path for HTTPS.
+
 ### Option 1A: Docker (fastest)
 
 ```bash
@@ -174,6 +178,7 @@ netlify.toml                 # Netlify build + /api proxy + SPA fallback
 deploy/Dockerfile            # backend image (VPS / container hosts)
 deploy/labcare.service       # backend as a systemd service
 deploy/nginx-labcare.conf    # nginx TLS + reverse proxy for the backend
+deploy/GCE-FREE.md           # $0/mo walkthrough: GCP always-free e2-micro VM
 deploy/render.yaml           # Render PaaS backend (no VPS needed)
 railway.toml                 # Railway PaaS backend (no VPS needed)
 server/run.py                # Waitress entry point
