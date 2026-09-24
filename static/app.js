@@ -2343,24 +2343,46 @@ function eqOpt(x, selectedId) {
   return `<option value="${x.id}" ${sel}>${esc(x.name)} (${esc(x.customer_name || "")})</option>`;
 }
 
+// Filter the QR editor's equipment list to the selected customer.
+function onPortalCust() {
+  const cust = $("#plCustomer").value;
+  const all = state._portalEquip || [];
+  const list = cust ? all.filter((x) => String(x.customer_id) === String(cust)) : all;
+  const sel = $("#plEquipment");
+  sel.innerHTML = `<option value="">— All equipment for this customer —</option>` +
+    list.map((x) => eqOpt(x)).join("");
+}
+
 async function openPortalEditor(edit) {
-  let customers = [], equipment = [];
-  try {
-    [customers, equipment] = await Promise.all([API.get("/api/customers"), API.get("/api/equipment")]);
-  } catch (e) {}
+  // Load customers and equipment independently so one slow/failed call can't
+  // empty both dropdowns (was: a single Promise.all in a silent catch).
+  let customers = [], equipment = [], loadErr = "";
+  const results = await Promise.allSettled([
+    API.get("/api/customers"),
+    API.get("/api/equipment"),
+  ]);
+  if (results[0].status === "fulfilled") customers = results[0].value || [];
+  else loadErr = "Could not load customers — " + (results[0].reason?.message || "network error");
+  if (results[1].status === "fulfilled") equipment = results[1].value || [];
+  state._portalEquip = equipment; // keep for onPortalCust() filtering
   const p = edit ? state.portals?.find((x) => x.id === state.viewParams.id) : null;
+  const selCust = edit && p ? p.customer_id : (customers[0] && customers[0].id);
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit QR link" : "New QR link"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
+      ${loadErr ? `<div class="form-error">⚠️ ${esc(loadErr)}</div>` : ""}
       <label class="field"><span>Label</span><input id="plLabel" value="${esc(p ? p.label : "")}" placeholder="e.g. Freezer QR — Lab A"></label>
       <label class="field"><span>Customer *</span>
-        <select id="plCustomer">
-          ${customers.map((x) => `<option value="${x.id}" ${p && p.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        <select id="plCustomer" onchange="onPortalCust()">
+          ${customers.length
+            ? customers.map((x) => `<option value="${x.id}" ${String(x.id) === String(selCust) ? "selected" : ""}>${esc(x.name)}</option>`).join("")
+            : `<option value="">— No customers available —</option>`}
         </select></label>
       <label class="field"><span>Specific equipment (optional)</span>
         <select id="plEquipment">
           <option value="">— All equipment for this customer —</option>
-          ${equipment.map((x) => eqOpt(x, p && p.equipment_id)).join("")}
+          ${equipment.filter((x) => !selCust || String(x.customer_id) === String(selCust))
+            .map((x) => eqOpt(x, p && p.equipment_id)).join("")}
         </select></label>
       <p class="hint" style="font-size:11.5px;color:var(--ink-soft)">Anyone scanning the QR opens a self-service portal to report issues on this equipment — no login needed.</p>
     </div>
@@ -2869,7 +2891,7 @@ Object.assign(window, {
   uploadPhotos, viewPhoto, deleteAttachment, downloadReport, openExportSheet,
   openNotifications, openNotif, markAllRead,
   setPMFilter, openPMEditor, savePM, deletePM, openPMComplete, confirmPMComplete,
-  openPortalEditor, savePortal, showPortalQR, copyPortalURL, downloadQR, deletePortal,
+  openPortalEditor, savePortal, showPortalQR, copyPortalURL, downloadQR, deletePortal, onPortalCust,
   viewOrg, setOrgTab,
   openLocationEditor, saveLocation, deleteLocation,
   openDepartmentEditor, saveDepartment, deleteDepartment,
