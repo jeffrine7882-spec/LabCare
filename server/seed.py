@@ -23,10 +23,15 @@ def seed():
     # only see / create tickets & equipment within that scope.
     users = [
         # (name, email, phone, password_hash, role, customer_id, location_id, department_id)
+        # The single Master System Admin (unbound admin).
         ("System Admin", "admin@labcare.com", "012-555 0100", pwd, "admin", None, None, None),
         ("Aidil Rahman", "aidil@labcare.com", "012-555 0101", pwd, "technician", None, None, None),
         ("Mei Ling Tan", "meiling@labcare.com", "012-555 0102", pwd, "technician", None, None, None),
         ("Support Desk", "support@labcare.com", "012-555 0103", pwd, "technician", None, None, None),
+        # Tenant admins — one per customer, scoped to their own organisation.
+        ("BioReference Admin", "admin.bioref@labcare.com", "012-555 0110", pwd, "admin", 1, None, None),
+        ("Meridian Admin", "admin.meridian@labcare.com", "012-555 0111", pwd, "admin", 2, None, None),
+        ("Northern Admin", "admin.northern@labcare.com", "012-555 0112", pwd, "admin", 3, None, None),
         # BioReference Labs (customer 1) — two users in *different* locations/depts
         ("Dr. Kavita Nair", "kavita@bioref.com", "017-600 1111", pwd, "customer", 1, 1, 1),
         ("Sarah Chong", "sarah@bioref.com", "017-600 1112", pwd, "customer", 1, 2, 3),

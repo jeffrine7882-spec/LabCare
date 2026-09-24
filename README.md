@@ -91,25 +91,29 @@ Full step-by-step: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 
 Password for all demo accounts is **`Demo123!`**
 
-| Role             | Email               |
-| ---------------- | ------------------- |
-| Master admin     | admin@labcare.com   |
-| Technician       | aidil@labcare.com   |
-| Customer         | kavita@bioref.com   |
+| Role                       | Email                    |
+| -------------------------- | ------------------------ |
+| Master System Admin        | admin@labcare.com        |
+| Tenant admin (BioReference) | admin.bioref@labcare.com |
+| Tenant admin (Meridian)     | admin.meridian@labcare.com |
+| Tenant admin (Northern)     | admin.northern@labcare.com |
+| Technician                 | aidil@labcare.com        |
+| Customer                   | kavita@bioref.com        |
 
 ## Key behaviour
 
 - **Roles & multi-tenant scoping**: one shared database with strict
   `customer_id` scoping.
-  - **Master System Admin** (`admin` with no `customer_id`, e.g.
-    `admin@labcare.com`) sees and manages everything: customers, categories,
-    onboarding/join requests and all users. Only the master can create or edit
-    admin accounts and customers.
+  - **Master System Admin** — a single, identity-bound account
+    (`admin@labcare.com`) that sees and manages everything: customers,
+    categories, onboarding/join requests and all users. Only this account can
+    create or edit admin accounts and customers, and it can never be disabled,
+    demoted or linked to a customer. Every other admin is a tenant admin.
   - **Tenant admin** (`admin` linked to one `customer_id`) manages only their
     own customer — its locations, departments, equipment, tickets, PM schedules
-    and users. They **cannot** create other admins or customers, cannot see
-    other organisations' data, and can only assign work to their own team or
-    LabCare's provider technicians.
+    and users. They **cannot** create or edit any admin account, cannot create
+    customers, cannot see other organisations' data, and can only assign work
+    to their own team or LabCare's provider technicians.
   - **Technician**: provider technicians (`customer_id NULL`) work across all
     customers; tenant technicians (`customer_id` set) are restricted to their
     customer.

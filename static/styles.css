@@ -160,6 +160,8 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
 .b-low { background: #e0e7ff; color: #4338ca; }
 .chip { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
 .chip-admin { background: #ede9fe; color: #6d28d9; }
+.chip-master { background: #1e293b; color: #fff; }
+.chip-tenant { background: #ede9fe; color: #6d28d9; }
 .chip-tech { background: var(--info-soft); color: var(--info); }
 .chip-cust { background: var(--ok-soft); color: var(--ok); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--bg); padding: 2px 6px; border-radius: 6px; }

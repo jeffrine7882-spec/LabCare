@@ -19,6 +19,11 @@ from database import conn, now, hash_password, init_db, next_code_for, rows_to_d
 app = Flask(__name__, static_folder=None)
 CORS(app)
 
+# The one, single Master System Admin. Everything "master-only" is decided by
+# comparing the actor against this account, not by the bare shape of the record,
+# so an accidental second unbound admin can never gain master powers.
+MASTER_ADMIN_EMAIL = "admin@labcare.com"
+
 # --------------------------------------------------------------------------
 # FIFO storage & history log
 # --------------------------------------------------------------------------
@@ -139,8 +144,13 @@ def require_role(*roles):
 
 
 def is_master_admin(u):
-    """True only for the global master admin (role=admin and no customer link)."""
-    return u.get("role") == "admin" and not u.get("customer_id")
+    """True only for the one Master System Admin account (admin@labcare.com).
+
+    Keeping this identity-bound (rather than just "admin with no customer") means
+    a second, accidental unbound admin can never act as the master."""
+    return (u.get("role") == "admin"
+            and not u.get("customer_id")
+            and (u.get("email") or "").strip().lower() == MASTER_ADMIN_EMAIL)
 
 
 def is_tenant_admin(u):
@@ -158,14 +168,13 @@ def scoped_customer_id(u):
 
 
 def require_master():
-    """Admin auth plus a tenant check: only the master (unbound) admin may manage
-    customers, categories, onboarding requests or admin accounts."""
+    """Admin auth plus an identity check: only the Master System Admin
+    (admin@labcare.com) may manage customers, categories, onboarding requests or
+    admin accounts."""
     u = auth_user()
     if not u:
         return None, jsonify({"error": "Not authenticated"}), 401
-    if u["role"] != "admin":
-        return None, jsonify({"error": "Not authorised"}), 403
-    if u.get("customer_id"):
+    if not is_master_admin(u):
         return None, jsonify({"error": "Only the master administrator can perform this action"}), 403
     return u, None, None
 
@@ -2048,9 +2057,11 @@ def create_user():
             return jsonify({"error": "You can only create accounts for your own organisation"}), 403
         customer_id = bound if bound else (b.get("customer_id") or None)
         location_id = department_id = None
-    else:  # admin (master only): customer link optional -> tenant admin
+    else:  # admin — only the master may create one, and it MUST be a tenant admin
         customer_id = b.get("customer_id") or None
         location_id = department_id = None
+        if not customer_id:
+            return jsonify({"error": "A tenant admin must be linked to an organisation"}), 400
 
     if bound and customer_id != bound:
         return jsonify({"error": "You can only create accounts for your own organisation"}), 403
@@ -2094,6 +2105,19 @@ def update_user(uid):
         c.close()
         return jsonify({"error": "Not found"}), 404
 
+    # The Master System Admin account is fixed: its role and scope cannot be
+    # changed and it can never be disabled or demoted.
+    if (existing["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL:
+        if b.get("role") and b["role"] != "admin":
+            c.close()
+            return jsonify({"error": "The Master System Admin account cannot change role"}), 403
+        if "customer_id" in b and b["customer_id"]:
+            c.close()
+            return jsonify({"error": "The Master System Admin account cannot be linked to a customer"}), 403
+        if b.get("active") is not None and b["active"] != 1:
+            c.close()
+            return jsonify({"error": "The Master System Admin account cannot be disabled"}), 403
+
     bound = scoped_customer_id(u)
     if bound:
         # Tenant admins cannot touch admin accounts, nor anyone outside their customer.
@@ -2124,6 +2148,13 @@ def update_user(uid):
             new_customer_id = bound if bound else None
         elif b["role"] == "admin":
             new_customer_id = None
+    # Every admin except the Master must be a tenant admin (linked to a customer).
+    # Prevent editing anyone into a second, unbound admin.
+    if (b.get("role") == "admin" or (not b.get("role") and existing["role"] == "admin" and "customer_id" in b)) \
+            and (existing["email"] or "").strip().lower() != MASTER_ADMIN_EMAIL:
+        if not new_customer_id:
+            c.close()
+            return jsonify({"error": "An admin must be linked to an organisation (only the Master System Admin is customer-less)"}), 400
     if new_customer_id:
         new_loc = b.get("location_id", existing["location_id"])
         new_dept = b.get("department_id", existing["department_id"])

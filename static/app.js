@@ -119,6 +119,22 @@ const telHref = (s) => "tel:" + String(s == null ? "" : s).replace(/[^\d+]/g, ""
 
 const ROLE_LABELS = { admin: "Admin", technician: "Technician", customer: "Customer" };
 const roleChip = (role) => `<span class="chip chip-${role === "admin" ? "admin" : role === "technician" ? "tech" : "cust"}">${ROLE_LABELS[role] || role}</span>`;
+// a user's human-readable role (distinguishes Master admin from Tenant admin)
+const roleLabel = (u) => {
+  if (!u) return "";
+  if (u.role === "admin") return u.customer_id ? "Tenant admin" : "Master admin";
+  return ROLE_LABELS[u.role] || u.role;
+};
+// coloured chip that separates Master admin, Tenant admin, Technician and Customer
+const roleBadge = (u) => {
+  if (!u || !u.role) return "";
+  if (u.role === "admin") {
+    return u.customer_id
+      ? `<span class="chip chip-tenant">Tenant admin</span>`
+      : `<span class="chip chip-master">Master admin</span>`;
+  }
+  return roleChip(u.role);
+};
 
 const STATUS_META = {
   open: { label: "Open", cls: "b-open" },
@@ -265,7 +281,7 @@ function goBack() {
 const isAdmin = () => state.user && state.user.role === "admin";
 const isTech = () => state.user && (state.user.role === "technician" || state.user.role === "admin");
 const isCust = () => state.user && state.user.role === "customer";
-const isMaster = () => state.user && state.user.role === "admin" && !state.user.customer_id;
+const isMaster = () => state.user && state.user.role === "admin" && !state.user.customer_id && (state.user.email || "").toLowerCase() === "admin@labcare.com";
 // staff who are not bound to a customer (master admin or a provider technician)
 const isUnboundStaff = () => state.user && (state.user.role === "admin" || state.user.role === "technician") && !state.user.customer_id;
 // cache of tenant admins per customer for the "Responsible tenant admin" picker
@@ -1361,7 +1377,7 @@ async function viewUsers(v) {
               <div class="item-title">${esc(u.name)}</div>
               <div class="item-sub">${esc(u.email)}${u.customer_name ? " · " + esc(u.customer_name) : ""}${u.location_name ? " · " + esc(u.location_name) : ""}${u.department_name ? " · " + esc(u.department_name) : ""}${u.responsible_admin_name ? " · 👤 " + esc(u.responsible_admin_name) : ""}</div>
             </div>
-            ${roleChip(u.role)}
+            ${roleBadge(u)}
           </div>
         </div>`).join("")}</div>`;
   } catch (e) {
@@ -1502,12 +1518,12 @@ function viewProfile(v) {
       <div class="c-avatar" style="width:72px;height:72px;font-size:26px;margin:0 auto">${esc(initials(u.name))}</div>
       <h2 style="font-size:20px;margin-top:10px">${esc(u.name)}</h2>
       <p style="color:var(--ink-soft);font-size:13.5px">${esc(u.email)}</p>
-      <div style="margin-top:10px">${roleChip(u.role)}</div>
+      <div style="margin-top:10px">${roleBadge(u)}</div>
     </div>
     <div class="section-title">Account</div>
     <div class="card">
       <div class="kv"><span class="k">Phone</span><span class="v">${esc(u.phone || "—")}</span></div>
-      <div class="kv"><span class="k">Role</span><span class="v">${ROLE_LABELS[u.role]}</span></div>
+      <div class="kv"><span class="k">Role</span><span class="v">${roleLabel(u)}</span></div>
       ${u.customer_name ? `<div class="kv"><span class="k">Organisation</span><span class="v">${esc(u.customer_name)}</span></div>` : ""}
       ${u.location_name ? `<div class="kv"><span class="k">Location</span><span class="v">${esc(u.location_name)}</span></div>` : ""}
       ${u.department_name ? `<div class="kv"><span class="k">Department</span><span class="v">${esc(u.department_name)}</span></div>` : ""}
@@ -1551,7 +1567,7 @@ function viewMore(v) {
   v.innerHTML = `
     <div class="hero" style="background:linear-gradient(135deg,#365314,#3f6212)">
       <h2>${esc(state.user.name)}</h2>
-      <p>${ROLE_LABELS[state.user.role]} · ${esc(state.user.email)}</p>
+      <p>${roleLabel(state.user)} · ${esc(state.user.email)}</p>
     </div>
     <div class="section-title">Create new</div>
     <div class="menu-group">${createItems.join("")}</div>
@@ -2077,11 +2093,11 @@ async function openUserEditor(edit, id) {
       <label class="field"><span>Phone</span><input id="uPhone" value="${esc(u ? u.phone : "")}"></label>
       <label class="field"><span>Role</span>
         <select id="uRole" onchange="toggleCustomerSelect()">
-          ${(master ? ["admin", "technician", "customer"] : ["technician", "customer"])
-            .map((r) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("")}
+          ${(master ? [["admin", "Tenant admin"], ["technician", "Technician"], ["customer", "Customer"]] : [["technician", "Technician"], ["customer", "Customer"]])
+            .map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("")}
         </select></label>
       <div id="uCustomerFields" style="${showCustFields ? "" : "display:none"}">
-        <label class="field"><span>${master && !startCust ? "Linked customer (optional — leave empty for LabCare-wide)" : "Linked customer"}</span>
+        <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked customer (optional — leave empty for LabCare-wide)" : "Linked customer"}</span>
           <select id="uCustomer" onchange="onUserCustPick()">
             ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabCare-wide (no customer) —</option>` : ""}
             ${customers.map((x) => `<option value="${x.id}" ${u && u.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
@@ -2109,15 +2125,24 @@ async function openUserEditor(edit, id) {
 function toggleCustomerSelect() {
   const role = $("#uRole").value;
   const isCustRole = role === "customer";
-  // customer accounts always need the full customer/location/department picker;
-  // master may link admin/technician to a single customer (tenant) or none (global).
-  $("#uCustomerFields").style.display = (isMaster() || isCustRole) ? "" : "none";
-  $("#uLocationField").style.display = isCustRole ? "" : "none";
-  $("#uDepartmentField").style.display = isCustRole ? "" : "none";
-  if (!isMaster()) {
+  const isTenantAdminRole = role === "admin";
+  if (isMaster()) {
+    // customer accounts always need the full customer/location/department picker;
+    // a tenant admin MUST be linked to a customer (the master is admin@labcare.com
+    // and is never created through this form).
+    $("#uCustomerFields").style.display = (isCustRole || isTenantAdminRole) ? "" : "none";
+    const lbl = $("#uCustomerLabel");
+    if (lbl) lbl.textContent = isTenantAdminRole
+      ? "Linked customer (required)"
+      : "Linked customer (optional — leave empty for LabCare-wide)";
+  } else {
+    // tenant staff (admin or technician) can only create for their own customer
+    $("#uCustomerFields").style.display = "";
     const sel = $("#uCustomer");
     if (sel && state.user && state.user.customer_id) sel.value = String(state.user.customer_id);
   }
+  $("#uLocationField").style.display = isCustRole ? "" : "none";
+  $("#uDepartmentField").style.display = isCustRole ? "" : "none";
   onUserCustPick();
 }
 
@@ -2151,7 +2176,10 @@ async function saveUser(id) {
     if (!body.customer_id) { toast("Linked customer is required for customer accounts", "error"); return; }
     if (isMaster() && $("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else if (isMaster()) {
-    // master may bind an admin/technician to a customer (tenant admin/tech) or leave global
+    // a tenant admin REQUIRES a customer; techs/customers may be global or bound
+    if (body.role === "admin" && !$("#uCustomer").value) {
+      toast("A tenant admin must be linked to an organisation", "error"); return;
+    }
     body.customer_id = $("#uCustomer").value || null;
     body.location_id = null;
     body.department_id = null;
