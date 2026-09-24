@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LabCare Alerts</title>
+<style>
+  :root { --teal:#0f766e; --teal-dark:#115e59; --ink:#111827; --soft:#6b7280; --bg:#f3f5f9; --border:#e5e7eb; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); height:100vh; overflow:auto; }
+  .wrap { padding:24px 20px; display:flex; flex-direction:column; min-height:100vh; }
+  .brand { font-size:32px; font-weight:800; color:var(--teal); text-align:center; letter-spacing:.5px; }
+  .tag { font-size:13px; color:var(--soft); text-align:center; margin:4px 0 20px; }
+  .card { background:#fff; border:1px solid var(--border); border-radius:16px; padding:18px; margin-bottom:14px; }
+  label { display:block; font-size:13px; color:var(--soft); margin:12px 0 6px; font-weight:600; }
+  input { width:100%; padding:12px; font-size:15px; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--ink); }
+  button { width:100%; padding:14px; font-size:15px; font-weight:700; border:0; border-radius:12px; cursor:pointer; color:#fff; margin-top:14px; }
+  .primary { background:var(--teal); }
+  .primary:disabled { opacity:.6; cursor:default; }
+  .danger { background:#dc2626; }
+  .err { color:#dc2626; font-size:13px; margin-top:4px; }
+  .muted { color:var(--soft); font-size:13px; }
+  .row { display:flex; align-items:center; justify-content:space-between; }
+  .pill { background:#c7f2ec; color:var(--teal-dark); font-weight:700; font-size:12px; padding:4px 10px; border-radius:999px; }
+  .list { font-size:13.5px; color:var(--ink); margin-top:8px; }
+  .list div { padding:6px 0; border-bottom:1px solid var(--border); }
+  .foot { margin-top:auto; text-align:center; font-size:12px; color:var(--soft); padding-top:16px; line-height:1.6; }
+</style>
+</head>
+<body>
+  <div class="wrap" id="root"></div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    async function signIn(email, password) {
+      const res = await window.labcare.signIn(email, password);
+      if (res && res.ok) return { ok: true, name: res.name };
+      if (res && res.pending) return { ok: false, error: "Your account is awaiting administrator approval." };
+      return { ok: false, error: res && res.error ? res.error : "Sign in failed." };
+    }
+
+    function loginScreen() {
+      const el = document.createElement("div");
+      el.innerHTML = `
+        <div class="brand">LabCare</div>
+        <div class="tag">Windows desktop alerts — rings for every bell alert</div>
+        <div class="card">
+          <div class="err" id="err"></div>
+          <label>Email</label>
+          <input id="email" type="email" autocomplete="username" placeholder="you@example.com">
+          <label>Password</label>
+          <input id="password" type="password" autocomplete="current-password" placeholder="••••••••">
+          <button class="primary" id="btn">Sign in &amp; enable alerts</button>
+        </div>
+        <div class="foot">Uses the same account as the LabCare web app.<br>Runs in the system tray and starts with Windows.</div>
+      `;
+      $("#root").appendChild(el);
+      $("#btn").addEventListener("click", async () => {
+        const btn = $("#btn");
+        btn.disabled = true; btn.textContent = "Signing in…";
+        const r = await signIn($("#email").value.trim(), $("#password").value);
+        if (r.ok) return homeScreen(r.name);
+        $("#err").textContent = r.error;
+        btn.disabled = false; btn.textContent = "Sign in & enable alerts";
+      });
+    }
+
+    function homeScreen(name) {
+      $("#root").innerHTML = `
+        <div class="brand">LabCare</div>
+        <div class="tag">Desktop alerts</div>
+        <div class="card">
+          <div class="row"><span class="muted">Signed in as</span><span class="pill">● On</span></div>
+          <div class="list"><div><b>${escapeHtml(name || "—")}</b></div></div>
+        </div>
+        <div class="card">
+          <div class="list">
+            <div>🔔 Rings for every new bell notification</div>
+            <div>▶ Opens the web app when you click an alert</div>
+            <div>🖥️ Lives in the system tray — close this window anytime</div>
+            <div>🚀 Starts automatically with Windows</div>
+          </div>
+        </div>
+        <button class="danger" id="out">Sign out</button>
+        <div class="foot">You can close this window — LabCare keeps running in the tray.</div>
+      `;
+      $("#out").addEventListener("click", async () => {
+        await window.labcare.signOut();
+        loginScreen();
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+    }
+
+    (async () => {
+      const s = await window.labcare.getState();
+      if (s && s.signedIn) homeScreen("");
+      else loginScreen();
+    })();
+  </script>
+</body>
+</html>

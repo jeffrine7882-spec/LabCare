@@ -1,0 +1,173 @@
+package com.insforge.labcare;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.media.AudioAttributes;
+import android.media.RingtoneManager;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+
+import org.json.JSONObject;
+
+/**
+ * Foreground relay: polls the LabCare bell endpoint and, on a new unread
+ * notification, plays a chime + posts a notification and vibrates — the
+ * phone rings even when the LabCare app UI is closed or the screen is off.
+ */
+public class AlertRelayService extends Service {
+
+    private static final String CHANNEL = "labcare_alerts";
+    private Handler handler;
+    private Runnable poller;
+    private SharedPreferences prefs;
+    private long lastId = -1;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        prefs = getSharedPreferences("labcare", MODE_PRIVATE);
+        createChannel();
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && "STOP".equals(intent.getAction())) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        String token = prefs.getString("token", "");
+        if (token.isEmpty()) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        // Persistent notification so Android doesn't kill us when idle.
+        Notification n = new Notification.Builder(this, CHANNEL)
+                .setContentTitle("LabCare alerts on")
+                .setContentText("Listening for equipment complaints & breakdowns")
+                .setSmallIcon(R.drawable.ic_stat_bell)
+                .setOngoing(true)
+                .build();
+        startForeground(1001, n);
+
+        startPolling();
+        return START_STICKY;
+    }
+
+    private void startPolling() {
+        handler = new Handler(Looper.getMainLooper());
+        poller = new Runnable() {
+            @Override
+            public void run() {
+                new Thread(() -> pollOnce()).start();
+                handler.postDelayed(this, 10000);
+            }
+        };
+        handler.post(poller);
+    }
+
+    private void pollOnce() {
+        String token = prefs.getString("token", "");
+        if (token.isEmpty()) return;
+        try {
+            String body = httpGet("/api/notifications/ping", token);
+            JSONObject j = new JSONObject(body);
+            if (j.has("error")) return;
+            JSONObject latest = j.optJSONObject("latest");
+            int unread = j.optInt("unread", 0);
+            if (latest == null) return;
+            long id = latest.optLong("id", -1);
+            if (lastId == -1) {
+                lastId = id;         // baseline — no burst on first sync
+                return;
+            }
+            if (id != lastId && unread > 0 && prefs.getBoolean("alerts", true)) {
+                lastId = id;
+                String text = latest.optString("text", "New LabCare alert");
+                ring(text);
+            } else if (id != lastId) {
+                lastId = id;
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void ring(String text) {
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+
+        // play our bundled chime (falls back to the default notification sound)
+        android.media.MediaPlayer mp = android.media.MediaPlayer.create(
+                this, R.raw.chime, new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                        .build(), 1);
+        try {
+            if (mp != null) {
+                mp.setOnCompletionListener(android.media.MediaPlayer::release);
+                mp.start();
+            } else {
+                RingtoneManager.getRingtone(this,
+                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)).play();
+            }
+        } catch (Exception e) {
+            try {
+                RingtoneManager.getRingtone(this,
+                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)).play();
+            } catch (Exception ignored) {
+            }
+        }
+
+        Intent i = new Intent(this, MainActivity.class);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, i,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Notification n = new Notification.Builder(this, CHANNEL)
+                .setContentTitle("LabCare")
+                .setContentText(text)
+                .setSmallIcon(R.drawable.ic_stat_bell)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+                .build();
+        nm.notify((int) (System.currentTimeMillis() % Integer.MAX_VALUE), n);
+    }
+
+    private void createChannel() {
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel ch = new NotificationChannel(
+                    CHANNEL, "LabCare alerts", NotificationManager.IMPORTANCE_HIGH);
+            ch.setDescription("Rings for new LabCare bell notifications");
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            nm.createNotificationChannel(ch);
+        }
+    }
+
+    private String httpGet(String path, String token) throws Exception {
+        java.net.URL url = new java.net.URL("https://labcare.insforge.site" + path);
+        java.net.HttpURLConnection c = (java.net.HttpURLConnection) url.openConnection();
+        c.setRequestMethod("GET");
+        c.setConnectTimeout(10000);
+        c.setReadTimeout(20000);
+        c.setRequestProperty("Accept", "application/json");
+        c.setRequestProperty("Authorization", "Bearer " + token);
+        return MainActivity.readStream(c);
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (handler != null && poller != null) handler.removeCallbacks(poller);
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+}
