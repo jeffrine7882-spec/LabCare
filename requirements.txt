@@ -5,3 +5,4 @@ waitress>=3.0
 qrcode[pil]>=7.4
 psycopg[binary]>=3.1
 pywebpush>=2.0
+cryptography>=42.0

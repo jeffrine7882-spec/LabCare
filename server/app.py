@@ -15,6 +15,7 @@ from flask_cors import CORS
 import mailer as email_mod
 import report as report_mod
 import push as push_mod
+import apppush as apppush_mod
 from database import conn, now, now_dt, hash_password, init_db, next_code_for, rows_to_dicts
 
 app = Flask(__name__, static_folder=None)
@@ -515,6 +516,16 @@ def notify(user_id, text, entity_type="", entity_id=None, email_fn=None):
     try:
         threading.Thread(
             target=push_mod.send_push,
+            args=(user_id, text, entity_type, entity_id),
+            daemon=True,
+        ).start()
+    except Exception:
+        pass
+    # Native app push (Firebase FCM): rings on the phone even with the browser
+    # closed or the phone locked. Best-effort; skipped when FCM isn't configured.
+    try:
+        threading.Thread(
+            target=apppush_mod.send_app_push,
             args=(user_id, text, entity_type, entity_id),
             daemon=True,
         ).start()
@@ -3051,6 +3062,56 @@ def push_unsubscribe():
     b = get_body() or {}
     push_mod.remove_subscription(u["id"], (b.get("endpoint") or "").strip())
     return jsonify({"ok": True})
+
+
+# --------------------------------------------------------------------------
+# Native app devices (Firebase FCM)
+# --------------------------------------------------------------------------
+@app.get("/api/app/devices")
+def app_devices():
+    u, err, code = require_role("admin", "technician", "customer")
+    if err:
+        return err, code
+    c = conn()
+    rows = c.execute(
+        "SELECT id, platform, active, alert_on, device_name, created_at "
+        "FROM app_devices WHERE user_id=? ORDER BY id DESC", (u["id"],)).fetchall()
+    c.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.post("/api/app/register")
+def app_register():
+    u, err, code = require_role("admin", "technician", "customer")
+    if err:
+        return err, code
+    b = get_body()
+    try:
+        out = apppush_mod.register_device(u["id"], b)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **out})
+
+
+@app.post("/api/app/unregister")
+def app_unregister():
+    u, err, code = require_role("admin", "technician", "customer")
+    if err:
+        return err, code
+    b = get_body() or {}
+    apppush_mod.remove_device(u["id"], (b.get("push_token") or "").strip())
+    return jsonify({"ok": True})
+
+
+@app.get("/api/app/config")
+def app_config():
+    """Public bootstrap for the LabCare native app (no auth)."""
+    cfg = {
+        "api_base": (os.environ.get("LABCARE_APP_URL") or "").strip()
+                    or "https://labcare.insforge.site",
+        "app_name": "LabCare",
+    }
+    return jsonify(cfg)
 
 
 # --------------------------------------------------------------------------
