@@ -114,6 +114,14 @@
     const badge = (m, v) => `<span class="badge ${m[v].cls}">${m[v].label}</span>`;
     const statusBadge = (v) => badge(STATUS, v);
     const kindBadge = (k) => KINDS[k] ? `<span class="badge ${KINDS[k].cls}">${KINDS[k].label}</span>` : "";
+    // Malaysia time (UTC+8). Ticket timestamps arrive as MYT wall-clock strings.
+    const fmtMYT = (s) => {
+      if (!s) return "";
+      const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+      if (!m) return s;
+      const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], (+m[4] || 0) - 8, +(m[5] || 0)));
+      return d.toLocaleString("en-MY", { timeZone: "Asia/Kuala_Lumpur", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+    };
     function toast(msg, type) {
       const t = document.createElement("div");
       t.className = "toast " + (type || "");
@@ -237,7 +245,7 @@
       return list.map((t) => `
         <div class="ticket">
           <div class="t-title">${esc(t.subject)}</div>
-          <div class="t-sub">${esc(t.code)} · ${esc(t.created_at || "")}</div>
+          <div class="t-sub">${esc(t.code)} · ${esc(fmtMYT(t.created_at || ""))}</div>
           <div class="t-meta">${kindBadge(t.kind || "complaint")} ${statusBadge(t.status)} ${badge(PRIO, t.priority)}</div>
           ${t.accepted_by || t.accepted_by_name ? `
             <div class="accept-box">
@@ -253,7 +261,7 @@
       return list.slice(0, 8).map((t) => `
         <div class="ticket">
           <div class="t-title">${esc(t.subject)}</div>
-          <div class="t-sub">${esc(t.code)} · ${esc(t.created_at || "")}</div>
+          <div class="t-sub">${esc(t.code)} · ${esc(fmtMYT(t.created_at || ""))}</div>
           <div class="t-meta">${kindBadge(t.kind || "complaint")} ${statusBadge(t.status)} ${badge(PRIO, t.priority)}</div>
           ${t.accepted_by || t.accepted_by_name ? `
             <div class="accept-box">

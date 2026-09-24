@@ -194,22 +194,43 @@ const badge = (type, value) => {
   return `<span class="badge ${m.cls}">${m.label}</span>`;
 };
 
+// ----------------------------------------------------------------------------
+// Malaysia time (MYT = UTC+8, no daylight saving).
+// Timestamps from the API (e.g. "2026-09-25 14:30:00") are stored in Malaysian
+// wall-clock time. We parse them as MYT instants and always render in MYT, so a
+// device in any timezone sees the same local time the record was created in.
+const parseMYT = (s) => {
+  if (!s) return null;
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3], h = +(m[4] || 0), mi = +(m[5] || 0), sec = +(m[6] || 0);
+  return new Date(Date.UTC(y, mo - 1, d, h - 8, mi, sec)); // wall-clock MYT -> instant
+};
+const inMYT = (d, opts) => !d || isNaN(d) ? "—" : d.toLocaleString("en-MY", { timeZone: "Asia/Kuala_Lumpur", ...opts });
+const mytHour = () => Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kuala_Lumpur", hour: "numeric", hour12: false }).format(new Date()));
+const mytToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const mytDatePlus = (days) => {
+  const [y, mo, d] = mytToday().split("-").map(Number);
+  return new Date(Date.UTC(y, mo - 1, d + days)).toISOString().slice(0, 10);
+};
+
 const fmtDate = (s) => {
   if (!s) return "—";
-  const d = new Date(s.replace(" ", "T"));
-  if (isNaN(d)) return s;
-  return d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+  const d = parseMYT(s);
+  if (!d || isNaN(d)) return s;
+  return inMYT(d, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
 };
 const fmtDateShort = (s) => {
   if (!s) return "—";
-  const d = new Date(s.replace(" ", "T"));
-  if (isNaN(d)) return s;
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  const d = parseMYT(s);
+  if (!d || isNaN(d)) return s;
+  return inMYT(d, { day: "numeric", month: "short", year: "numeric" });
 };
 const initials = (name) => (name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const timeAgo = (s) => {
   if (!s) return "";
-  const d = new Date(s.replace(" ", "T"));
+  const d = parseMYT(s);
+  if (!d || isNaN(d)) return s;
   const diff = (Date.now() - d.getTime()) / 1000;
   if (diff < 60) return "just now";
   if (diff < 3600) return Math.floor(diff / 60) + "m ago";
@@ -384,7 +405,7 @@ async function viewDashboard(v) {
   try {
     const d = await API.get("/api/dashboard");
     const c = d.counts;
-    const nowHour = new Date().getHours();
+    const nowHour = mytHour();
     const greet = nowHour < 12 ? "Good morning" : nowHour < 18 ? "Good afternoon" : "Good evening";
     const firstName = (state.user.name || "").split(" ")[0];
 
@@ -475,7 +496,7 @@ function renderHBars(title, rows, keyField, colorFn) {
 const monthShort = (m) => {
   if (!m) return "";
   const [y, mo] = String(m).split("-");
-  return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString(undefined, { month: "short" }) + " " + y.slice(2);
+  return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-MY", { month: "short" }) + " " + y.slice(2);
 };
 const hbarLabel = (key, r) => {
   if (key === "priority") return prioLabelKey[r.priority] || r.priority;
@@ -1149,7 +1170,7 @@ function renderEquipmentGrouped(list) {
 }
 
 function equipmentCard(e) {
-  const warranty = e.warranty_expiry ? new Date(e.warranty_expiry.replace(" ", "T")) : null;
+  const warranty = e.warranty_expiry ? parseMYT(e.warranty_expiry) : null;
   const expired = warranty && warranty < new Date();
   const nearExp = warranty && !expired && (warranty - new Date()) < 1000 * 60 * 60 * 24 * 90;
   const scope = isCust()
@@ -2445,7 +2466,7 @@ function setPMFilter(k) {
 
 function pmDueState(p) {
   if (!p.next_due_at) return { label: "Not scheduled", cls: "b-closed", urgent: false };
-  const due = new Date(p.next_due_at.replace(" ", "T"));
+  const due = parseMYT(p.next_due_at);
   const now = new Date();
   const diffDays = Math.ceil((due - now) / 86400000);
   if (diffDays < 0) return { label: `Overdue ${Math.abs(diffDays)}d`, cls: "b-critical", urgent: true };
@@ -2544,7 +2565,7 @@ async function openPMEditor(edit) {
     } catch (e) {}
   }
   const p = edit ? state.pm?.find((x) => x.id === state.viewParams.id) : null;
-  const defaultNext = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+  const defaultNext = mytDatePlus(90);
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit schedule" : "New PM schedule"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
@@ -2616,7 +2637,7 @@ function openPMComplete(id) {
   openSheet(`
     <div class="sheet-head"><h3>Mark PM completed</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
-      <label class="field"><span>Performed on</span><input id="pmDoneAt" type="date" value="${new Date().toISOString().slice(0, 10)}"></label>
+      <label class="field"><span>Performed on</span><input id="pmDoneAt" type="date" value="${mytToday()}"></label>
       <label class="field"><span>Notes</span><textarea id="pmNotes" placeholder="What was done, parts replaced…"></textarea></label>
     </div>
     <div class="sheet-foot">

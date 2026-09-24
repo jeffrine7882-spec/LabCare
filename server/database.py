@@ -19,7 +19,7 @@ import os
 import re
 import sqlite3
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("LABCARE_DB", os.path.join(BASE_DIR, "labcare.db"))
@@ -38,8 +38,17 @@ _PG_URL = (os.environ.get("LABCARE_DATABASE_URL") or
 PG_ENABLED = bool(_PG_URL) and _HAS_PSYCOPG
 
 
+# Malaysia Standard Time — UTC+8, no daylight saving. All timestamps stored by
+# the app use this wall-clock so records always read as their true local time.
+MYT = timezone(timedelta(hours=8), "MYT")
+
+
 def now():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(MYT).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def now_dt():
+    return datetime.now(MYT)
 
 
 def hash_password(pw):
@@ -858,7 +867,8 @@ class _PGConn:
         self._conn = psycopg.connect(
             url,
             connect_timeout=15,
-            options="-c idle_in_transaction_session_timeout=30000 "
+            options="-c TimeZone=Asia/Kuala_Lumpur "
+                    "-c idle_in_transaction_session_timeout=30000 "
                     "-c statement_timeout=120000",
         )
 
@@ -889,7 +899,8 @@ def _pg_init_db():
     raw = psycopg.connect(
         _PG_URL,
         connect_timeout=15,
-        options="-c idle_in_transaction_session_timeout=60000 "
+        options="-c TimeZone=Asia/Kuala_Lumpur "
+                "-c idle_in_transaction_session_timeout=60000 "
                 "-c statement_timeout=120000",
     )
     try:

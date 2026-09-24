@@ -4,7 +4,6 @@ import sys
 import json
 import uuid
 import mimetypes
-from datetime import datetime
 
 # allow running as `python server/app.py` or as a package
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -14,7 +13,7 @@ from flask_cors import CORS
 
 import mailer as email_mod
 import report as report_mod
-from database import conn, now, hash_password, init_db, next_code_for, rows_to_dicts
+from database import conn, now, now_dt, hash_password, init_db, next_code_for, rows_to_dicts
 
 app = Flask(__name__, static_folder=None)
 CORS(app)
@@ -3231,7 +3230,7 @@ def export_csv():
     for r in rows:
         w.writerow([r[k] if r[k] is not None else "" for k in keys])
     data = buf.getvalue()
-    fname = f"labcare_{entity}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+    fname = f"labcare_{entity}_{now_dt().strftime('%Y%m%d_%H%M')}.csv"
     return Response(data, mimetype="text/csv", headers={
         "Content-Disposition": f"attachment; filename={fname}"})
 
