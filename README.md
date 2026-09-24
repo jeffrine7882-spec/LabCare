@@ -175,6 +175,13 @@ organisations** and **Admin → Team & users**.
   preference. The VAPID keypair lives in [`server/vapid.json`](server/vapid.json)
   (override with `LABCARE_VAPID_PRIVATE`; the public key for clients is derived
   from it). `pywebpush` sends one push per recipient whenever `notify()` runs.
+- **Native mobile alerts (phone rings)**: an [Expo app](mobile/README.md) signs
+  into LabCare and receives every bell notification via **Firebase Cloud
+  Messaging**, so the phone rings even with the browser closed or the phone
+  locked. Backend side (`app_devices` table + `server/apppush.py` + the
+  `/api/app/*` endpoints) is implemented; enabling it only needs Firebase
+  project credentials (`LABCARE_FCM_SERVICE_JSON` + `LABCARE_FCM_PROJECT_ID`).
+  See [`mobile/README.md`](mobile/README.md) for the one-time setup.
 
 ## Data
 
