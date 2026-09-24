@@ -1666,7 +1666,7 @@ function viewMore(v) {
 
   // Sound alerts
   const alertOn = store.get("labcare_alert_sound") !== "off";
-  items.push(`<button class="menu-item" id="alertSoundToggle" onclick="toggleAlertSound()"><span class="mi-ico">${alertOn ? "🔊" : "🔇"}</span> ${alertOn ? "Alerts on" : "Alerts off"} <span class="mi-arrow">›</span></button>`);
+  items.push(`<button class="menu-item" id="alertSoundToggle" onclick="openAlertSheet()"><span class="mi-ico">${alertOn ? "🔊" : "🔇"}</span> Alerts &amp; sound ${alertOn ? "" : "· muted"} <span class="mi-arrow">›</span></button>`);
 
   items.push(`<button class="menu-item danger" onclick="logout()"><span class="mi-ico">🚪</span> Sign out <span class="mi-arrow">›</span></button>`);
 
@@ -2879,21 +2879,72 @@ function blobName(contentType) {
 // ---------------------------------------------------------------- Notifications
 const NOTIF_VIEWS = ["dashboard", "complaints", "breakdowns", "equipment", "more"];
 
-// Audible alert for new tickets/notifications — synthesised with the Web Audio
-// API so no external audio file is needed (works offline & in sandboxed previews).
+// Audible alert for new tickets/notifications.
+// The sound is USER-CONFIGURABLE: a preset shipped with the app, or the user's
+// own audio file (uploaded → stored as a data URL in localStorage, so nothing
+// is sent to the server and each user hears their own choice). Falls back to a
+// synthesized two-tone chime when no file can be played, so alerts never go
+// silent in restricted/sandboxed contexts.
+const SOUND_PRESETS = [
+  { id: "chime", label: "Chime (default)" },
+  { id: "bell", label: "Bell" },
+  { id: "beep", label: "Triple beep" },
+  { id: "alarm", label: "Siren" },
+];
 let _audioCtx = null;
 let _lastNotifId = null;
 let _notifSynced = false;
+let _alertAudio = null;      // cached <audio> for the custom file
+let _alertAudioUrl = "";     // the src it was created from
+
+function _customSoundSrc() {
+  const custom = store.get("labcare_alert_custom");
+  if (custom && custom.startsWith("data:audio/")) return custom;
+  return "";
+}
 
 function playAlertSound() {
+  const customSrc = _customSoundSrc();
+  if (customSrc) {
+    // user's own external sound file (data URL from localStorage)
+    try {
+      if (!_alertAudio || _alertAudioUrl !== customSrc) {
+        _alertAudio = new Audio(customSrc);
+        _alertAudioUrl = customSrc;
+      }
+      const p = _alertAudio.play();
+      if (p && p.catch) p.catch(() => {});
+      return;
+    } catch (e) { /* fall through to the preset */ }
+  }
+  // preset sound — load once, replay each alert
+  const preset = (store.get("labcare_alert_preset") || "chime");
+  const url = "sounds/" + preset + ".wav";
+  try {
+    if (!_alertAudio || _alertAudioUrl !== url) {
+      _alertAudio = new Audio(url);
+      _alertAudioUrl = url;
+      // if the file can't load (offline / sandboxed preview), fall back to
+      // the synthesized chime so alerts never go silent
+      _alertAudio.onerror = () => { _synthChime(); };
+    }
+    _alertAudio.currentTime = 0;
+    const p = _alertAudio.play();
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {
+    // offline / sandboxed preview → synthesised fallback so alerts still sound
+    _synthChime();
+  }
+}
+
+function _synthChime() {
   try {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     if (!_audioCtx) _audioCtx = new AC();
     if (_audioCtx.state === "suspended") _audioCtx.resume();
     const t0 = _audioCtx.currentTime;
-    // two-tone "ding-dong" chime
-    [[880, 0], [587.33, 0.16]].forEach(([freq, at], i) => {
+    [[880, 0], [587.33, 0.16]].forEach(([freq, at]) => {
       const osc = _audioCtx.createOscillator();
       const gain = _audioCtx.createGain();
       osc.type = "sine";
@@ -2905,7 +2956,7 @@ function playAlertSound() {
       osc.start(t0 + at);
       osc.stop(t0 + at + 0.55);
     });
-  } catch (e) { /* audio blocked (autoplay policy) — ignore */ }
+  } catch (e) { /* ignore */ }
 }
 
 // Called on a real user gesture (sign-in click) so the AudioContext isn't
@@ -2946,6 +2997,111 @@ function toggleAlertSound() {
   const el = $("#alertSoundToggle");
   if (el) el.innerHTML = `<span class="mi-ico">${next ? "🔊" : "🔇"}</span> ${next ? "Alerts on" : "Alerts off"} <span class="mi-arrow">›</span>`;
   toast(next ? "Alert sound on" : "Alert sound off", "success");
+}
+
+// ---- Alert sound settings ----
+// Each user picks their own alarm sound: a bundled preset, or their OWN audio
+// file (uploaded and stored locally in this browser as a data URL — the server
+// never sees it).
+function openAlertSheet() {
+  const on = store.get("labcare_alert_sound") !== "off";
+  const preset = store.get("labcare_alert_preset") || "chime";
+  const custom = _customSoundSrc();
+  const customName = store.get("labcare_alert_custom_name") || "";
+
+  openSheet(`
+    <div class="sheet-head"><h3>Alert sound</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <label class="field">
+        <span>Alerts</span>
+        <button class="btn ${on ? "btn-primary" : "btn-ghost"} btn-sm" onclick="toggleAlertSound();openAlertSheet()">
+          ${on ? "🔊 On" : "🔇 Off"}
+        </button>
+      </label>
+
+      <div class="section-label" style="margin-top:6px">Preset sounds (built in)</div>
+      <div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center">
+        ${SOUND_PRESETS.map((p) => `
+          <button class="btn btn-sm ${!custom && preset === p.id ? "btn-primary" : "btn-ghost"}"
+                  onclick="pickAlertPreset('${p.id}')">▶</button>
+          <span style="font-size:14px">${esc(p.label)}</span>
+          <span>${!custom && preset === p.id ? "✓" : ""}</span>`).join("")}
+      </div>
+
+      <div class="section-label" style="margin-top:14px">Use your own sound file</div>
+      <p style="font-size:12.5px;color:var(--ink-soft);margin:0 0 8px">
+        Upload an audio file (mp3, wav, ogg, m4a — up to 2&nbsp;MB). It is kept in
+        this browser and played when a new alert arrives.
+      </p>
+      <label class="field">
+        <input id="alertCustomFile" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
+               onchange="onAlertCustomPicked(this)" style="padding:8px;font-size:13px">
+      </label>
+      ${custom ? `
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:13px;color:var(--ink)" class="ellipsis">🎧 ${esc(customName || "Custom sound")} <span style="color:var(--ink-soft)">(yours)</span></span>
+          <button class="btn btn-ghost btn-sm" onclick="alertPreviewCustom()">▶ Preview</button>
+          <button class="btn btn-ghost btn-sm" onclick="clearAlertCustom();openAlertSheet()">Remove</button>
+        </div>` : ""}
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Done</button>
+      <button class="btn btn-primary-2" onclick="playAlertSound()">▶ Test sound</button>
+    </div>`);
+}
+
+function pickAlertPreset(id) {
+  store.remove("labcare_alert_custom");
+  store.remove("labcare_alert_custom_name");
+  store.set("labcare_alert_preset", id);
+  _alertAudio = null; _alertAudioUrl = "";
+  try { playAlertSound(); } catch (e) {}
+  openAlertSheet();
+}
+
+function onAlertCustomPicked(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (!/^audio\//.test(file.type) && !/\.(mp3|wav|ogg|m4a|aac|flac|opus|aiff)$/i.test(file.name)) {
+    toast("Please choose an audio file (mp3, wav, ogg, m4a…)", "error");
+    return;
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    toast("File too large — keep it under 2 MB", "error");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      store.set("labcare_alert_custom", reader.result);
+      store.set("labcare_alert_custom_name", file.name);
+      _alertAudio = null; _alertAudioUrl = "";
+      toast("Your sound file is set", "success");
+      try { playAlertSound(); } catch (e) {}
+      openAlertSheet();
+    } catch (e) {
+      // (data URLs can exceed localStorage quota for huge files)
+      toast("Couldn't save this file — try a smaller one", "error");
+    }
+  };
+  reader.onerror = () => toast("Couldn't read that file", "error");
+  reader.readAsDataURL(file);
+}
+
+function clearAlertCustom() {
+  store.remove("labcare_alert_custom");
+  store.remove("labcare_alert_custom_name");
+  _alertAudio = null; _alertAudioUrl = "";
+  toast("Custom sound removed", "success");
+}
+
+function alertPreviewCustom() {
+  const src = _customSoundSrc();
+  if (!src) return;
+  try {
+    const a = new Audio(src);
+    a.play().catch(() => {});
+  } catch (e) {}
 }
 
 async function openNotifications() {
@@ -3133,6 +3289,7 @@ Object.assign(window, {
   openUserEditor, saveUser, deleteUser, toggleCustomerSelect, logout,
   renderCareList, addCareCustomer, removeCareCustomer,
   viewOnboarding, reviewJoin, toggleAlertSound, playAlertSound,
+  openAlertSheet, pickAlertPreset, onAlertCustomPicked, clearAlertCustom, alertPreviewCustom,
   uploadPhotos, viewPhoto, deleteAttachment, downloadReport, openExportSheet,
   openNotifications, openNotif, markAllRead,
   setPMFilter, openPMEditor, savePM, deletePM, openPMComplete, confirmPMComplete,
