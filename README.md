@@ -85,6 +85,9 @@ Full step-by-step: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 
 ## Demo accounts
 
+> These are for the built-in demo of the app. The login screen intentionally
+> does **not** show them — they're documented here so a fresh setup can sign in.
+
 Password for all demo accounts is **`Demo123!`**
 
 | Role       | Email               |

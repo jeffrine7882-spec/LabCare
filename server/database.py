@@ -114,6 +114,8 @@ CREATE TABLE IF NOT EXISTS complaints (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     resolved_at TEXT,
+    reporter_name TEXT DEFAULT '',
+    reporter_phone TEXT DEFAULT '',
     FOREIGN KEY(customer_id) REFERENCES customers(id),
     FOREIGN KEY(equipment_id) REFERENCES equipment(id),
     FOREIGN KEY(location_id) REFERENCES locations(id),
@@ -273,6 +275,12 @@ def _migrate(c):
     user_cols = [r["name"] for r in c.execute("PRAGMA table_info(users)")]
     if "pending" not in user_cols:
         c.execute("ALTER TABLE users ADD COLUMN pending INTEGER DEFAULT 0")
+
+    complaint_cols = [r["name"] for r in c.execute("PRAGMA table_info(complaints)")]
+    if "reporter_name" not in complaint_cols:
+        c.execute("ALTER TABLE complaints ADD COLUMN reporter_name TEXT DEFAULT ''")
+    if "reporter_phone" not in complaint_cols:
+        c.execute("ALTER TABLE complaints ADD COLUMN reporter_phone TEXT DEFAULT ''")
 
 
 def hash_password(pw):

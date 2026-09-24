@@ -158,6 +158,9 @@ def complaint_payload(c, row):
     d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq else None
     d["created_by_name"] = creator["name"] if creator else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
+    # portal submissions record who actually reported the issue
+    d["reporter_name"] = d.get("reporter_name") or ""
+    d["reporter_phone"] = d.get("reporter_phone") or ""
     return d
 
 
@@ -2598,6 +2601,14 @@ def portal_submit_complaint(token):
     if not subject:
         c.close()
         return jsonify({"error": "Subject is required"}), 400
+    reporter_name = (body.get("name") or "").strip()
+    reporter_phone = (body.get("phone") or "").strip()
+    if not reporter_name:
+        c.close()
+        return jsonify({"error": "Your name is required"}), 400
+    if not reporter_phone:
+        c.close()
+        return jsonify({"error": "Your phone number is required"}), 400
     # find a customer-role user to act as created_by (fallback: any active customer user, then system)
     creator = c.execute(
         "SELECT id FROM users WHERE role='customer' AND customer_id=? AND active=1 LIMIT 1",
@@ -2609,11 +2620,11 @@ def portal_submit_complaint(token):
     eq_cust, eq_loc, eq_dept = equipment_scope(c, equip_id)
     code_ = next_code_for("complaints", "CMP")
     cur = c.execute(
-        "INSERT INTO complaints (code,customer_id,equipment_id,location_id,department_id,subject,description,category,priority,status,created_by,assigned_to,created_at,updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO complaints (code,customer_id,equipment_id,location_id,department_id,subject,description,category,priority,status,created_by,assigned_to,created_at,updated_at,reporter_name,reporter_phone) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (code_, row["customer_id"], equip_id, eq_loc, eq_dept, subject, body.get("description", ""),
          body.get("category", "General"), body.get("priority", "medium"), "open",
-         created_by, None, now(), now()),
+         created_by, None, now(), now(), reporter_name, reporter_phone),
     )
     c.commit()
     newrow = c.execute("SELECT * FROM complaints WHERE id=?", (cur.lastrowid,)).fetchone()

@@ -589,7 +589,8 @@ function complaintDetailHtml(c) {
       <div class="kv"><span class="k">Category</span><span class="v">${esc(c.category || "General")}</span></div>
       <div class="kv"><span class="k">Location</span><span class="v">${esc(c.location_name || "—")}</span></div>
       <div class="kv"><span class="k">Department</span><span class="v">${esc(c.department_name || "—")}</span></div>
-      <div class="kv"><span class="k">Reported by</span><span class="v">${esc(c.created_by_name || "—")}</span></div>
+      <div class="kv"><span class="k">Reported by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
+      ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v">${esc(c.reporter_phone)}</span></div>` : ""}
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
       <div class="kv"><span class="k">Created</span><span class="v">${fmtDate(c.created_at)}</span></div>
       ${c.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(c.resolved_at)}</span></div>` : ""}
@@ -1770,6 +1771,23 @@ async function openEquipmentEditor(edit) {
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit equipment" : "Add equipment"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
+      ${isTech() ? `
+      <div class="section-label">Customer</div>
+      <label class="field"><span>Customer *</span>
+        <select id="eqCustomer" onchange="onCustPick('eqCustomer')">
+          ${(state.customers || []).map((x) => `<option value="${x.id}" ${e && e.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select></label>
+      <div class="section-label">Location</div>
+      <label class="field"><span>Location *</span>
+        <select id="eqLocation" onchange="onLocPick('eqLocation')">
+          ${locOpts(state.locations || [], e && e.location_id, e && e.customer_id)}
+        </select></label>
+      <div class="section-label">Department</div>
+      <label class="field"><span>Department *</span>
+        <select id="eqDepartment">
+          ${deptOpts(state.departments || [], e && e.department_id, e && e.location_id)}
+        </select></label>` : ""}
+      <div class="section-label">Equipment details</div>
       <label class="field"><span>Equipment name *</span><input id="eqName" value="${esc(e ? e.name : "")}" placeholder="e.g. HPLC System"></label>
       <label class="field"><span>Model</span><input id="eqModel" value="${esc(e ? e.model : "")}" placeholder="e.g. Agilent 1260"></label>
       <label class="field"><span>Serial number</span><input id="eqSerial" value="${esc(e ? e.serial_number : "")}" placeholder="S/N"></label>
@@ -1780,19 +1798,6 @@ async function openEquipmentEditor(edit) {
           <option value="__custom__">＋ New category…</option>
         </select></label>
       <label class="field" id="eqCategoryCustomWrap" style="display:none"><span>New category name</span><input id="eqCategoryCustom" placeholder="Type a new category"></label>
-      ${isTech() ? `
-      <label class="field"><span>Customer *</span>
-        <select id="eqCustomer" onchange="onCustPick('eqCustomer')">
-          ${(state.customers || []).map((x) => `<option value="${x.id}" ${e && e.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
-        </select></label>
-      <label class="field"><span>Location *</span>
-        <select id="eqLocation" onchange="onLocPick('eqLocation')">
-          ${locOpts(state.locations || [], e && e.location_id, e && e.customer_id)}
-        </select></label>
-      <label class="field"><span>Department *</span>
-        <select id="eqDepartment">
-          ${deptOpts(state.departments || [], e && e.department_id, e && e.location_id)}
-        </select></label>` : ""}
       <label class="field"><span>Warranty expiry</span><input id="eqWarranty" type="date" value="${e && e.warranty_expiry ? e.warranty_expiry.slice(0, 10) : ""}"></label>
       <label class="field"><span>Notes</span><textarea id="eqNotes">${esc(e ? e.notes : "")}</textarea></label>
     </div>

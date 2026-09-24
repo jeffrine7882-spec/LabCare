@@ -150,6 +150,10 @@
         <div class="section-title">New complaint</div>
         <form id="repForm" class="card">
           <div id="formError" class="form-error hidden"></div>
+          <label class="field"><span>Your name *</span>
+            <input id="fName" placeholder="e.g. Aisyah Rahman" required></label>
+          <label class="field"><span>Your phone number *</span>
+            <input id="fPhone" type="tel" placeholder="e.g. 012-345 6789" required></label>
           <label class="field"><span>What's the problem? *</span>
             <input id="fSubject" placeholder="e.g. Centrifuge making loud noise" required></label>
           <label class="field"><span>Details</span>
@@ -207,7 +211,11 @@
       e.preventDefault();
       const err = $("#formError");
       err.classList.add("hidden");
+      const name = $("#fName").value.trim();
+      const phone = $("#fPhone").value.trim();
       const subject = $("#fSubject").value.trim();
+      if (!name) { err.textContent = "Please enter your name."; err.classList.remove("hidden"); $("#fName").focus(); return; }
+      if (!phone) { err.textContent = "Please enter your phone number."; err.classList.remove("hidden"); $("#fPhone").focus(); return; }
       if (!subject) { err.textContent = "Please describe the problem."; err.classList.remove("hidden"); return; }
       const btn = $("#submitBtn");
       btn.disabled = true; btn.textContent = "Sending…";
@@ -215,6 +223,8 @@
         const c = await api("/api/portal/" + token + "/complaints", {
           method: "POST",
           body: {
+            name,
+            phone,
             subject,
             description: $("#fDesc").value.trim(),
             priority: $("#fPriority").value,
