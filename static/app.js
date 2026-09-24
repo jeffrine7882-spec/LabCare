@@ -114,6 +114,9 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
 ));
 
+// Normalize a phone number into a dial-able tel: href (keep digits + leading +).
+const telHref = (s) => "tel:" + String(s == null ? "" : s).replace(/[^\d+]/g, "");
+
 const ROLE_LABELS = { admin: "Admin", technician: "Technician", customer: "Customer" };
 const roleChip = (role) => `<span class="chip chip-${role === "admin" ? "admin" : role === "technician" ? "tech" : "cust"}">${ROLE_LABELS[role] || role}</span>`;
 
@@ -590,7 +593,7 @@ function complaintDetailHtml(c) {
       <div class="kv"><span class="k">Location</span><span class="v">${esc(c.location_name || "—")}</span></div>
       <div class="kv"><span class="k">Department</span><span class="v">${esc(c.department_name || "—")}</span></div>
       <div class="kv"><span class="k">Reported by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
-      ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v">${esc(c.reporter_phone)}</span></div>` : ""}
+      ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v"><a class="tel-link" href="${telHref(c.reporter_phone)}">${esc(c.reporter_phone)}</a></span></div>` : ""}
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
       <div class="kv"><span class="k">Created</span><span class="v">${fmtDate(c.created_at)}</span></div>
       ${c.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(c.resolved_at)}</span></div>` : ""}
