@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QR Portal page — LabCare (visual sample)</title>
+<style>
+  body {
+    margin: 0; padding: 0;
+    background: #e8ecf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #0f172a; line-height: 1.45;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; padding: 28px 16px 60px;
+  }
+  .page-cap {
+    text-align: center; max-width: 460px; margin-bottom: 18px;
+    font-size: 13.5px; color: #475569;
+  }
+  .page-cap h1 { font-size: 20px; margin: 0 0 6px; color: #0f172a; }
+  .page-cap code {
+    background: #ccfbf1; color: #0f766e; border-radius: 8px; padding: 2px 8px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+  }
+
+  /* ---- the phone ---- */
+  .phone {
+    width: 380px; max-width: 100%;
+    background: #0f172a; border-radius: 44px; padding: 12px;
+    box-shadow: 0 30px 60px rgba(15,23,42,.35);
+  }
+  .screen {
+    background: #f3f5f9; border-radius: 34px; overflow: hidden;
+    height: 760px; overflow-y: auto;
+  }
+  .notch {
+    height: 26px; background: transparent; position: relative;
+  }
+  .notch::after {
+    content: ""; position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
+    width: 120px; height: 22px; background: #0f172a; border-radius: 0 0 18px 18px;
+  }
+
+  /* ---- portal styles (copied verbatim from static/portal.html) ---- */
+  :root {
+    --bg: #f3f5f9; --card: #fff; --ink: #0f172a; --soft: #64748b; --line: #e2e8f0;
+    --brand: #0f766e; --brand2: #14b8a6; --brand-soft: #ccfbf1; --danger: #dc2626;
+    --danger-soft: #fee2e2; --ok: #16a34a; --ok-soft: #dcfce7; --info: #2563eb; --info-soft: #dbeafe;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 16px 16px 40px; }
+  .hero {
+    background: linear-gradient(135deg, #0f766e, #0d9488); color: #fff;
+    border-radius: 18px; padding: 22px 20px; box-shadow: 0 12px 32px rgba(15,118,110,.28);
+  }
+  .hero .brand { font-size: 12px; font-weight: 700; letter-spacing: .6px; opacity: .9; }
+  .hero h1 { font-size: 21px; font-weight: 800; margin-top: 6px; margin-bottom: 0; }
+  .hero .meta { margin-top: 10px; font-size: 13px; opacity: .95; }
+  .hero .tag {
+    display: inline-block; background: rgba(255,255,255,.18); border-radius: 999px;
+    padding: 4px 11px; font-size: 11.5px; font-weight: 700; margin-top: 8px;
+  }
+  .section-title { font-size: 13px; font-weight: 800; color: var(--soft); text-transform: uppercase; letter-spacing: .6px; margin: 20px 2px 8px; }
+  .card { background: var(--card); border-radius: 14px; box-shadow: 0 1px 3px rgba(15,23,42,.07), 0 6px 22px rgba(15,23,42,.05); padding: 16px; }
+  .field { display: block; margin-bottom: 13px; }
+  .field > span { display: block; font-size: 12.5px; font-weight: 700; color: var(--soft); margin-bottom: 6px; }
+  .fi {
+    width: 100%; padding: 12px 13px; border: 1.5px solid var(--line); border-radius: 12px;
+    background: #fbfcfe; font-size: 15px; box-sizing: border-box;
+  }
+  .fi.placeholder { color: #9aa7b8; }
+  .fi.filled { color: #0f172a; }
+  .fi:focus { border-color: var(--brand2); }
+  .fi textarea-like { }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 13px 18px; border-radius: 12px; border: none; cursor: pointer;
+    font-weight: 700; font-size: 15px; width: 100%; box-sizing: border-box;
+  }
+  .btn-primary { background: linear-gradient(135deg, var(--brand2), var(--brand)); color: #fff; }
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+  .b-open { background: var(--danger-soft); color: var(--danger); }
+  .b-in_progress { background: var(--info-soft); color: var(--info); }
+  .b-high { background: #ffedd5; color: #c2410c; }
+  .b-critical { background: var(--danger-soft); color: var(--danger); }
+  .ticket { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-bottom: 1px dashed var(--line); }
+  .ticket:last-child { border-bottom: none; }
+  .ticket .t-title { font-weight: 700; font-size: 14px; }
+  .ticket .t-sub { color: var(--soft); font-size: 12px; }
+  .ticket .t-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .accept-box { background: var(--ok-soft); color: #166534; border-radius: 10px; padding: 9px 12px; margin-top: 8px; font-size: 13px; }
+  .accept-reply { margin-top: 5px; color: #14532d; font-style: italic; }
+  footer { text-align: center; color: var(--soft); font-size: 11.5px; margin-top: 26px; }
+  .tel-link { color: #2563eb; text-decoration: none; }
+</style>
+</head>
+<body>
+
+  <div class="page-cap">
+    <h1>📱 QR Portal — exactly what a customer sees</h1>
+    <p>This is the page that opens when someone scans the QR sticker on a piece of equipment.
+    No username or password. URL: <code>…/portal.html?t=brf-freezer</code></p>
+  </div>
+
+  <div class="phone">
+    <div class="screen">
+      <div class="notch"></div>
+
+      <div class="wrap">
+
+        <!-- hero -->
+        <div class="hero">
+          <div class="brand">🔬 LABCARE SERVICE PORTAL</div>
+          <h1>Report an equipment issue</h1>
+          <div class="meta">BioReference Labs</div>
+          <div class="tag">⚙ Ultra-Low Freezer — S/N FRZ-8890</div>
+        </div>
+
+        <!-- new complaint form -->
+        <div class="section-title">New complaint</div>
+        <form class="card">
+          <label class="field"><span>Full name *</span>
+            <input class="fi filled" value="Aisyah Rahman" readonly></label>
+          <label class="field"><span>Phone number *</span>
+            <input class="fi filled" type="tel" value="012-345 6789" readonly></label>
+          <label class="field"><span>What's the problem? *</span>
+            <input class="fi filled" value="Freezer alarm beeping continuously" readonly></label>
+          <label class="field"><span>Details</span>
+            <div class="fi placeholder" style="min-height:44px">Started this morning; display shows E5 and temperature rising.</div></label>
+          <label class="field"><span>How urgent?</span>
+            <div class="fi filled">High — affecting work ▾</div></label>
+          <button type="button" class="btn btn-primary">Send report</button>
+        </form>
+
+        <!-- open reports -->
+        <div class="section-title">Open reports</div>
+        <div class="card">
+          <div class="ticket">
+            <div class="t-title">Freezer alarm beeping continuously</div>
+            <div class="t-sub">CMP-0002 · 2026-09-23 09:14</div>
+            <div class="t-meta">
+              <span class="badge b-in_progress">In Progress</span>
+              <span class="badge b-high">High</span>
+            </div>
+            <div class="accept-box">
+              <b>✔ Accepted by Aidil Rahman</b>
+              <div class="accept-reply">"On my way now — please keep the door closed until I arrive."</div>
+            </div>
+          </div>
+          <div class="ticket">
+            <div class="t-title">Door seal not closing tightly</div>
+            <div class="t-sub">CMP-0004 · 2026-09-22 16:40</div>
+            <div class="t-meta">
+              <span class="badge b-open">Open</span>
+              <span class="badge b-high">Critical</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- recent activity -->
+        <div class="section-title">Recent activity</div>
+        <div class="card">
+          <div class="ticket">
+            <div class="t-title">Temperature sensor E5 error</div>
+            <div class="t-sub">CMP-0001 · 2026-09-19 11:02</div>
+            <div class="t-meta">
+              <span class="badge b-in_progress">In Progress</span>
+            </div>
+          </div>
+          <div class="ticket">
+            <div class="t-title">Compressor too noisy</div>
+            <div class="t-sub">CMP-0003 · 2026-09-15 08:27</div>
+            <div class="t-meta">
+              <span class="badge b-open">Open</span>
+            </div>
+          </div>
+        </div>
+
+        <footer>Powered by 🔬 LabCare</footer>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-cap" style="margin-top:22px">
+    <p><b>No login screen exists on purpose.</b> The token in the QR (<code>brf-freezer</code>)
+    locks the form to that customer + equipment, so the reporter never chooses an organisation
+    and cannot file against someone else's asset. The reporter's name &amp; phone are required,
+    and the phone number arrives in the admin app as a tap-to-call link
+    (e.g. <a class="tel-link" href="tel:+60123456789">012-345 6789</a>).</p>
+  </div>
+
+</body>
+</html>

@@ -117,6 +117,19 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
 // Normalize a phone number into a dial-able tel: href (keep digits + leading +).
 const telHref = (s) => "tel:" + String(s == null ? "" : s).replace(/[^\d+]/g, "");
 
+// Build a WhatsApp click-to-chat link. Reporters often type a local number like
+// "012-345 6789"; WhatsApp needs the full international form (60123456789).
+// Default country code is Malaysia (+60): drop a leading 0 and prepend 60.
+// Numbers that already carry a "+" or a longer country code are left untouched.
+const waNumber = (s) => {
+  let d = String(s == null ? "" : s).replace(/[^\d+]/g, ""); // keep digits + leading +
+  if (!d) return "";
+  if (d.startsWith("+")) return d.slice(1);                // +6012… -> 6012…
+  if (d.length >= 9 && d.length <= 11 && d.startsWith("0")) d = "60" + d.slice(1); // 0112… / 012… -> 6011… / 6012…
+  return d;
+};
+const waChatHref = (s) => { const n = waNumber(s); return n ? "https://wa.me/" + n : ""; };
+
 const ROLE_LABELS = { admin: "Admin", technician: "Technician", customer: "Customer" };
 const roleChip = (role) => `<span class="chip chip-${role === "admin" ? "admin" : role === "technician" ? "tech" : "cust"}">${ROLE_LABELS[role] || role}</span>`;
 // a user's human-readable role (distinguishes Master admin from Tenant admin)
@@ -615,7 +628,7 @@ function complaintDetailHtml(c) {
       <div class="kv"><span class="k">Location</span><span class="v">${esc(c.location_name || "—")}</span></div>
       <div class="kv"><span class="k">Department</span><span class="v">${esc(c.department_name || "—")}</span></div>
       <div class="kv"><span class="k">Opened by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
-      ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v"><a class="tel-link" href="${telHref(c.reporter_phone)}">${esc(c.reporter_phone)}</a></span></div>` : ""}
+      ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v phone-actions"><a class="wa-link" href="${waChatHref(c.reporter_phone)}" target="_blank" rel="noopener">💬 WhatsApp ${esc(c.reporter_phone)}</a><a class="tel-link" href="${telHref(c.reporter_phone)}">📞</a></span></div>` : ""}
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
       ${c.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${esc(c.accepted_by_name)}${c.accepted_at ? " · " + fmtDate(c.accepted_at) : ""}</span></div>` : ""}
       ${c.accept_reply ? `<div class="kv"><span class="k">Reply to sender</span><span class="v">“${esc(c.accept_reply)}”</span></div>` : ""}
