@@ -22,9 +22,15 @@ let email = "";
 let pollTimer = null;
 let lastNotifId = null;
 let enabled = true;
+let sound = "chime"; // chime | bell | beep | alarm
 
 const prefsPath = path.join(app.getPath("userData"), "config.json");
-const chimePath = path.join(__dirname, "assets", "chime.wav");
+const SOUNDS = {
+  chime: path.join(__dirname, "assets", "chime.wav"),
+  bell: path.join(__dirname, "assets", "bell.wav"),
+  beep: path.join(__dirname, "assets", "beep.wav"),
+  alarm: path.join(__dirname, "assets", "alarm.wav"),
+};
 
 function loadPrefs() {
   try {
@@ -32,13 +38,14 @@ function loadPrefs() {
     token = d.token || "";
     email = d.email || "";
     enabled = d.enabled !== false;
+    sound = SOUNDS[d.sound] ? d.sound : "chime";
     lastNotifId = d.lastNotifId ?? null;
   } catch (e) {}
 }
 
 function savePrefs() {
   try {
-    fs.writeFileSync(prefsPath, JSON.stringify({ token, email, enabled, lastNotifId }));
+    fs.writeFileSync(prefsPath, JSON.stringify({ token, email, enabled, sound, lastNotifId }));
   } catch (e) {}
 }
 
@@ -173,16 +180,21 @@ async function ring(text) {
     n.on("click", () => { openWebApp(); });
     n.show();
   }
-  // 2. Also play our custom chime for a reliable audible ring
-  try {
-    const { exec } = require("child_process");
-    const player = process.platform === "win32"
-      ? `powershell -c (New-Object Media.SoundPlayer '${chimePath}').PlaySync()`
-      : `aplay "${chimePath}"`;
-    exec(player);
-  } catch (e) {}
+  // 2. Play the user's chosen sound for a reliable audible ring
+  playSound(sound);
   // 3. flash tray / update menu badge text
   tray.setToolTip("LabCare — new alert");
+}
+
+function playSound(soundId) {
+  try {
+    const file = SOUNDS[soundId] || SOUNDS.chime;
+    const { exec } = require("child_process");
+    const player = process.platform === "win32"
+      ? `powershell -c (New-Object Media.SoundPlayer '${file}').PlaySync()`
+      : `aplay "${file}"`;
+    exec(player);
+  } catch (e) {}
 }
 
 function openWebApp() {
@@ -223,3 +235,51 @@ ipcMain.handle("auth:signOut", () => {
 });
 
 ipcMain.handle("auth:state", () => ({ signedIn: !!token, email }));
+
+// ---- in-app notifications + sound ------------------------------------------
+ipcMain.handle("notif:list", async () => {
+  if (!token) return { ok: false, error: "Not signed in" };
+  try {
+    const res = await fetch(API_BASE + "/api/notifications", {
+      headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data.error || "Failed" };
+    return { ok: true, items: data.map((n) => ({
+      id: n.id,
+      text: n.text,
+      entity_type: n.entity_type || "",
+      entity_id: n.entity_id || 0,
+      read: !!n.read,
+      created_at: n.created_at || "",
+    })) };
+  } catch (e) {
+    return { ok: false, error: "Cannot reach the LabCare server." };
+  }
+});
+
+ipcMain.handle("notif:markRead", async (evt, id) => {
+  if (!token) return { ok: false };
+  try {
+    await fetch(API_BASE + "/api/notifications/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify(id ? { id } : {}),
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle("sound:get", () => sound);
+
+ipcMain.handle("sound:set", (evt, id) => {
+  if (SOUNDS[id]) { sound = id; savePrefs(); }
+  return sound;
+});
+
+ipcMain.handle("sound:test", (evt, id) => {
+  playSound(id || sound);
+  return true;
+});

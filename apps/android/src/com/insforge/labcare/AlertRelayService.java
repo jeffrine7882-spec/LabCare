@@ -103,9 +103,9 @@ public class AlertRelayService extends Service {
     private void ring(String text) {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
 
-        // play our bundled chime (falls back to the default notification sound)
+        // play the user's chosen sound (from the in-app picker)
         android.media.MediaPlayer mp = android.media.MediaPlayer.create(
-                this, R.raw.chime, new AudioAttributes.Builder()
+                this, soundResId(), new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_NOTIFICATION)
                         .build(), 1);
         try {
@@ -139,6 +139,17 @@ public class AlertRelayService extends Service {
         nm.notify((int) (System.currentTimeMillis() % Integer.MAX_VALUE), n);
     }
 
+    private int soundResId() {
+        int r = prefs.getInt("sound_res", 0);
+        if (r != 0) return r;
+        switch (prefs.getString("sound", "chime")) {
+            case "bell": return R.raw.bell;
+            case "beep": return R.raw.beep;
+            case "alarm": return R.raw.alarm;
+            default: return R.raw.chime;
+        }
+    }
+
     private void createChannel() {
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             NotificationChannel ch = new NotificationChannel(
@@ -150,14 +161,7 @@ public class AlertRelayService extends Service {
     }
 
     private String httpGet(String path, String token) throws Exception {
-        java.net.URL url = new java.net.URL("https://labcare.insforge.site" + path);
-        java.net.HttpURLConnection c = (java.net.HttpURLConnection) url.openConnection();
-        c.setRequestMethod("GET");
-        c.setConnectTimeout(10000);
-        c.setReadTimeout(20000);
-        c.setRequestProperty("Accept", "application/json");
-        c.setRequestProperty("Authorization", "Bearer " + token);
-        return MainActivity.readStream(c);
+        return Api.get(path, token);
     }
 
     @Override
