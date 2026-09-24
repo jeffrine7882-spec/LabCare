@@ -69,6 +69,8 @@
     .toast.error { background: var(--danger); }
     .empty { text-align: center; padding: 26px 10px; color: var(--soft); }
     .eq-chip { display: flex; align-items: center; gap: 10px; background: var(--brand-soft); color: var(--brand); border-radius: 12px; padding: 10px 12px; font-weight: 700; font-size: 13.5px; }
+    .accept-box { background: var(--ok-soft); color: #166534; border-radius: 10px; padding: 9px 12px; margin-top: 8px; font-size: 13px; }
+    .accept-reply { margin-top: 5px; color: #14532d; font-style: italic; }
     .hidden { display: none !important; }
     footer { text-align: center; color: var(--soft); font-size: 11.5px; margin-top: 26px; }
   </style>
@@ -186,6 +188,11 @@
           <div class="t-title">${esc(t.subject)}</div>
           <div class="t-sub">${esc(t.code)} · ${esc(t.created_at || "")}</div>
           <div class="t-meta">${badge(STATUS, t.status)} ${badge(PRIO, t.priority)}</div>
+          ${t.accepted_by || t.accepted_by_name ? `
+            <div class="accept-box">
+              <b>✔ Accepted by ${esc(t.accepted_by_name || "")}</b>
+              ${t.accept_reply ? `<div class="accept-reply">“${esc(t.accept_reply)}”</div>` : ""}
+            </div>` : ""}
         </div>`).join("");
     }
 
@@ -197,6 +204,11 @@
           <div class="t-title">${esc(t.subject)}</div>
           <div class="t-sub">${esc(t.code)} · ${esc(t.created_at || "")}</div>
           <div class="t-meta">${badge(STATUS, t.status)} ${badge(PRIO, t.priority)}</div>
+          ${t.accepted_by || t.accepted_by_name ? `
+            <div class="accept-box">
+              <b>✔ Accepted by ${esc(t.accepted_by_name || "")}</b>
+              ${t.accept_reply ? `<div class="accept-reply">“${esc(t.accept_reply)}”</div>` : ""}
+            </div>` : ""}
         </div>`).join("");
     }
 

@@ -126,6 +126,9 @@ CREATE TABLE IF NOT EXISTS complaints (
     resolved_at TEXT,
     reporter_name TEXT DEFAULT '',
     reporter_phone TEXT DEFAULT '',
+    accepted_by INTEGER,
+    accepted_at TEXT,
+    accept_reply TEXT DEFAULT '',
     FOREIGN KEY(customer_id) REFERENCES customers(id),
     FOREIGN KEY(equipment_id) REFERENCES equipment(id),
     FOREIGN KEY(location_id) REFERENCES locations(id),
@@ -292,6 +295,13 @@ def _migrate(c):
         c.execute("ALTER TABLE complaints ADD COLUMN reporter_name TEXT DEFAULT ''")
     if "reporter_phone" not in complaint_cols:
         c.execute("ALTER TABLE complaints ADD COLUMN reporter_phone TEXT DEFAULT ''")
+    # Acceptance — who accepted a complaint and the reply shown to the reporter.
+    if "accepted_by" not in complaint_cols:
+        c.execute("ALTER TABLE complaints ADD COLUMN accepted_by INTEGER")
+    if "accepted_at" not in complaint_cols:
+        c.execute("ALTER TABLE complaints ADD COLUMN accepted_at TEXT")
+    if "accept_reply" not in complaint_cols:
+        c.execute("ALTER TABLE complaints ADD COLUMN accept_reply TEXT DEFAULT ''")
 
     # Multi-tenant: an explicit "responsible tenant admin" for each record so the
     # master (or tenant admins) can see who cares for it. References users.id; the

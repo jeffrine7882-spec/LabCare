@@ -409,6 +409,8 @@ def complaint_payload(c, row):
     d["responsible_admin_name"] = _responsible_admin_name(c, d.get("responsible_admin_id"))
     closer = c.execute("SELECT name FROM users WHERE id=?", (d["closed_by"],)).fetchone() if d.get("closed_by") else None
     d["closed_by_name"] = closer["name"] if closer else None
+    acceptor = c.execute("SELECT name FROM users WHERE id=?", (d["accepted_by"],)).fetchone() if d.get("accepted_by") else None
+    d["accepted_by_name"] = acceptor["name"] if acceptor else None
     return d
 
 
@@ -1704,6 +1706,54 @@ def get_complaint(cid):
         "WHERE cm.entity_type='complaint' AND cm.entity_id=? ORDER BY cm.created_at", (cid,)).fetchall()
     out["comments"] = rows_to_dicts(comments)
     c.close()
+    return jsonify(out)
+
+
+@app.post("/api/complaints/<int:cid>/accept")
+def accept_complaint(cid):
+    """A technician/admin accepts a complaint on the sender's behalf.
+
+    Records WHO accepted (always visible on the ticket and in the portal), sets
+    an optional reply for the sender, and ensures the ticket is assigned to the
+    acceptor when it wasn't assigned yet. Notifies the sender via the portal and
+    the team via in-app notifications."""
+    u, err, code = require_role("admin", "technician")
+    if err:
+        return err, code
+    b = get_body()
+    reply = (b.get("reply") or "").strip()
+    c = conn()
+    row = c.execute("SELECT * FROM complaints WHERE id=?", (cid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"], c):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
+    if row["status"] in ("resolved", "closed"):
+        c.close()
+        return jsonify({"error": "A resolved or closed complaint cannot be accepted"}), 409
+    # the acceptor becomes the assignee if nobody else was assigned yet
+    assigned = b.get("assigned_to") or row["assigned_to"] or u["id"]
+    if not assignee_allowed(u, assigned, c):
+        c.close()
+        return jsonify({"error": "You can only assign to your own team"}), 403
+    c.execute(
+        "UPDATE complaints SET accepted_by=?, accepted_at=?, accept_reply=?, assigned_to=?, updated_at=? WHERE id=?",
+        (u["id"], now(), reply, assigned, now(), cid),
+    )
+    c.commit()
+    row = c.execute("SELECT * FROM complaints WHERE id=?", (cid,)).fetchone()
+    out = complaint_payload(c, row)
+    c.close()
+
+    audit("complaint", cid, u, "accepted",
+          f"Accepted by {u['name']}" + (f" — reply sent to reporter" if reply else ""))
+    # everyone following the ticket (reporter + team) hears that it was accepted
+    # and by whom; the reply itself is visible to the sender in the QR portal.
+    ping_followers("complaint", u["id"], out,
+                   f"Complaint {out['code']} accepted by {u['name']}: {out['subject']}",
+                   None)
     return jsonify(out)
 
 
@@ -3561,25 +3611,25 @@ def portal_info(token):
         c.close()
         return jsonify({"error": "Invalid or expired link"}), 404
     d = dict(row)
+    open_sql = ("SELECT c.id, c.code, c.subject, c.status, c.priority, c.created_at, "
+                "c.accepted_by, c.accepted_at, c.accept_reply, u.name AS accepted_by_name "
+                "FROM complaints c LEFT JOIN users u ON u.id=c.accepted_by "
+                "WHERE {col}=? AND c.status IN ('open','in_progress') "
+                "ORDER BY c.created_at DESC LIMIT 5")
     if d.get("equipment_id"):
         eq = c.execute("SELECT * FROM equipment WHERE id=?", (d["equipment_id"],)).fetchone()
         if eq:
             d["equipment"] = dict(eq)
             # include open tickets for context
-            open_cmp = c.execute(
-                "SELECT id, code, subject, status, priority, created_at FROM complaints "
-                "WHERE equipment_id=? AND status IN ('open','in_progress') ORDER BY created_at DESC LIMIT 5",
-                (d["equipment_id"],)).fetchall()
+            open_cmp = c.execute(open_sql.format(col="c.equipment_id"), (d["equipment_id"],)).fetchall()
             d["open_complaints"] = rows_to_dicts(open_cmp)
         else:
             d["equipment"] = None
             d["open_complaints"] = []
     else:
         d["equipment"] = None
-        d["open_complaints"] = rows_to_dicts(c.execute(
-            "SELECT id, code, subject, status, priority, created_at FROM complaints "
-            "WHERE customer_id=? AND status IN ('open','in_progress') ORDER BY created_at DESC LIMIT 5",
-            (d["customer_id"],)).fetchall())
+        d["open_complaints"] = rows_to_dicts(
+            c.execute(open_sql.format(col="c.customer_id"), (d["customer_id"],)).fetchall())
     c.close()
     d.pop("created_by", None)
     return jsonify(d)
@@ -3648,8 +3698,10 @@ def portal_history(token):
         c.close()
         return jsonify({"error": "Invalid or expired link"}), 404
     rows = c.execute(
-        "SELECT id, code, subject, status, priority, created_at, equipment_id FROM complaints "
-        "WHERE customer_id=? ORDER BY created_at DESC LIMIT 20", (row["customer_id"],)).fetchall()
+        "SELECT c.id, c.code, c.subject, c.status, c.priority, c.created_at, c.equipment_id, "
+        "c.accepted_by, c.accepted_at, c.accept_reply, u.name AS accepted_by_name "
+        "FROM complaints c LEFT JOIN users u ON u.id=c.accepted_by "
+        "WHERE c.customer_id=? ORDER BY c.created_at DESC LIMIT 20", (row["customer_id"],)).fetchall()
     c.close()
     return jsonify(rows_to_dicts(rows))
 

@@ -155,6 +155,7 @@ const AUDIT_META = {
   created: { t: "Opened ticket", ico: "➕" },
   assigned: { t: "Changed assignee", ico: "👤" },
   status: { t: "Changed status", ico: "🔁" },
+  accepted: { t: "Accepted", ico: "✔️" },
   resolution: { t: "Resolution", ico: "✅" },
   updated: { t: "Updated", ico: "✏️" },
   comment: { t: "Commented", ico: "💬" },
@@ -616,6 +617,8 @@ function complaintDetailHtml(c) {
       <div class="kv"><span class="k">Opened by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
       ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v"><a class="tel-link" href="${telHref(c.reporter_phone)}">${esc(c.reporter_phone)}</a></span></div>` : ""}
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
+      ${c.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${esc(c.accepted_by_name)}${c.accepted_at ? " · " + fmtDate(c.accepted_at) : ""}</span></div>` : ""}
+      ${c.accept_reply ? `<div class="kv"><span class="k">Reply to sender</span><span class="v">“${esc(c.accept_reply)}”</span></div>` : ""}
       ${c.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(c.responsible_admin_name)}</span></div>` : ""}
       ${c.closed_by_name ? `<div class="kv"><span class="k">${c.status === "closed" ? "Closed by" : "Resolved by"}</span><span class="v">${esc(c.closed_by_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Created</span><span class="v">${fmtDate(c.created_at)}</span></div>
@@ -692,6 +695,7 @@ function statusButtons(entity, rec) {
   const b = [];
   if (entity === "complaint") {
     if (isTech() && rec.status === "open") {
+      b.push(`<button class="btn btn-primary-2 btn-sm" onclick="openAcceptSheet(${rec.id})">✔ Accept</button>`);
       b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setComplaintStatus(${rec.id},'in_progress')">▶ Start work</button>`);
       b.push(`<button class="btn btn-ghost btn-sm" onclick="openAssignSheet('complaint',${rec.id})">👤 Assign</button>`);
     }
@@ -734,6 +738,38 @@ async function setComplaintStatus(id, status) {
   try {
     await API.patch("/api/complaints/" + id, { status });
     toast("Complaint updated", "success");
+    state.complaints = null;
+    await viewComplaintDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+function openAcceptSheet(id) {
+  const c = state.complaintDetail;
+  openSheet(`
+    <div class="sheet-head"><h3>Accept complaint</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <p style="font-size:14px;color:var(--ink-soft);margin:0 0 4px">
+        Accepting <b>${esc(c.code)}</b> tells the reporter (via the QR portal) that
+        <b>${esc(state.user?.name || "you")}</b> has taken it on and will show your reply
+        when they re-scan the QR code.
+      </p>
+      <label class="field" style="margin-top:12px"><span>Reply to the sender (optional — shown in the portal)</span>
+        <textarea id="acceptReply" placeholder="e.g. We have received your report and a technician will contact you today."></textarea></label>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="submitAccept(${id})">✔ Accept &amp; notify sender</button>
+    </div>`);
+}
+
+async function submitAccept(id) {
+  const reply = $("#acceptReply") ? $("#acceptReply").value.trim() : "";
+  closeSheet();
+  showLoading();
+  try {
+    await API.post("/api/complaints/" + id + "/accept", { reply });
+    toast("Complaint accepted — the sender has been notified", "success");
     state.complaints = null;
     await viewComplaintDetail($("#view"));
   } catch (e) { toast(e.message, "error"); }
@@ -3090,6 +3126,7 @@ Object.assign(window, {
   navigate, goBack, closeSheet, setComplaintFilter, setBreakdownFilter,
   goComplaints, goBreakdowns, goEquipment,
   setComplaintStatus, setBreakdownStatus, deleteTicket, openAssignSheet, assignTech, linkBreakdown,
+  openAcceptSheet, submitAccept,
   addComment, addBrokComment, openResolveSheet, confirmResolve,
   openComplaintEditor, saveComplaint, openBreakdownEditor, saveBreakdown,
   openEquipmentEditor, saveEquipment, deleteEquipment, openCustomerEditor, saveCustomer, deleteCustomer,
