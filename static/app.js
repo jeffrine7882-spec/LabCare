@@ -1086,7 +1086,7 @@ async function viewOrg(v, tab) {
     ? [["customers", "🏢 Customers"], ["locations", "📍 Locations"], ["departments", "🏥 Departments"]]
     : [["customers", "🏢 My organisation"]];
   const addBtn = t === "customers"
-    ? (isMaster() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
+    ? (isAdmin() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
     : t === "locations"
       ? (isTech() ? `<button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location</button>` : "")
       : (isTech() ? `<button class="btn btn-primary" onclick="openDepartmentEditor(false)">＋ Add department</button>` : "");
@@ -1178,7 +1178,7 @@ async function viewCustomerDetail(v) {
       ${eq.length ? `<div class="list">${eq.map(equipmentCard).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">No equipment registered.</p></div>`}
       <div class="section-title">Recent complaints (${cmp.length})</div>
       ${cmp.length ? `<div class="list">${cmp.slice(0, 3).map(complaintCard).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">None.</p></div>`}
-      ${isMaster() ? `<div class="action-panel" style="margin-top:14px"><button class="btn btn-ghost" onclick="openCustomerEditor(true)">✏️ Edit customer</button></div>` : ""}
+      ${isAdmin() ? `<div class="action-panel" style="margin-top:14px"><button class="btn btn-ghost" onclick="openCustomerEditor(true)">✏️ Edit customer</button></div>` : ""}
     `;
   } catch (e) {
     v.innerHTML = `<div class="empty"><h3>Could not load</h3><p>${esc(e.message)}</p></div>`;

@@ -930,7 +930,12 @@ def list_customers():
 
 @app.post("/api/customers")
 def create_customer():
-    u, err, code = require_master()
+    """Create a customer organisation.
+
+    The master may create any organisation. A tenant admin may also create one;
+    it is automatically added to that admin's care list so they can immediately
+    set up locations, equipment, users and tickets for it."""
+    u, err, code = require_role("admin")
     if err:
         return err, code
     b = get_body()
@@ -942,19 +947,32 @@ def create_customer():
         (b["name"].strip(), b.get("contact_name", ""), b.get("email", ""), b.get("phone", ""),
          b.get("address", ""), b.get("city", ""), now()),
     )
+    new_id = cur.lastrowid
+    # A tenant admin who creates an organisation automatically starts caring for
+    # it (the master already manages every customer).
+    if is_tenant_admin(u):
+        c.execute(
+            "INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
+            (u["id"], new_id, now()),
+        )
     c.commit()
-    row = c.execute("SELECT * FROM customers WHERE id=?", (cur.lastrowid,)).fetchone()
+    row = c.execute("SELECT * FROM customers WHERE id=?", (new_id,)).fetchone()
     c.close()
     return jsonify(dict(row)), 201
 
 
 @app.put("/api/customers/<int:cid>")
 def update_customer(cid):
-    u, err, code = require_master()
+    u, err, code = require_role("admin")
     if err:
         return err, code
     b = get_body()
     c = conn()
+    if not is_master_admin(u):
+        err_t, code_t = tenant_guard(u, cid, c)
+        if err_t:
+            c.close()
+            return err_t, code_t
     c.execute(
         "UPDATE customers SET name=?,contact_name=?,email=?,phone=?,address=?,city=? WHERE id=?",
         (b.get("name", ""), b.get("contact_name", ""), b.get("email", ""), b.get("phone", ""),
@@ -968,10 +986,18 @@ def update_customer(cid):
 
 @app.delete("/api/customers/<int:cid>")
 def delete_customer(cid):
-    u, err, code = require_master()
+    u, err, code = require_role("admin")
     if err:
         return err, code
     c = conn()
+    if not is_master_admin(u):
+        err_t, code_t = tenant_guard(u, cid, c)
+        if err_t:
+            c.close()
+            return err_t, code_t
+        if u.get("customer_id") == cid:
+            c.close()
+            return jsonify({"error": "You cannot delete your own primary organisation"}), 400
     n_equip = c.execute("SELECT COUNT(*) n FROM equipment WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_cmp = c.execute("SELECT COUNT(*) n FROM complaints WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_loc = c.execute("SELECT COUNT(*) n FROM locations WHERE customer_id=?", (cid,)).fetchone()["n"]
@@ -979,6 +1005,8 @@ def delete_customer(cid):
         c.close()
         return jsonify({"error": "Customer has linked locations, equipment or complaints; cannot delete."}), 409
     c.execute("DELETE FROM customers WHERE id=?", (cid,))
+    # drop any care-list links to the removed organisation
+    c.execute("DELETE FROM admin_customer_links WHERE customer_id=?", (cid,))
     c.commit()
     c.close()
     return jsonify({"ok": True})
