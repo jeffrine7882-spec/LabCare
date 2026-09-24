@@ -1006,10 +1006,13 @@ def delete_customer(cid):
             return jsonify({"error": "You cannot delete your own primary organisation"}), 400
     n_equip = c.execute("SELECT COUNT(*) n FROM equipment WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_cmp = c.execute("SELECT COUNT(*) n FROM complaints WHERE customer_id=?", (cid,)).fetchone()["n"]
+    n_brk = c.execute("SELECT COUNT(*) n FROM breakdowns WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_loc = c.execute("SELECT COUNT(*) n FROM locations WHERE customer_id=?", (cid,)).fetchone()["n"]
-    if n_equip or n_cmp or n_loc:
+    n_pm = c.execute("SELECT COUNT(*) n FROM pm_schedules WHERE customer_id=?", (cid,)).fetchone()["n"]
+    n_portal = c.execute("SELECT COUNT(*) n FROM portal_links WHERE customer_id=?", (cid,)).fetchone()["n"]
+    if n_equip or n_cmp or n_brk or n_loc or n_pm or n_portal:
         c.close()
-        return jsonify({"error": "Customer has linked locations, equipment or complaints; cannot delete."}), 409
+        return jsonify({"error": "Customer has linked locations, equipment, tickets, PM schedules or portal links; cannot delete."}), 409
     c.execute("DELETE FROM customers WHERE id=?", (cid,))
     # drop any care-list links to the removed organisation
     c.execute("DELETE FROM admin_customer_links WHERE customer_id=?", (cid,))
@@ -1135,9 +1138,11 @@ def delete_location(lid):
             return err_t, code_t
     n = c.execute("SELECT COUNT(*) n FROM departments WHERE location_id=?", (lid,)).fetchone()["n"]
     n2 = c.execute("SELECT COUNT(*) n FROM equipment WHERE location_id=?", (lid,)).fetchone()["n"]
-    if n or n2:
+    n3 = c.execute("SELECT COUNT(*) n FROM complaints WHERE location_id=?", (lid,)).fetchone()["n"]
+    n4 = c.execute("SELECT COUNT(*) n FROM breakdowns WHERE location_id=?", (lid,)).fetchone()["n"]
+    if n or n2 or n3 or n4:
         c.close()
-        return jsonify({"error": "Location has departments or equipment; cannot delete."}), 409
+        return jsonify({"error": "Location has departments, equipment or tickets; cannot delete."}), 409
     c.execute("DELETE FROM locations WHERE id=?", (lid,))
     c.commit()
     c.close()
@@ -1249,9 +1254,11 @@ def delete_department(did):
             c.close()
             return err_t, code_t
     n = c.execute("SELECT COUNT(*) n FROM equipment WHERE department_id=?", (did,)).fetchone()["n"]
-    if n:
+    n2 = c.execute("SELECT COUNT(*) n FROM complaints WHERE department_id=?", (did,)).fetchone()["n"]
+    n3 = c.execute("SELECT COUNT(*) n FROM breakdowns WHERE department_id=?", (did,)).fetchone()["n"]
+    if n or n2 or n3:
         c.close()
-        return jsonify({"error": "Department has equipment; cannot delete."}), 409
+        return jsonify({"error": "Department has equipment or tickets; cannot delete."}), 409
     c.execute("DELETE FROM departments WHERE id=?", (did,))
     c.commit()
     c.close()
@@ -1526,9 +1533,12 @@ def delete_equipment(eid):
         c.close()
         return err_t, code_t
     n = c.execute("SELECT COUNT(*) n FROM complaints WHERE equipment_id=?", (eid,)).fetchone()["n"]
-    if n:
+    n2 = c.execute("SELECT COUNT(*) n FROM breakdowns WHERE equipment_id=?", (eid,)).fetchone()["n"]
+    n3 = c.execute("SELECT COUNT(*) n FROM pm_schedules WHERE equipment_id=?", (eid,)).fetchone()["n"]
+    n4 = c.execute("SELECT COUNT(*) n FROM portal_links WHERE equipment_id=?", (eid,)).fetchone()["n"]
+    if n or n2 or n3 or n4:
         c.close()
-        return jsonify({"error": "Equipment is referenced by complaints; cannot delete."}), 409
+        return jsonify({"error": "Equipment is referenced by tickets, PM schedules or portal links; cannot delete."}), 409
     c.execute("DELETE FROM equipment WHERE id=?", (eid,))
     c.commit()
     c.close()
@@ -2703,6 +2713,7 @@ def delete_user(uid):
     # Clear the user's own sessions and notifications, then remove the account.
     c.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
     c.execute("DELETE FROM notifications WHERE user_id=?", (uid,))
+    c.execute("DELETE FROM notification_pings WHERE user_id=?", (uid,))
     c.execute("DELETE FROM users WHERE id=?", (uid,))
     c.commit()
     c.close()
