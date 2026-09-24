@@ -167,6 +167,14 @@ organisations** and **Admin → Team & users**.
 - **History / audit log**: every ticket records who did what and when.
 - **Attachments**: photos, PDF and Office documents (max 8 MB).
 - **Sound + email alerts** for new tickets and updates.
+- **Desktop push alerts**: every bell notification can also ring as a real
+  system notification via Web Push (service worker + VAPID), so users hear the
+  alert even when the app/tab/browser window is closed. Each signed-in user
+  opts in per device from **Menu → Alerts & sound → Push notifications**; the
+  subscription is stored against their account and respects the per-user sound
+  preference. The VAPID keypair lives in [`server/vapid.json`](server/vapid.json)
+  (override with `LABCARE_VAPID_PRIVATE`; the public key for clients is derived
+  from it). `pywebpush` sends one push per recipient whenever `notify()` runs.
 
 ## Data
 

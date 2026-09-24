@@ -3087,6 +3087,136 @@ function primeAudio() {
   } catch (e) { /* ignore */ }
 }
 
+// ---- Desktop push alerts (ring even when the app / tab is closed) ----
+// LabCare's bell can also ring as a real system notification via Web Push:
+// a service worker receives pushes from the backend and the OS/browser plays
+// its alert sound — even if the user has closed the tab, as long as the
+// browser is running and "Desktop alerts" is ON.
+//
+// The backend sends one push for every bell notification, so enabling this
+// here is all that's needed. Per-device: the subscription is stored against
+// the signed-in user and can be toggled independently in each browser.
+const PUSH_PREF = "labcare_push_alerts";
+
+function pushSupported() {
+  // Only secure origins can register service workers / push. Sandboxed
+  // previews and plain http:// hosts can't, so fail quietly there.
+  if (!("serviceWorker" in navigator)) return false;
+  if (!("PushManager" in window)) return false;
+  if (!("Notification" in window)) return false;
+  if (location.protocol !== "https:" && location.hostname !== "localhost") return false;
+  // An app sandboxed in an opaque-origin iframe can't register a worker.
+  try { if (window.frameElement) return false; } catch (e) { return false; }
+  return true;
+}
+
+let _swReg = null;
+function swReady() {
+  if (_swReg && _swReg.installing === null) return Promise.resolve(_swReg);
+  if (!("serviceWorker" in navigator)) return Promise.resolve(null);
+  return navigator.serviceWorker.register("/sw.js")
+    .then((r) => { _swReg = r; return r; })
+    .catch(() => null);
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function _pushSubPayload(sub) {
+  const j = sub.toJSON();
+  return {
+    endpoint: j.endpoint,
+    keys: { p256dh: j.keys.p256dh, auth: j.keys.auth },
+    alert_on: true,
+    user_agent: navigator.userAgent || "",
+  };
+}
+
+async function enablePushAlerts() {
+  if (!pushSupported()) return "unsupported";
+  try {
+    // Ask for permission FIRST — it must run synchronously inside the user's
+    // click gesture or Chrome will silently auto-deny it.
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") return perm;
+    const reg = await swReady();
+    if (!reg) return "unsupported";
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const k = await API.get("/api/push/vapid-key");
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(k.public_key),
+      });
+    }
+    store.set(PUSH_PREF, "on");
+    await API.post("/api/push/subscribe", _pushSubPayload(sub));
+    return "granted";
+  } catch (e) {
+    return "unsupported";
+  }
+}
+
+async function disablePushAlerts() {
+  store.set(PUSH_PREF, "off");
+  try {
+    const reg = await swReady();
+    if (!reg) return true;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      await API.post("/api/push/unsubscribe", { endpoint: sub.endpoint }).catch(() => {});
+      await sub.unsubscribe();
+    }
+  } catch (e) { /* ignore */ }
+  return true;
+}
+
+async function togglePushAlerts() {
+  const on = store.get(PUSH_PREF) === "on";
+  if (on) {
+    await disablePushAlerts();
+    toast("Desktop alerts off — you'll only hear the in-app sound", "success");
+  } else {
+    const res = await enablePushAlerts();
+    if (res === "granted") toast("Desktop alerts on — your phone/PC will ring even when the app is closed", "success");
+    else if (res === "denied") toast("Notifications are blocked for this site in your browser settings", "error");
+    else if (res === "default") toast("You've been asked — allow notifications in the permission prompt to enable alerts", "error");
+    else toast("Desktop alerts aren't supported on this browser/device", "error");
+  }
+  if (typeof openAlertSheet === "function") openAlertSheet();
+}
+
+// Quietly re-register an existing subscription after login / reload so an
+// expired one can't silently stop ringing. Never prompts for permission.
+async function syncPushAlerts() {
+  if (store.get(PUSH_PREF) !== "on") return;
+  if (!pushSupported()) return;
+  const perm = "Notification" in window ? Notification.permission : "denied";
+  if (perm !== "granted") return;
+  try {
+    const reg = await swReady();
+    if (!reg) return;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+    await API.post("/api/push/subscribe", _pushSubPayload(sub));
+  } catch (e) { /* ignore */ }
+}
+
+function pushStateLabel() {
+  if (!pushSupported()) return "Unavailable on this browser/device";
+  const on = store.get(PUSH_PREF) === "on";
+  if (!on) return "Off — only rings while the app is open";
+  const perm = "Notification" in window ? Notification.permission : "denied";
+  if (perm !== "granted") return "On, but blocked — allow notifications in browser settings";
+  return "On — rings even when the app is closed";
+}
+
 async function refreshBell(silent) {
   if (!state.user || !booted) return;
   try {
@@ -3099,7 +3229,11 @@ async function refreshBell(silent) {
     // don't get a burst of sounds for pre-existing notifications on login.
     if (p.latest && p.latest.id !== _lastNotifId) {
       if (_notifSynced && !silent && p.unread > 0 && store.get("labcare_alert_sound") !== "off") {
-        playAlertSound();
+        // When desktop push alerts are active, the OS notification already
+        // rings (this very push) — don't double-ring with the in-app sound.
+        const pushOn = store.get(PUSH_PREF) === "on"
+          && ("Notification" in window) && Notification.permission === "granted";
+        if (!pushOn) playAlertSound();
       }
       _lastNotifId = p.latest.id;
     }
@@ -3125,9 +3259,11 @@ function openAlertSheet() {
   const preset = store.get("labcare_alert_preset") || "chime";
   const custom = _customSoundSrc();
   const customName = store.get("labcare_alert_custom_name") || "";
+  const pushOn = store.get(PUSH_PREF) === "on";
+  const pushState = pushStateLabel();
 
   openSheet(`
-    <div class="sheet-head"><h3>Alert sound</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-head"><h3>Alerts &amp; sound</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
       <label class="field">
         <span>Alerts</span>
@@ -3136,7 +3272,23 @@ function openAlertSheet() {
         </button>
       </label>
 
-      <div class="section-label" style="margin-top:6px">Preset sounds (built in)</div>
+      <div class="section-label" style="margin-top:10px">Desktop alerts — ring even when the app is closed</div>
+      <label class="field">
+        <span style="display:flex;flex-direction:column;align-items:flex-start;gap:2px">
+          <b style="font-size:13.5px">Push notifications</b>
+          <span style="font-size:12px;color:var(--ink-soft);font-weight:400">${esc(pushState)}</span>
+        </span>
+        <button class="btn ${pushOn ? "btn-primary" : "btn-ghost"} btn-sm" onclick="togglePushAlerts()">
+          ${pushOn ? "🔔 On" : "🔕 Off"}
+        </button>
+      </label>
+      <p style="font-size:12.5px;color:var(--ink-soft);margin:0 0 6px">
+        When on, your browser will play its system notification sound for every
+        new alert — even with the tab or the whole app closed. When off, alerts
+        only sound while the app is open.
+      </p>
+
+      <div class="section-label" style="margin-top:6px">In-app preset sounds (built in)</div>
       <div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center">
         ${SOUND_PRESETS.map((p) => `
           <button class="btn btn-sm ${!custom && preset === p.id ? "btn-primary" : "btn-ghost"}"
@@ -3369,6 +3521,7 @@ $("#loginForm").addEventListener("submit", async (e) => {
     $("#loginEmail").value = "";
     $("#loginPassword").value = "";
     primeAudio();
+    syncPushAlerts(); // re-register existing desktop-alert subscription quietly
     render();
   } catch (err) {
     const el = $("#loginError");
@@ -3421,6 +3574,7 @@ Object.assign(window, {
   onCustPickBreakdown, onLocPickBreakdown,
   onUserCustPick, onUserLocPick,
   onJoinCust, onJoinLoc, onJoinRoleChange, loadJoinOptions, primeAudio,
+  togglePushAlerts, syncPushAlerts, pushStateLabel,
 });
 
 async function boot() {
@@ -3434,7 +3588,10 @@ async function boot() {
   }
   render();
   booted = true;
-  if (state.user) refreshBell(true); // baseline sync — no sound on login
+  if (state.user) {
+    refreshBell(true); // baseline sync — no sound on login
+    syncPushAlerts();  // re-register any existing desktop-alert subscription
+  }
 
   // Detect a Netlify-style split deployment where the frontend is live but the
   // /api proxy target is missing or down — show a clear banner instead of a

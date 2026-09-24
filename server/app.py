@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import uuid
+import threading
 import mimetypes
 
 # allow running as `python server/app.py` or as a package
@@ -13,6 +14,7 @@ from flask_cors import CORS
 
 import mailer as email_mod
 import report as report_mod
+import push as push_mod
 from database import conn, now, now_dt, hash_password, init_db, next_code_for, rows_to_dicts
 
 app = Flask(__name__, static_folder=None)
@@ -490,7 +492,8 @@ def _recipient_of(user_id):
 
 
 def notify(user_id, text, entity_type="", entity_id=None, email_fn=None):
-    """Create an in-app notification and optionally queue an email."""
+    """Create an in-app notification, a Web Push (so the device rings even when
+    the app/tab is closed), and optionally queue an email."""
     if not user_id:
         return
     c = conn()
@@ -505,6 +508,18 @@ def notify(user_id, text, entity_type="", entity_id=None, email_fn=None):
     )
     c.commit()
     c.close()
+    # Web Push: every bell notification also rings on the recipient's device,
+    # even with the app/tab closed. Sent on a background daemon thread so a
+    # slow or unreachable push service never delays the API response, and any
+    # failure is logged + dropped silently by the send.
+    try:
+        threading.Thread(
+            target=push_mod.send_push,
+            args=(user_id, text, entity_type, entity_id),
+            daemon=True,
+        ).start()
+    except Exception:
+        pass
     if email_fn:
         recip = _recipient_of(user_id)
         if recip and recip.get("email"):
@@ -2985,6 +3000,56 @@ def mark_notifications_read():
         c.execute("UPDATE notifications SET read=1 WHERE user_id=?", (u["id"],))
     c.commit()
     c.close()
+    return jsonify({"ok": True})
+
+
+# --------------------------------------------------------------------------
+# Web Push (bell alerts that ring even when the app / tab is closed)
+# --------------------------------------------------------------------------
+@app.get("/api/push/vapid-key")
+def push_vapid_key():
+    u, err, code = require_role("admin", "technician", "customer")
+    if err:
+        return err, code
+    return jsonify({"public_key": push_mod.vapid_public_key()})
+
+
+@app.get("/api/push/status")
+def push_status():
+    u, err, code = require_role("admin", "technician", "customer")
+    if err:
+        return err, code
+    c = conn()
+    rows = c.execute(
+        "SELECT id, endpoint, alert_on, created_at FROM push_subscriptions "
+        "WHERE user_id=? ORDER BY id DESC", (u["id"],)).fetchall()
+    c.close()
+    return jsonify({
+        "enabled": bool(push_mod._vapid_private_env()),
+        "devices": rows_to_dicts(rows),
+    })
+
+
+@app.post("/api/push/subscribe")
+def push_subscribe():
+    u, err, code = require_role("admin", "technician", "customer")
+    if err:
+        return err, code
+    b = get_body()
+    try:
+        out = push_mod.save_subscription(u["id"], b)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **out})
+
+
+@app.post("/api/push/unsubscribe")
+def push_unsubscribe():
+    u, err, code = require_role("admin", "technician", "customer")
+    if err:
+        return err, code
+    b = get_body() or {}
+    push_mod.remove_subscription(u["id"], (b.get("endpoint") or "").strip())
     return jsonify({"ok": True})
 
 

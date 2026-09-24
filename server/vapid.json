@@ -1,0 +1,5 @@
+{
+  "note": "LabCare VAPID keypair for Web Push. The public key is served to clients; the private key signs pushes. Kept in this private repo so redeploys (and fresh sandboxes) always use the same keypair — changing it would invalidate every browser subscription.",
+  "public": "BI9-Okg8KfHPQ5na7GzajC6KMel9wpU6OnEs3JvEwy_CLYY84fIEKsD0ksjL3wAJ9FijvL-hpjnra7rEWm_w59w",
+  "private_b64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ0laSFBXUTJSNENOWlB4M2kKMkdsaUFCR3pxMWhqRzZndkpVdjhwQk1lWTkyaFJBTkNBQVNQZmpwSVBDbnh6ME9aMnV4czJvd3VpakhwZmNLVgpPanB4TE55YnhNTXZ3aTJHUE9IeUJDckE5SkxJeTk4QUNmUllvN3kvb2FZNTYydTZ4RnB2OE9mYwotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
+}
