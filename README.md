@@ -10,10 +10,10 @@ reports, QR customer portal, preventive maintenance and an audit log.
 labcare/
 ├── server/
 │   ├── app.py          # Flask REST API + static web-app serving
-│   ├── database.py     # SQLite schema, migrations, helpers
+│   ├── database.py     # Postgres (InsForge) + SQLite fallback, migrations, helpers
 │   ├── report.py       # ReportLab PDF generation
 │   ├── mailer.py       # email outbox (SMTP or local outbox.log)
-│   ├── seed.py         # demo data (first run only)
+│   ├── seed.py         # first-run seed (Master System Admin only)
 │   ├── run.py          # production entry point (Waitress)
 │   └── wsgi.py         # WSGI entry point for external servers
 ├── static/
@@ -22,8 +22,24 @@ labcare/
 │   ├── styles.css      # responsive styles (mobile + desktop)
 │   ├── manifest.json   # PWA manifest
 │   └── icons/icon.svg
+├── Dockerfile          # container build for InsForge compute
 └── requirements.txt
 ```
+
+## Backend (InsForge)
+
+LabCare runs on **InsForge**: PostgreSQL (`database.insforge.app`) for all data,
+plus a Flask container on InsForge **compute**. The same `database.py` keeps
+working against plain SQLite for local development.
+
+- **Live API + frontend (compute container):**
+  `https://labcare-api-ee5bd3a7-8f78-4005-87ea-6c57ff5728aa.fly.dev`
+- **Postgres:** host `yj675q8e.ap-southeast.database.insforge.app` (region
+  `ap-southeast`). The container connects using `LABCARE_DATABASE_URL`
+  (= InsForge `db connection-string`).
+- **Fresh data policy:** the database starts empty and is seeded with only the
+  **Master System Admin** account. Customers, users, equipment and tickets are
+  created in-app.
 
 ## Running locally (development)
 
@@ -32,7 +48,14 @@ cd labcare/server
 python3 app.py            # Flask dev server on http://0.0.0.0:8000
 ```
 
-A fresh database is created and seeded on first run.
+A fresh database is created and seeded (Master System Admin only) on first run.
+To run against the InsForge Postgres instead of local SQLite:
+
+```bash
+cd labcare/server
+export LABCARE_DATABASE_URL="postgresql://postgres:…@yj675q8e.ap-southeast.database.insforge.app:5432/insforge?sslmode=require"
+python3 app.py            # Flask dev server on http://0.0.0.0:8000
+```
 
 ## Running in production
 
@@ -79,7 +102,8 @@ Full step-by-step: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 | ---------------------- | ----------------------------- | ----------------------------------------- |
 | `PORT`                 | `8000`                        | listen port                               |
 | `HOST`                 | `0.0.0.0`                     | bind address                              |
-| `LABCARE_DB`           | `<server>/labcare.db`         | SQLite database file                      |
+| `LABCARE_DB`           | `<server>/labcare.db`         | SQLite database file (used when no Postgres URL is set) |
+| `LABCARE_DATABASE_URL` / `DATABASE_URL` | *(unset = SQLite)* | PostgreSQL connection string — point at InsForge Postgres |
 | `LABCARE_TICKET_CAP`   | `2000`                        | max tickets per type (FIFO)               |
 | `LABCARE_HISTORY_LOG`  | `<server>/ticket_history.log` | append-only archive of evicted tickets    |
 | `LABCARE_PORTAL_URL`   | *(derived from request)*      | public base URL encoded into QR codes, e.g. `https://labcareassist.netlify.app` |
@@ -89,16 +113,16 @@ Full step-by-step: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 > These are for the built-in demo of the app. The login screen intentionally
 > does **not** show them — they're documented here so a fresh setup can sign in.
 
-Password for all demo accounts is **`Demo123!`**
+Password for the account below is **`Demo123!`**.
 
-| Role                       | Email                    |
-| -------------------------- | ------------------------ |
-| Master System Admin        | admin@labcare.com        |
-| Tenant admin (BioReference) | admin.bioref@labcare.com |
-| Tenant admin (Meridian)     | admin.meridian@labcare.com |
-| Tenant admin (Northern)     | admin.northern@labcare.com |
-| Technician                 | aidil@labcare.com        |
-| Customer                   | kavita@bioref.com        |
+| Role                | Email             |
+| ------------------- | ----------------- |
+| Master System Admin | admin@labcare.com |
+
+The InsForge database starts **fresh**: only the Master System Admin exists.
+Create customer organisations, then their tenant admins, technicians, users,
+locations, departments, equipment and tickets in-app under **Admin → Customer
+organisations** and **Admin → Team & users**.
 
 ## Key behaviour
 
@@ -139,7 +163,12 @@ Password for all demo accounts is **`Demo123!`**
 
 ## Data
 
-- `labcare.db` — single-file SQLite database shared by all users.
+- **InsForge Postgres** — all relational data in production (see
+  [`.insforge/project.json`](.insforge/project.json); connection string via
+  `npx -y @insforge/cli db connection-string`).
+- `labcare.db` — single-file SQLite database used **only** for local dev when
+  no `LABCARE_DATABASE_URL` is set.
 - `ticket_history.log` — append-only JSONL archive of tickets evicted by the
-  FIFO cap.
+  FIFO cap (written to the container's working dir `/app/server` at runtime,
+  or next to `server/` locally).
 - `outbox.log` — email outbox when SMTP is not configured.

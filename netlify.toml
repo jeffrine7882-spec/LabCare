@@ -23,11 +23,11 @@
   command = "echo 'static build — nothing to compile'"
 
 # ---- API proxy → backend ---------------------------------------------------
-# Replace BACKEND_BASE_URL with your real backend URL (keep the trailing path).
-# Query strings (?token=..., ?entity_type=...) are forwarded automatically.
+# The backend now runs on InsForge compute (Flask + InsForge Postgres).
+# Keep the /api/* redirect below pointing at the live compute endpoint.
 [[redirects]]
   from = "/api/*"
-  to = "https://BACKEND_BASE_URL.example.com/api/:splat"
+  to = "https://labcare-api-ee5bd3a7-8f78-4005-87ea-6c57ff5728aa.fly.dev/api/:splat"
   status = 200
   force = true
 
