@@ -421,7 +421,12 @@ async function viewDashboard(v) {
       ${renderTimeline(d)}
     `;
   } catch (e) {
-    v.innerHTML = `<div class="empty"><div class="e-ico">⚠️</div><h3>Couldn't load dashboard</h3><p>${esc(e.message)}</p></div>`;
+    v.innerHTML = `<div class="empty">
+      <div class="e-ico">⚠️</div>
+      <h3>Couldn't load dashboard</h3>
+      <p>${esc(e.message)}</p>
+      <button class="btn btn-primary-2 btn-sm" style="margin-top:12px" onclick="render()">↻ Retry</button>
+    </div>`;
   }
 }
 
