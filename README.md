@@ -43,8 +43,10 @@ working against plain SQLite for local development.
 - **Fresh data policy:** the database starts empty and is seeded with only the
   **Master System Admin** account. Customers, users, equipment and tickets are
   created in-app.
-- **Redeploy:** `npx -y @insforge/cli compute deploy . --name labcare-api --port 8000 --region sin --env-file .env.production`
-  (backend) and `npx -y @insforge/cli deployments deploy ./static` (frontend).
+- **Redeploy:** `./deploy.sh` (backend), `./deploy.sh frontend` (frontend),
+  `./deploy.sh all` (both), `./deploy.sh push` (git). The script recovers
+  automatically from a fresh sandbox (installs flyctl, re-fetches the Postgres
+  connection string, rewrites `.env.production`).
 
 ## Running locally (development)
 
