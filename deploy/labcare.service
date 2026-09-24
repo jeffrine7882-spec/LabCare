@@ -20,6 +20,8 @@ Environment=PORT=8000
 Environment=LABCARE_DB=/var/lib/labcare/labcare.db
 Environment=LABCARE_HISTORY_LOG=/var/lib/labcare/ticket_history.log
 Environment=LABCARE_SECURE_COOKIES=1          # behind HTTPS — keep enabled
+# Points QR codes at the public URL users open (Netlify frontend). Edit me:
+Environment=LABCARE_PORTAL_URL=https://labcareassist.netlify.app
 Environment=PYTHONUNBUFFERED=1
 
 # Restart policy

@@ -24,6 +24,10 @@ services:
         value: /data/ticket_history.log
       - key: LABCARE_SECURE_COOKIES
         value: "1"
+      # Public URL encoded into QR codes (portal scan-to-report). MUST be the
+      # public HTTPS frontend URL visitors open, e.g. https://labcareassist.netlify.app
+      - key: LABCARE_PORTAL_URL
+        value: https://labcareassist.netlify.app
       # Note: PORT is injected automatically by Render — do NOT set it here.
     disk:
       name: labcare-disk

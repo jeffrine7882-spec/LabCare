@@ -157,6 +157,7 @@ The frontend calls only relative `/api/...` URLs, so `netlify.toml`'s
 | --- | --- |
 | Backups | `labcare.db` + `ticket_history.log` (the `/data` volume or `/opt/labcare/server`) |
 | Session cookie | Backend runs with `LABCARE_SECURE_COOKIES=1`; cookie is `Secure`, sent over TLS only |
+| QR portal URLs | Set `LABCARE_PORTAL_URL=https://labcareassist.netlify.app` so QR codes encode the public frontend URL (otherwise scans open the backend's own/derived host) |
 | Uploads | In-app cap 8 MB; Netlify proxy forwards body; nginx `client_max_body_size 12m` |
 | Backend uptime | `docker restart policy` or systemd `Restart=always` — already configured |
 
