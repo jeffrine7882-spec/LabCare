@@ -427,6 +427,10 @@ def breakdown_payload(c, row):
     d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq else None
     d["reported_by_name"] = reporter["name"] if reporter else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
+    d["reporter_name"] = d.get("reporter_name") or ""
+    d["reporter_phone"] = d.get("reporter_phone") or ""
+    acceptor = c.execute("SELECT name FROM users WHERE id=?", (d["accepted_by"],)).fetchone() if d.get("accepted_by") else None
+    d["accepted_by_name"] = acceptor["name"] if acceptor else None
     d["responsible_admin_name"] = _responsible_admin_name(c, d.get("responsible_admin_id"))
     closer = c.execute("SELECT name FROM users WHERE id=?", (d["closed_by"],)).fetchone() if d.get("closed_by") else None
     d["closed_by_name"] = closer["name"] if closer else None
@@ -1714,9 +1718,9 @@ def accept_complaint(cid):
     """A technician/admin accepts a complaint on the sender's behalf.
 
     Records WHO accepted (always visible on the ticket and in the portal), sets
-    an optional reply for the sender, and ensures the ticket is assigned to the
-    acceptor when it wasn't assigned yet. Notifies the sender via the portal and
-    the team via in-app notifications."""
+    an optional reply for the sender, and makes the acceptor the ticket's
+    assignee. Notifies the sender via the portal and the team via in-app
+    notifications."""
     u, err, code = require_role("admin", "technician")
     if err:
         return err, code
@@ -1733,14 +1737,26 @@ def accept_complaint(cid):
     if row["status"] in ("resolved", "closed"):
         c.close()
         return jsonify({"error": "A resolved or closed complaint cannot be accepted"}), 409
-    # the acceptor becomes the assignee if nobody else was assigned yet
-    assigned = b.get("assigned_to") or row["assigned_to"] or u["id"]
-    if not assignee_allowed(u, assigned, c):
+    if row["accepted_by"]:
         c.close()
-        return jsonify({"error": "You can only assign to your own team"}), 403
+        return jsonify({"error": "This complaint has already been accepted"}), 409
+    old_status = row["status"]
+    # optional status to move the ticket to on acceptance (defaults to current)
+    new_status = (b.get("status") or "").strip() or old_status
+    if new_status not in ("open", "in_progress", "resolved", "closed"):
+        new_status = old_status
+    resolved_at, closed_by = row["resolved_at"], row["closed_by"]
+    if new_status in ("resolved", "closed"):
+        resolved_at = now()
+        if new_status == "closed" or (new_status == "resolved" and not row["closed_by"]):
+            closed_by = u["id"]
+    else:
+        resolved_at, closed_by = None, None
+    # the acceptor automatically becomes the assignee
     c.execute(
-        "UPDATE complaints SET accepted_by=?, accepted_at=?, accept_reply=?, assigned_to=?, updated_at=? WHERE id=?",
-        (u["id"], now(), reply, assigned, now(), cid),
+        "UPDATE complaints SET accepted_by=?, accepted_at=?, accept_reply=?, assigned_to=?, "
+        "status=?, resolved_at=?, closed_by=?, updated_at=? WHERE id=?",
+        (u["id"], now(), reply, u["id"], new_status, resolved_at, closed_by, now(), cid),
     )
     c.commit()
     row = c.execute("SELECT * FROM complaints WHERE id=?", (cid,)).fetchone()
@@ -1749,10 +1765,73 @@ def accept_complaint(cid):
 
     audit("complaint", cid, u, "accepted",
           f"Accepted by {u['name']}" + (f" — reply sent to reporter" if reply else ""))
+    if new_status != old_status:
+        audit("complaint", cid, u, "status",
+              f"{STATUS_LABELS.get(old_status, old_status)} → {STATUS_LABELS.get(new_status, new_status)} (on acceptance)")
     # everyone following the ticket (reporter + team) hears that it was accepted
     # and by whom; the reply itself is visible to the sender in the QR portal.
     ping_followers("complaint", u["id"], out,
                    f"Complaint {out['code']} accepted by {u['name']}: {out['subject']}",
+                   None)
+    return jsonify(out)
+
+
+@app.post("/api/breakdowns/<int:bid>/accept")
+def accept_breakdown(bid):
+    """A technician/admin accepts a breakdown on the sender's behalf.
+
+    Mirrors complaint acceptance: records WHO accepted and an optional reply for
+    the reporter, and makes the acceptor the ticket's assignee. Notifies the
+    sender via the portal and the team via in-app notifications."""
+    u, err, code = require_role("admin", "technician")
+    if err:
+        return err, code
+    b = get_body()
+    reply = (b.get("reply") or "").strip()
+    c = conn()
+    row = c.execute("SELECT * FROM breakdowns WHERE id=?", (bid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"], c):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
+    if row["status"] == "resolved":
+        c.close()
+        return jsonify({"error": "A resolved breakdown cannot be accepted"}), 409
+    if row["accepted_by"]:
+        c.close()
+        return jsonify({"error": "This breakdown has already been accepted"}), 409
+    old_status = row["status"]
+    # optional status to move the ticket to on acceptance (defaults to current)
+    new_status = (b.get("status") or "").strip() or old_status
+    if new_status not in ("reported", "diagnosed", "in_progress", "on_hold", "resolved"):
+        new_status = old_status
+    resolved_at, closed_by = row["resolved_at"], row["closed_by"]
+    if new_status == "resolved":
+        resolved_at = now()
+        if not row["closed_by"]:
+            closed_by = u["id"]
+    else:
+        resolved_at, closed_by = None, None
+    # the acceptor automatically becomes the assignee
+    c.execute(
+        "UPDATE breakdowns SET accepted_by=?, accepted_at=?, accept_reply=?, assigned_to=?, "
+        "status=?, resolved_at=?, closed_by=?, updated_at=? WHERE id=?",
+        (u["id"], now(), reply, u["id"], new_status, resolved_at, closed_by, now(), bid),
+    )
+    c.commit()
+    row = c.execute("SELECT * FROM breakdowns WHERE id=?", (bid,)).fetchone()
+    out = breakdown_payload(c, row)
+    c.close()
+
+    audit("breakdown", bid, u, "accepted",
+          f"Accepted by {u['name']}" + (f" — reply sent to reporter" if reply else ""))
+    if new_status != old_status:
+        audit("breakdown", bid, u, "status",
+              f"{STATUS_LABELS.get(old_status, old_status)} → {STATUS_LABELS.get(new_status, new_status)} (on acceptance)")
+    ping_followers("breakdown", u["id"], out,
+                   f"Breakdown {out['code']} accepted by {u['name']}: {out['fault_description'][:90]}",
                    None)
     return jsonify(out)
 
@@ -2790,12 +2869,16 @@ def dashboard():
 
     # recent activity (3-month window)
     rc_sql, rc_pp = scoped(
-        "SELECT id, code, subject, status, priority, created_at, customer_id FROM complaints "
-        "WHERE created_at >= " + WIN + " ORDER BY created_at DESC LIMIT 5")
+        "SELECT cmp.id, cmp.code, cmp.subject, cmp.status, cmp.priority, cmp.created_at, cmp.customer_id, "
+        "au.name AS accepted_by_name FROM complaints cmp LEFT JOIN users au ON au.id=cmp.accepted_by "
+        "WHERE cmp.created_at >= " + WIN + " ORDER BY cmp.created_at DESC LIMIT 5",
+        cols={"customer_id": "cmp.customer_id", "location_id": "cmp.location_id", "department_id": "cmp.department_id"})
     recent_cmp = c.execute(rc_sql, rc_pp).fetchall()
     rb_sql, rb_pp = scoped(
-        "SELECT id, code, fault_description, status, priority, created_at, customer_id FROM breakdowns "
-        "WHERE created_at >= " + WIN + " ORDER BY created_at DESC LIMIT 5")
+        "SELECT brk.id, brk.code, brk.fault_description, brk.status, brk.priority, brk.created_at, brk.customer_id, "
+        "au.name AS accepted_by_name FROM breakdowns brk LEFT JOIN users au ON au.id=brk.accepted_by "
+        "WHERE brk.created_at >= " + WIN + " ORDER BY brk.created_at DESC LIMIT 5",
+        cols={"customer_id": "brk.customer_id", "location_id": "brk.location_id", "department_id": "brk.department_id"})
     recent_brk = c.execute(rb_sql, rb_pp).fetchall()
 
     c.close()
@@ -2834,8 +2917,28 @@ def list_notifications():
     rows = c.execute(
         "SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50",
         (u["id"],)).fetchall()
+    out = rows_to_dicts(rows)
+    # annotate tickets referenced by these notifications so the client can flag
+    # jobs that have already been accepted
+    cp_ids = [r["entity_id"] for r in out if r.get("entity_type") == "complaint" and r.get("entity_id")]
+    br_ids = [r["entity_id"] for r in out if r.get("entity_type") == "breakdown" and r.get("entity_id")]
+    accepted = set()
+    if cp_ids:
+        marks = ", ".join("?" for _ in cp_ids)
+        for rr in c.execute(
+                f"SELECT id FROM complaints WHERE id IN ({marks}) AND accepted_by IS NOT NULL",
+                cp_ids).fetchall():
+            accepted.add(("complaint", rr["id"]))
+    if br_ids:
+        marks = ", ".join("?" for _ in br_ids)
+        for rr in c.execute(
+                f"SELECT id FROM breakdowns WHERE id IN ({marks}) AND accepted_by IS NOT NULL",
+                br_ids).fetchall():
+            accepted.add(("breakdown", rr["id"]))
     c.close()
-    return jsonify(rows_to_dicts(rows))
+    for r in out:
+        r["accepted"] = (r.get("entity_type"), r.get("entity_id")) in accepted
+    return jsonify(out)
 
 
 @app.get("/api/notifications/ping")
@@ -3096,9 +3199,11 @@ def export_csv():
             "SELECT * FROM breakdowns" + where_sql + " ORDER BY created_at DESC",
             where_params).fetchall()
         header = ["Code", "EquipmentID", "CustomerID", "ComplaintID", "FaultDescription", "RootCause",
-                  "Priority", "Status", "ReportedBy", "AssignedTo", "ResolutionNotes", "CreatedAt", "ResolvedAt"]
+                  "Priority", "Status", "ReportedBy", "ReporterName", "ReporterPhone", "AssignedTo",
+                  "ResolutionNotes", "CreatedAt", "ResolvedAt"]
         keys = ["code", "equipment_id", "customer_id", "complaint_id", "fault_description", "root_cause",
-                "priority", "status", "reported_by", "assigned_to", "resolution_notes", "created_at", "resolved_at"]
+                "priority", "status", "reported_by", "reporter_name", "reporter_phone", "assigned_to",
+                "resolution_notes", "created_at", "resolved_at"]
     else:
         rows = c.execute(
             "SELECT * FROM complaints" + where_sql + " ORDER BY created_at DESC",
@@ -3616,20 +3721,30 @@ def portal_info(token):
                 "FROM complaints c LEFT JOIN users u ON u.id=c.accepted_by "
                 "WHERE {col}=? AND c.status IN ('open','in_progress') "
                 "ORDER BY c.created_at DESC LIMIT 5")
+    brk_sql = ("SELECT b.id, b.code, b.fault_description AS subject, b.status, b.priority, b.created_at, "
+               "b.accepted_by, b.accepted_at, b.accept_reply, u.name AS accepted_by_name "
+               "FROM breakdowns b LEFT JOIN users u ON u.id=b.accepted_by "
+               "WHERE {col}=? AND b.status != 'resolved' "
+               "ORDER BY b.created_at DESC LIMIT 5")
     if d.get("equipment_id"):
         eq = c.execute("SELECT * FROM equipment WHERE id=?", (d["equipment_id"],)).fetchone()
         if eq:
             d["equipment"] = dict(eq)
             # include open tickets for context
             open_cmp = c.execute(open_sql.format(col="c.equipment_id"), (d["equipment_id"],)).fetchall()
-            d["open_complaints"] = rows_to_dicts(open_cmp)
+            open_brk = c.execute(brk_sql.format(col="b.equipment_id"), (d["equipment_id"],)).fetchall()
+            d["open_complaints"] = [dict(r, kind="complaint") for r in open_cmp]
+            d["open_breakdowns"] = [dict(r, kind="breakdown") for r in open_brk]
         else:
             d["equipment"] = None
             d["open_complaints"] = []
+            d["open_breakdowns"] = []
     else:
         d["equipment"] = None
-        d["open_complaints"] = rows_to_dicts(
-            c.execute(open_sql.format(col="c.customer_id"), (d["customer_id"],)).fetchall())
+        d["open_complaints"] = [dict(r, kind="complaint") for r in
+            c.execute(open_sql.format(col="c.customer_id"), (d["customer_id"],)).fetchall()]
+        d["open_breakdowns"] = [dict(r, kind="breakdown") for r in
+            c.execute(brk_sql.format(col="b.customer_id"), (d["customer_id"],)).fetchall()]
     c.close()
     d.pop("created_by", None)
     return jsonify(d)
@@ -3637,6 +3752,12 @@ def portal_info(token):
 
 @app.post("/api/portal/<token>/complaints")
 def portal_submit_complaint(token):
+    """Public submission entry point. The reporter picks what they are filing.
+
+    kind == 'complaint' → a complaints row (subject + description).
+    kind == 'breakdown' → a breakdowns row (fault_description).
+    Both capture the caller's name + phone and notify the customer's team.
+    """
     c = conn()
     row = c.execute(
         "SELECT * FROM portal_links WHERE token=? AND active=1", (token,)).fetchone()
@@ -3644,10 +3765,13 @@ def portal_submit_complaint(token):
         c.close()
         return jsonify({"error": "Invalid or expired link"}), 404
     body = get_body()
+    kind = (body.get("kind") or "complaint").strip().lower()
+    if kind not in ("complaint", "breakdown"):
+        kind = "complaint"
     subject = (body.get("subject") or "").strip()
     if not subject:
         c.close()
-        return jsonify({"error": "Subject is required"}), 400
+        return jsonify({"error": "Please describe the problem"}), 400
     reporter_name = (body.get("name") or "").strip()
     reporter_phone = (body.get("phone") or "").strip()
     if not reporter_name:
@@ -3667,6 +3791,32 @@ def portal_submit_complaint(token):
     eq_cust, eq_loc, eq_dept = equipment_scope(c, equip_id)
     # portal tickets are owned by the customer's tenant admin (unambiguous = auto)
     ra_id = _customer_tenant_admin_id(c, row["customer_id"])
+
+    if kind == "breakdown":
+        code_ = next_code_for("breakdowns", "BRK")
+        cur = c.execute(
+            "INSERT INTO breakdowns (code,customer_id,equipment_id,location_id,department_id,"
+            "fault_description,priority,status,reported_by,assigned_to,created_at,updated_at,"
+            "reporter_name,reporter_phone,responsible_admin_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (code_, row["customer_id"], equip_id, eq_loc, eq_dept, subject,
+             body.get("priority", "medium"), "reported",
+             created_by, None, now(), now(), reporter_name, reporter_phone, ra_id),
+        )
+        c.commit()
+        newrow = c.execute("SELECT * FROM breakdowns WHERE id=?", (cur.lastrowid,)).fetchone()
+        out = breakdown_payload(c, newrow)
+        maker = c.execute("SELECT name FROM users WHERE id=?", (created_by,)).fetchone()
+        creator_name = maker["name"] if maker else ""
+        c.close()
+        audit("breakdown", out["id"], {"id": created_by, "name": creator_name},
+              "created", f"Opened {out['code']} via portal — {out['fault_description']}")
+        _archive_and_purge("breakdown")
+        ping_team("breakdown", created_by, out,
+                  f"New breakdown {out['code']} via portal: {out['fault_description'][:90]}",
+                  lambda r: email_mod.email_status_changed("breakdown", r, out, "reported"))
+        return jsonify(out), 201
+
     code_ = next_code_for("complaints", "CMP")
     cur = c.execute(
         "INSERT INTO complaints (code,customer_id,equipment_id,location_id,department_id,subject,description,category,priority,status,created_by,assigned_to,created_at,updated_at,reporter_name,reporter_phone,responsible_admin_id) "
@@ -3697,13 +3847,20 @@ def portal_history(token):
     if not row:
         c.close()
         return jsonify({"error": "Invalid or expired link"}), 404
-    rows = c.execute(
+    cmp_rows = c.execute(
         "SELECT c.id, c.code, c.subject, c.status, c.priority, c.created_at, c.equipment_id, "
         "c.accepted_by, c.accepted_at, c.accept_reply, u.name AS accepted_by_name "
         "FROM complaints c LEFT JOIN users u ON u.id=c.accepted_by "
         "WHERE c.customer_id=? ORDER BY c.created_at DESC LIMIT 20", (row["customer_id"],)).fetchall()
+    brk_rows = c.execute(
+        "SELECT b.id, b.code, b.fault_description AS subject, b.status, b.priority, b.created_at, b.equipment_id, "
+        "b.accepted_by, b.accepted_at, b.accept_reply, u.name AS accepted_by_name "
+        "FROM breakdowns b LEFT JOIN users u ON u.id=b.accepted_by "
+        "WHERE b.customer_id=? ORDER BY b.created_at DESC LIMIT 20", (row["customer_id"],)).fetchall()
     c.close()
-    return jsonify(rows_to_dicts(rows))
+    out = [dict(r, kind="complaint") for r in cmp_rows] + [dict(r, kind="breakdown") for r in brk_rows]
+    out.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return jsonify(out[:20])
 
 
 # --------------------------------------------------------------------------

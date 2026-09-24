@@ -493,14 +493,14 @@ function renderTimeline(d) {
     items.push(`
       <li class="tl-item" onclick="navigate('complaintDetail',{id:${r.id}})">
         <div class="tl-title"><span style="color:var(--brand)">Complaint</span> · ${esc(r.subject)}</div>
-        <div class="tl-time">${esc(r.code)} · ${timeAgo(r.created_at)} · ${badge("status", r.status)} ${badge("priority", r.priority)}</div>
+        <div class="tl-time">${esc(r.code)} · ${timeAgo(r.created_at)} · ${badge("status", r.status)} ${badge("priority", r.priority)} ${r.accepted_by_name ? `<span class="badge b-accepted">✔ Accepted</span>` : ""}</div>
       </li>`);
   });
   (d.recent_breakdowns || []).slice(0, 4).forEach((r) => {
     items.push(`
       <li class="tl-item" onclick="navigate('breakdownDetail',{id:${r.id}})">
         <div class="tl-title"><span style="color:#d97706">Breakdown</span> · ${esc(truncate(r.fault_description, 70))}</div>
-        <div class="tl-time">${esc(r.code)} · ${timeAgo(r.created_at)} · ${badge("status", r.status)}</div>
+        <div class="tl-time">${esc(r.code)} · ${timeAgo(r.created_at)} · ${badge("status", r.status)} ${r.accepted_by_name ? `<span class="badge b-accepted">✔ Accepted</span>` : ""}</div>
       </li>`);
   });
   if (!items.length) items.push(`<li class="tl-item"><div class="tl-title">No recent activity</div></li>`);
@@ -582,6 +582,7 @@ function complaintCard(c) {
         ${passed}
         ${badge("status", c.status)}
         ${badge("priority", c.priority)}
+        ${c.accepted_by_name ? `<span class="badge b-accepted">✔ Accepted</span>` : ""}
         <span class="item-time">${timeAgo(c.created_at)}</span>
       </div>
     </div>`;
@@ -708,9 +709,13 @@ function statusButtons(entity, rec) {
   const b = [];
   if (entity === "complaint") {
     if (isTech() && rec.status === "open") {
-      b.push(`<button class="btn btn-primary-2 btn-sm" onclick="openAcceptSheet(${rec.id})">✔ Accept</button>`);
+      if (!rec.accepted_by) {
+        b.push(`<button class="btn btn-primary-2 btn-sm" onclick="openAcceptSheet(${rec.id})">✔ Accept</button>`);
+      }
       b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setComplaintStatus(${rec.id},'in_progress')">▶ Start work</button>`);
-      b.push(`<button class="btn btn-ghost btn-sm" onclick="openAssignSheet('complaint',${rec.id})">👤 Assign</button>`);
+      if (!rec.accepted_by) {
+        b.push(`<button class="btn btn-ghost btn-sm" onclick="openAssignSheet('complaint',${rec.id})">👤 Assign</button>`);
+      }
     }
     if (isTech() && rec.status === "in_progress") {
       b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setComplaintStatus(${rec.id},'resolved')">✔ Mark resolved</button>`);
@@ -726,9 +731,14 @@ function statusButtons(entity, rec) {
     }
   } else {
     // breakdown statuses
+    if (isTech() && ["reported", "diagnosed", "in_progress", "on_hold"].includes(rec.status) && !rec.accepted_by) {
+      b.push(`<button class="btn btn-primary-2 btn-sm" onclick="openBreakdownAcceptSheet(${rec.id})">✔ Accept</button>`);
+    }
     if (isTech() && rec.status === "reported") {
       b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setBreakdownStatus(${rec.id},'diagnosed')">🔍 Diagnosing</button>`);
-      b.push(`<button class="btn btn-ghost btn-sm" onclick="openAssignSheet('breakdown',${rec.id})">👤 Assign</button>`);
+      if (!rec.accepted_by) {
+        b.push(`<button class="btn btn-ghost btn-sm" onclick="openAssignSheet('breakdown',${rec.id})">👤 Assign</button>`);
+      }
     }
     if (isTech() && rec.status === "diagnosed") {
       b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setBreakdownStatus(${rec.id},'in_progress')">🛠 Repair in progress</button>`);
@@ -741,6 +751,9 @@ function statusButtons(entity, rec) {
       b.push(`<button class="btn btn-primary-2 btn-sm" onclick="setBreakdownStatus(${rec.id},'in_progress')">▶ Resume</button>`);
       b.push(`<button class="btn btn-ghost btn-sm" onclick="openResolveSheet(${rec.id})">✔ Resolve</button>`);
     }
+  }
+  if (rec.accepted_by_name) {
+    b.unshift(`<div class="accept-banner">✔ Accepted by <b>${esc(rec.accepted_by_name)}</b>${rec.accepted_at ? ` · ${fmtDate(rec.accepted_at)}` : ""}</div>`);
   }
   if (!b.length) return `<p style="color:var(--ink-soft);font-size:13px">No actions available for the current status${isCust() ? " — the support team will update this" : ""}.</p>`;
   return b.join("");
@@ -759,6 +772,9 @@ async function setComplaintStatus(id, status) {
 
 function openAcceptSheet(id) {
   const c = state.complaintDetail;
+  const cur = c.status || "open";
+  const opts = ["open", "in_progress", "resolved", "closed"]
+    .map((s) => `<option value="${s}" ${s === cur ? "selected" : ""}>${["Open", "In Progress", "Resolved", "Closed"][["open", "in_progress", "resolved", "closed"].indexOf(s)]}</option>`).join("");
   openSheet(`
     <div class="sheet-head"><h3>Accept complaint</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
@@ -767,7 +783,9 @@ function openAcceptSheet(id) {
         <b>${esc(state.user?.name || "you")}</b> has taken it on and will show your reply
         when they re-scan the QR code.
       </p>
-      <label class="field" style="margin-top:12px"><span>Reply to the sender (optional — shown in the portal)</span>
+      <label class="field" style="margin-top:12px"><span>Status after accepting</span>
+        <select id="acceptStatus">${opts}</select></label>
+      <label class="field"><span>Reply to the sender (optional — shown in the portal)</span>
         <textarea id="acceptReply" placeholder="e.g. We have received your report and a technician will contact you today."></textarea></label>
     </div>
     <div class="sheet-foot">
@@ -778,13 +796,53 @@ function openAcceptSheet(id) {
 
 async function submitAccept(id) {
   const reply = $("#acceptReply") ? $("#acceptReply").value.trim() : "";
+  const status = $("#acceptStatus") ? $("#acceptStatus").value : "";
   closeSheet();
   showLoading();
   try {
-    await API.post("/api/complaints/" + id + "/accept", { reply });
+    await API.post("/api/complaints/" + id + "/accept", { reply, status });
     toast("Complaint accepted — the sender has been notified", "success");
     state.complaints = null;
     await viewComplaintDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+function openBreakdownAcceptSheet(id) {
+  const b = state.breakdownDetail;
+  const cur = b.status || "reported";
+  const labels = { reported: "Reported", diagnosed: "Diagnosed", in_progress: "In Progress", on_hold: "On Hold", resolved: "Resolved" };
+  const opts = ["reported", "diagnosed", "in_progress", "on_hold", "resolved"]
+    .map((s) => `<option value="${s}" ${s === cur ? "selected" : ""}>${labels[s]}</option>`).join("");
+  openSheet(`
+    <div class="sheet-head"><h3>Accept breakdown</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <p style="font-size:14px;color:var(--ink-soft);margin:0 0 4px">
+        Accepting <b>${esc(b.code)}</b> tells the reporter (via the QR portal) that
+        <b>${esc(state.user?.name || "you")}</b> has taken it on and will show your reply
+        when they re-scan the QR code. You will also be assigned this breakdown.
+      </p>
+      <label class="field" style="margin-top:12px"><span>Status after accepting</span>
+        <select id="acceptStatus">${opts}</select></label>
+      <label class="field"><span>Reply to the sender (optional — shown in the portal)</span>
+        <textarea id="acceptReply" placeholder="e.g. We have received your report and a technician will contact you today."></textarea></label>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary-2" onclick="submitBreakdownAccept(${id})">✔ Accept &amp; notify sender</button>
+    </div>`);
+}
+
+async function submitBreakdownAccept(id) {
+  const reply = $("#acceptReply") ? $("#acceptReply").value.trim() : "";
+  const status = $("#acceptStatus") ? $("#acceptStatus").value : "";
+  closeSheet();
+  showLoading();
+  try {
+    await API.post("/api/breakdowns/" + id + "/accept", { reply, status });
+    toast("Breakdown accepted — the sender has been notified", "success");
+    state.breakdowns = null;
+    await viewBreakdownDetail($("#view"));
   } catch (e) { toast(e.message, "error"); }
   hideLoading();
 }
@@ -899,6 +957,7 @@ function breakdownCard(b) {
         ${passed}
         ${badge("status", b.status)}
         ${badge("priority", b.priority)}
+        ${b.accepted_by_name ? `<span class="badge b-accepted">✔ Accepted</span>` : ""}
         <span class="item-time">${timeAgo(b.created_at)}</span>
       </div>
     </div>`;
@@ -942,7 +1001,11 @@ function breakdownDetailHtml(b) {
     <div class="card">
       ${b.complaint_id ? `<div class="kv"><span class="k">Source complaint</span><span class="v" style="color:var(--brand);text-decoration:underline" onclick="navigate('complaintDetail',{id:${b.complaint_id}})">${esc("View")}</span></div>` : ""}
       <div class="kv"><span class="k">Opened by</span><span class="v">${esc(b.reported_by_name || "—")}</span></div>
+      ${b.reporter_name ? `<div class="kv"><span class="k">Reporter</span><span class="v">${esc(b.reporter_name)}</span></div>` : ""}
+      ${b.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v phone-actions"><a class="wa-link" href="${waChatHref(b.reporter_phone)}" target="_blank" rel="noopener">💬 WhatsApp ${esc(b.reporter_phone)}</a><a class="tel-link" href="${telHref(b.reporter_phone)}">📞</a></span></div>` : ""}
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(b.assigned_to_name || "Unassigned")}</span></div>
+      ${b.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${esc(b.accepted_by_name)}${b.accepted_at ? " · " + fmtDate(b.accepted_at) : ""}</span></div>` : ""}
+      ${b.accept_reply ? `<div class="kv"><span class="k">Reply to sender</span><span class="v">“${esc(b.accept_reply)}”</span></div>` : ""}
       ${b.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(b.responsible_admin_name)}</span></div>` : ""}
       ${b.closed_by_name ? `<div class="kv"><span class="k">Resolved by</span><span class="v">${esc(b.closed_by_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Reported</span><span class="v">${fmtDate(b.created_at)}</span></div>
@@ -3136,6 +3199,7 @@ async function openNotifications() {
           <div class="n-body">
             <div class="n-text">${esc(x.text)}</div>
             <div class="n-time">${timeAgo(x.created_at)}</div>
+            ${x.accepted ? `<div class="n-accepted">✔ Accepted</div>` : ""}
           </div>
         </div>`).join("")
       : `<div class="empty"><p>You're all caught up 🎉</p></div>`;
@@ -3295,7 +3359,7 @@ Object.assign(window, {
   navigate, goBack, closeSheet, setComplaintFilter, setBreakdownFilter,
   goComplaints, goBreakdowns, goEquipment,
   setComplaintStatus, setBreakdownStatus, deleteTicket, openAssignSheet, assignTech, linkBreakdown,
-  openAcceptSheet, submitAccept,
+  openAcceptSheet, submitAccept, openBreakdownAcceptSheet, submitBreakdownAccept,
   addComment, addBrokComment, openResolveSheet, confirmResolve,
   openComplaintEditor, saveComplaint, openBreakdownEditor, saveBreakdown,
   openEquipmentEditor, saveEquipment, deleteEquipment, openCustomerEditor, saveCustomer, deleteCustomer,

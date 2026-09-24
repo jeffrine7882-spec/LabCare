@@ -73,6 +73,13 @@
     .accept-reply { margin-top: 5px; color: #14532d; font-style: italic; }
     .hidden { display: none !important; }
     footer { text-align: center; color: var(--soft); font-size: 11.5px; margin-top: 26px; }
+    /* complaint / breakdown picker */
+    .kind-pick { display: flex; gap: 8px; }
+    .kind-opt { flex: 1; padding: 12px 10px; border-radius: 12px; border: 1.5px solid var(--line); background: #fbfcfe; font-size: 14px; font-weight: 700; cursor: pointer; color: var(--soft); font-family: inherit; }
+    .kind-opt.active { border-color: var(--brand2); background: var(--brand-soft); color: var(--brand); }
+    .kind-hint { margin-top: 7px; font-size: 12px; color: var(--soft); font-weight: 500; }
+    .kind-cmp { background: #ffedd5; color: #c2410c; }
+    .kind-brk { background: #fee2e2; color: #dc2626; }
   </style>
 </head>
 <body>
@@ -85,18 +92,28 @@
     "use strict";
     const token = new URLSearchParams(location.search).get("t") || "";
     const $ = (s) => document.querySelector(s);
+    const $$ = (s) => Array.from(document.querySelectorAll(s));
+    let _kind = "complaint";
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
       { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
     ));
     const STATUS = {
       open: { label: "Open", cls: "b-open" }, in_progress: { label: "In Progress", cls: "b-in_progress" },
       resolved: { label: "Resolved", cls: "b-resolved" }, closed: { label: "Closed", cls: "b-closed" },
+      reported: { label: "Reported", cls: "b-open" }, diagnosed: { label: "Diagnosed", cls: "b-in_progress" },
+      on_hold: { label: "On Hold", cls: "b-medium" },
+    };
+    const KINDS = {
+      complaint: { label: "Complaint", cls: "kind-cmp" },
+      breakdown: { label: "Breakdown", cls: "kind-brk" },
     };
     const PRIO = {
       low: { label: "Low", cls: "b-low" }, medium: { label: "Medium", cls: "b-medium" },
       high: { label: "High", cls: "b-high" }, critical: { label: "Critical", cls: "b-critical" },
     };
     const badge = (m, v) => `<span class="badge ${m[v].cls}">${m[v].label}</span>`;
+    const statusBadge = (v) => badge(STATUS, v);
+    const kindBadge = (k) => KINDS[k] ? `<span class="badge ${KINDS[k].cls}">${KINDS[k].label}</span>` : "";
     function toast(msg, type) {
       const t = document.createElement("div");
       t.className = "toast " + (type || "");
@@ -149,16 +166,23 @@
           ${eqLabel ? `<div class="tag">⚙ ${esc(eqLabel)}</div>` : ""}
         </div>
 
-        <div class="section-title">New complaint</div>
+        <div class="section-title">New report</div>
         <form id="repForm" class="card">
           <div id="formError" class="form-error hidden"></div>
+          <label class="field"><span>What are you reporting? *</span>
+            <div class="kind-pick" id="kindPick">
+              <button type="button" class="kind-opt active" data-kind="complaint">😟 Complaint</button>
+              <button type="button" class="kind-opt" data-kind="breakdown">⚠️ Breakdown</button>
+            </div>
+            <div class="kind-hint" id="kindHint">Complaint — something is wrong and needs attention.</div>
+          </label>
           <label class="field"><span>Full name *</span>
             <input id="fName" placeholder="e.g. Aisyah Rahman" required></label>
           <label class="field"><span>Phone number *</span>
             <input id="fPhone" type="tel" placeholder="e.g. 012-345 6789" required></label>
-          <label class="field"><span>What's the problem? *</span>
+          <label class="field"><span id="subjectLabel">What's the problem? *</span>
             <input id="fSubject" placeholder="e.g. Centrifuge making loud noise" required></label>
-          <label class="field"><span>Details</span>
+          <label class="field" id="descField"><span>Details</span>
             <textarea id="fDesc" placeholder="Describe the symptom, when it started, error messages…"></textarea></label>
           <label class="field"><span>How urgent?</span>
             <select id="fPriority">
@@ -171,14 +195,41 @@
         </form>
 
         <div class="section-title">Open reports</div>
-        <div class="card" id="openTickets">${renderOpen(info.open_complaints || [])}</div>
+        <div class="card" id="openTickets">${renderOpen(openList(info))}</div>
 
         <div class="section-title">Recent activity</div>
         <div class="card" id="history">${renderHistory("")}</div>
       `;
 
+      // wire the complaint/breakdown picker
+      $$("#kindPick .kind-opt").forEach((b) => {
+        b.addEventListener("click", () => {
+          $$("#kindPick .kind-opt").forEach((x) => x.classList.remove("active"));
+          b.classList.add("active");
+          _kind = b.dataset.kind;
+          const isBreak = _kind === "breakdown";
+          $("#kindHint").textContent = isBreak
+            ? "Breakdown — the equipment has stopped working or failed." 
+            : "Complaint — something is wrong and needs attention.";
+          $("#subjectLabel").textContent = isBreak
+            ? "What has broken down? *"
+            : "What's the problem? *";
+          $("#fSubject").placeholder = isBreak
+            ? "e.g. Centrifuge will not start"
+            : "e.g. Centrifuge making loud noise";
+          if (isBreak) $("#descField").classList.add("hidden");
+          else $("#descField").classList.remove("hidden");
+        });
+      });
+
       $("#repForm").addEventListener("submit", submitComplaint);
       fetchHistory();
+    }
+
+    function openList(info) {
+      const a = (info.open_complaints || []).map((t) => ({ ...t, kind: "complaint" }));
+      const b = (info.open_breakdowns || []).map((t) => ({ ...t, kind: "breakdown" }));
+      return a.concat(b).sort((x, y) => String(y.created_at || "").localeCompare(String(x.created_at || "")));
     }
 
     function renderOpen(list) {
@@ -187,7 +238,7 @@
         <div class="ticket">
           <div class="t-title">${esc(t.subject)}</div>
           <div class="t-sub">${esc(t.code)} · ${esc(t.created_at || "")}</div>
-          <div class="t-meta">${badge(STATUS, t.status)} ${badge(PRIO, t.priority)}</div>
+          <div class="t-meta">${kindBadge(t.kind || "complaint")} ${statusBadge(t.status)} ${badge(PRIO, t.priority)}</div>
           ${t.accepted_by || t.accepted_by_name ? `
             <div class="accept-box">
               <b>✔ Accepted by ${esc(t.accepted_by_name || "")}</b>
@@ -203,7 +254,7 @@
         <div class="ticket">
           <div class="t-title">${esc(t.subject)}</div>
           <div class="t-sub">${esc(t.code)} · ${esc(t.created_at || "")}</div>
-          <div class="t-meta">${badge(STATUS, t.status)} ${badge(PRIO, t.priority)}</div>
+          <div class="t-meta">${kindBadge(t.kind || "complaint")} ${statusBadge(t.status)} ${badge(PRIO, t.priority)}</div>
           ${t.accepted_by || t.accepted_by_name ? `
             <div class="accept-box">
               <b>✔ Accepted by ${esc(t.accepted_by_name || "")}</b>
@@ -235,6 +286,7 @@
         const c = await api("/api/portal/" + token + "/complaints", {
           method: "POST",
           body: {
+            kind: _kind === "breakdown" ? "breakdown" : "complaint",
             name,
             phone,
             subject,
@@ -256,7 +308,7 @@
 
     function renderOpenAndRefresh(info) {
       // re-render only the open tickets + history
-      $("#openTickets").innerHTML = renderOpen(info.open_complaints || []);
+      $("#openTickets").innerHTML = renderOpen(openList(info));
       fetchHistory();
     }
 

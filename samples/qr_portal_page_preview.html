@@ -91,6 +91,13 @@
   .accept-reply { margin-top: 5px; color: #14532d; font-style: italic; }
   footer { text-align: center; color: var(--soft); font-size: 11.5px; margin-top: 26px; }
   .tel-link { color: #2563eb; text-decoration: none; }
+  .kind-pick { display: flex; gap: 8px; }
+  .kind-opt { flex: 1; padding: 11px 10px; border-radius: 12px; border: 1.5px solid #e2e8f0;
+    background: #fbfcfe; font-size: 14px; font-weight: 700; color: #64748b; text-align: center; }
+  .kind-opt.active { border-color: #14b8a6; background: #ccfbf1; color: #0f766e; }
+  .kind-hint { margin-top: 7px; font-size: 12px; color: #64748b; }
+  .kind-cmp { background: #ffedd5; color: #c2410c; }
+  .kind-brk { background: #fee2e2; color: #dc2626; }
 </style>
 </head>
 <body>
@@ -115,9 +122,16 @@
           <div class="tag">⚙ Ultra-Low Freezer — S/N FRZ-8890</div>
         </div>
 
-        <!-- new complaint form -->
-        <div class="section-title">New complaint</div>
+        <!-- new report form -->
+        <div class="section-title">New report</div>
         <form class="card">
+          <label class="field"><span>What are you reporting? *</span>
+            <div class="kind-pick">
+              <span class="kind-opt active">😟 Complaint</span>
+              <span class="kind-opt">⚠️ Breakdown</span>
+            </div>
+            <div class="kind-hint">Complaint — something is wrong and needs attention.</div>
+          </label>
           <label class="field"><span>Full name *</span>
             <input class="fi filled" value="Aisyah Rahman" readonly></label>
           <label class="field"><span>Phone number *</span>
@@ -138,6 +152,7 @@
             <div class="t-title">Freezer alarm beeping continuously</div>
             <div class="t-sub">CMP-0002 · 2026-09-23 09:14</div>
             <div class="t-meta">
+              <span class="badge kind-cmp">Complaint</span>
               <span class="badge b-in_progress">In Progress</span>
               <span class="badge b-high">High</span>
             </div>
@@ -150,7 +165,17 @@
             <div class="t-title">Door seal not closing tightly</div>
             <div class="t-sub">CMP-0004 · 2026-09-22 16:40</div>
             <div class="t-meta">
+              <span class="badge kind-cmp">Complaint</span>
               <span class="badge b-open">Open</span>
+              <span class="badge b-high">Critical</span>
+            </div>
+          </div>
+          <div class="ticket">
+            <div class="t-title">Freezer compressor completely stopped</div>
+            <div class="t-sub">BRK-0006 · 2026-09-24 08:12</div>
+            <div class="t-meta">
+              <span class="badge kind-brk">Breakdown</span>
+              <span class="badge b-open">Reported</span>
               <span class="badge b-high">Critical</span>
             </div>
           </div>
