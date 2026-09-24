@@ -160,10 +160,10 @@ def seed_sample():
                          "HPLC baseline drift on detector",
                          "Baseline drifts during gradient runs. Performed a routine flush but the issue persists.",
                          "Chromatography", "high", "open", hasan, meiling, 2)
-    add_complaint("CMP-0003", bio_id, eq_centrifuge, bio_lab, bio_dept1,
-                  "Centrifuge vibrating unusually",
-                  "Noticeable vibration and noise at 10,000 rpm. Rotor was balanced correctly.",
-                  "Centrifuges", "medium", "resolved", kavita, aidil, 9, resolved_n_days=6)
+    cmp3 = add_complaint("CMP-0003", bio_id, eq_centrifuge, bio_lab, bio_dept1,
+                         "Centrifuge vibrating unusually",
+                         "Noticeable vibration and noise at 10,000 rpm. Rotor was balanced correctly.",
+                         "Centrifuges", "medium", "resolved", kavita, aidil, 9, resolved_n_days=6)
     add_complaint("CMP-0004", mer_id, eq_spec, mer_plant, mer_dept1,
                   "Spectrophotometer lamp error",
                   "Recurring 'lamp aged' error. Request check and lamp replacement estimate.",
@@ -193,9 +193,9 @@ def seed_sample():
                          "Compressor running continuously.",
                          "Worn magnetic door gasket; hinge misalignment.",
                          "critical", "diagnosed", kavita, aidil, 3)
-    add_breakdown("BRK-0002", eq_hplc, mer_id, None, mer_plant, mer_dept1,
-                  "Detector baseline drift; lamp intensity fluctuating in diagnostics.",
-                  "", "high", "in_progress", hasan, meiling, 1)
+    brk2 = add_breakdown("BRK-0002", eq_hplc, mer_id, None, mer_plant, mer_dept1,
+                         "Detector baseline drift; lamp intensity fluctuating in diagnostics.",
+                         "", "high", "in_progress", hasan, meiling, 1)
     add_breakdown("BRK-0003", eq_autoclave, mer_id, None, mer_plant, mer_dept2,
                   "Pressure gauge not reaching sterilisation temperature.",
                   "Heater element degraded.", "medium", "resolved", hasan, meiling, 8,
@@ -256,6 +256,20 @@ def seed_sample():
                      "New complaint CMP-0002 by Hasan Karim: HPLC baseline drift on detector", 2)
     add_notification(aidil, "complaint", cmp1, "CMP-0001 assigned to you (Aidil Rahman)", 4, read=1)
 
+    # The master admin also gets a bell roll-up of activity across the estate.
+    add_notification(master_id, "complaint", cmp1,
+                     "New complaint CMP-0001 by Dr. Kavita Nair (BioReference Labs): Freezer temperature alarm keeps triggering", 4)
+    add_notification(master_id, "breakdown", brk1,
+                     "Breakdown BRK-0001 reported on Ultra-Low Freezer (BioReference Labs)", 3)
+    add_notification(master_id, "complaint", cmp2,
+                     "New complaint CMP-0002 by Hasan Karim (Meridian Diagnostics): HPLC baseline drift on detector", 2)
+    add_notification(master_id, "complaint", cmp3,
+                     "Complaint CMP-0003 resolved: Centrifuge vibrating unusually", 9, read=1)
+    c.execute(
+        "INSERT INTO notification_pings (user_id,updated_at) VALUES (?,?) "
+        "ON CONFLICT (user_id) DO UPDATE SET updated_at=excluded.updated_at",
+        (master_id, days_ago(15)))
+
     # ---- audit backfill (opened/assigned/status/resolution history) ------------
     backfill_audit_history(c)
 
@@ -265,7 +279,7 @@ def seed_sample():
     print(f"  customers: {len(cust_ids)}  locations: 3  departments: 4  equipment: 6")
     print(f"  users: master + 2 tenant admins + 2 technicians + 2 customer users")
     print(f"  complaints: 4 (open/in_progress/resolved/closed)  breakdowns: 3")
-    print(f"  comments: 3  PM schedules: 3  portal links: 2  notifications: 3")
+    print(f"  comments: 3  PM schedules: 3  portal links: 2  notifications: 7 (incl. master bell)")
     print(f"  All passwords: {PASSWORD}")
 
 
