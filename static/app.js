@@ -45,16 +45,31 @@ const API = {
   async req(method, path, body) {
     const headers = { "Content-Type": "application/json" };
     if (this.token) headers["Authorization"] = "Bearer " + this.token;
-    let res;
-    try {
-      res = await fetch(withToken(path), {
-        method,
-        headers,
-        credentials: "same-origin", // send the auth cookie (belt & suspenders)
-        body: body ? JSON.stringify(body) : undefined,
-      });
-    } catch (e) {
-      throw new Error("Cannot reach the server. Check your internet connection.");
+    // The backend may be waking from scale-to-zero (a few seconds). Retry
+    // transient failures a couple of times so a cold-start blip never surfaces
+    // as a full-page "Couldn't load …" error.
+    let res, lastErr;
+    let attempts = (method === "GET") ? 3 : 1;  // never repeat writes
+    for (let i = 0; i < attempts; i++) {
+      try {
+        res = await fetch(withToken(path), {
+          method,
+          headers,
+          credentials: "same-origin", // send the auth cookie (belt & suspenders)
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        lastErr = null;
+        // only retry on gateway blips / unavailable-backend statuses
+        if (!(res.status === 502 || res.status === 503 || res.status === 504) || i === attempts - 1) {
+          break;
+        }
+      } catch (e) {
+        lastErr = e;
+      }
+      await new Promise((r) => setTimeout(r, 600 * (i + 1)));
+    }
+    if (!res) {
+      throw new Error(lastErr ? "Cannot reach the server. Check your internet connection." : "Backend not connected.");
     }
     // 502/503/504 = the frontend is up but the API backend behind it is not
     // (e.g. an unset/wrong netlify.toml /api proxy target).

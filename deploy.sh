@@ -76,9 +76,9 @@ deploy_backend() {
   need npx curl
   ensure_flyctl
   write_env
-  log "Deploying backend ($SERVICE_NAME) — build runs on the remote builder"
+  log "Deploying backend ($SERVICE_NAME) — always-on, build runs on the remote builder"
   "${CLI[@]}" compute deploy . --name "$SERVICE_NAME" --port "$PORT" \
-    --region "$REGION" --env-file "$ENV_FILE"
+    --region "$REGION" --env-file "$ENV_FILE" --always-on
   ok "backend deployed — $BACKEND_ENDPOINT"
   log "Health check"
   sleep 3
