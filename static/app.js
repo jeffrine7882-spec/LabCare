@@ -266,6 +266,10 @@ const isAdmin = () => state.user && state.user.role === "admin";
 const isTech = () => state.user && (state.user.role === "technician" || state.user.role === "admin");
 const isCust = () => state.user && state.user.role === "customer";
 const isMaster = () => state.user && state.user.role === "admin" && !state.user.customer_id;
+// staff who are not bound to a customer (master admin or a provider technician)
+const isUnboundStaff = () => state.user && (state.user.role === "admin" || state.user.role === "technician") && !state.user.customer_id;
+// cache of tenant admins per customer for the "Responsible tenant admin" picker
+const _adminsCache = {};
 
 // ---------------------------------------------------------------- Render root
 function render() {
@@ -596,6 +600,7 @@ function complaintDetailHtml(c) {
       <div class="kv"><span class="k">Reported by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
       ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v"><a class="tel-link" href="${telHref(c.reporter_phone)}">${esc(c.reporter_phone)}</a></span></div>` : ""}
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
+      ${c.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(c.responsible_admin_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Created</span><span class="v">${fmtDate(c.created_at)}</span></div>
       ${c.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(c.resolved_at)}</span></div>` : ""}
     </div>
@@ -872,6 +877,7 @@ function breakdownDetailHtml(b) {
       ${b.complaint_id ? `<div class="kv"><span class="k">Source complaint</span><span class="v" style="color:var(--brand);text-decoration:underline" onclick="navigate('complaintDetail',{id:${b.complaint_id}})">${esc("View")}</span></div>` : ""}
       <div class="kv"><span class="k">Reported by</span><span class="v">${esc(b.reported_by_name || "—")}</span></div>
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(b.assigned_to_name || "Unassigned")}</span></div>
+      ${b.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(b.responsible_admin_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Reported</span><span class="v">${fmtDate(b.created_at)}</span></div>
       ${b.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(b.resolved_at)}</span></div>` : ""}
       ${b.root_cause ? `<div class="kv"><span class="k">Root cause</span><span class="v">${esc(b.root_cause)}</span></div>` : ""}
@@ -1042,6 +1048,7 @@ async function viewEquipmentDetail(v) {
         <div class="kv"><span class="k">Customer</span><span class="v">${esc(e.customer_name || "—")}</span></div>
         <div class="kv"><span class="k">Location</span><span class="v">${esc(e.location_name || "—")}</span></div>
         <div class="kv"><span class="k">Department</span><span class="v">${esc(e.department_name || "—")}</span></div>
+        ${e.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(e.responsible_admin_name)}</span></div>` : ""}
         <div class="kv"><span class="k">Installed</span><span class="v">${fmtDateShort(e.installed_date)}</span></div>
         <div class="kv"><span class="k">Warranty until</span><span class="v">${fmtDateShort(e.warranty_expiry)}</span></div>
       </div>
@@ -1350,7 +1357,7 @@ async function viewUsers(v) {
             <div class="c-avatar">${esc(initials(u.name))}</div>
             <div class="item-main">
               <div class="item-title">${esc(u.name)}</div>
-              <div class="item-sub">${esc(u.email)}${u.customer_name ? " · " + esc(u.customer_name) : ""}${u.location_name ? " · " + esc(u.location_name) : ""}${u.department_name ? " · " + esc(u.department_name) : ""}</div>
+              <div class="item-sub">${esc(u.email)}${u.customer_name ? " · " + esc(u.customer_name) : ""}${u.location_name ? " · " + esc(u.location_name) : ""}${u.department_name ? " · " + esc(u.department_name) : ""}${u.responsible_admin_name ? " · 👤 " + esc(u.responsible_admin_name) : ""}</div>
             </div>
             ${roleChip(u.role)}
           </div>
@@ -1577,6 +1584,8 @@ async function openComplaintEditor(edit) {
     try { equipment = await API.get("/api/equipment"); } catch (e) {}
   }
   const c = edit ? state.complaintDetail : null;
+  const defCust = c && c.customer_id ? c.customer_id : (customers.length ? customers[0].id : "");
+  const respAdmins = isTech() && isUnboundStaff() && defCust ? await adminsForCustomer(defCust) : [];
 
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit complaint" : "Log complaint"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
@@ -1588,9 +1597,14 @@ async function openComplaintEditor(edit) {
         <select id="fCustomer" onchange="onCustPickComplaint()">
           ${customers.map((x) => `<option value="${x.id}" ${c && c.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
+      ${isUnboundStaff() ? `
+      <label class="field" id="fRespAdminField" style="${defCust ? "" : "display:none"}"><span>Responsible tenant admin</span>
+        <select id="fRespAdmin">
+          ${respAdminOpts(respAdmins, c && c.responsible_admin_id, true)}
+        </select></label>` : ""}
       <label class="field"><span>Location</span>
         <select id="fLocation" onchange="onLocPickComplaint()">
-          ${locOpts(state.locations || [], c && c.location_id, c && c.customer_id)}
+          ${locOpts(state.locations || [], c && c.location_id, defCust)}
         </select></label>
       <label class="field"><span>Department</span>
         <select id="fDepartment">
@@ -1644,6 +1658,7 @@ async function saveComplaint(id) {
     body.location_id = $("#fLocation").value || null;
     body.department_id = $("#fDepartment").value || null;
     body.assigned_to = ($("#fAssignee").value || null);
+    if (isUnboundStaff() && $("#fRespAdmin")) body.responsible_admin_id = $("#fRespAdmin").value || null;
   }
   if (!body.subject) { toast("Subject is required", "error"); return; }
   if (isTech() && !body.customer_id) { toast("Customer is required", "error"); return; }
@@ -1678,6 +1693,8 @@ async function openBreakdownEditor(edit, prefill) {
   }
   const b = edit && !prefill ? state.breakdownDetail : null;
   const p = prefill || {};
+  const defCust = (b ? b.customer_id : p.customer_id) || (isTech() && customers.length ? customers[0].id : "");
+  const respAdmins = isTech() && isUnboundStaff() && defCust ? await adminsForCustomer(defCust) : [];
 
   openSheet(`
     <div class="sheet-head"><h3>${edit && !prefill ? "Edit breakdown" : "Report breakdown"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
@@ -1692,9 +1709,14 @@ async function openBreakdownEditor(edit, prefill) {
         <select id="bCustomer" onchange="onCustPickBreakdown()">
           ${customers.map((x) => `<option value="${x.id}" ${(b ? b.customer_id === x.id : p.customer_id === x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
+      ${isUnboundStaff() ? `
+      <label class="field" id="bRespAdminField" style="${defCust ? "" : "display:none"}"><span>Responsible tenant admin</span>
+        <select id="bRespAdmin">
+          ${respAdminOpts(respAdmins, b && b.responsible_admin_id, true)}
+        </select></label>` : ""}
       <label class="field"><span>Location</span>
         <select id="bLocation" onchange="onLocPickBreakdown()">
-          ${locOpts(state.locations || [], (b && b.location_id) || null, (b ? b.customer_id : p.customer_id))}
+          ${locOpts(state.locations || [], (b && b.location_id) || null, defCust)}
         </select></label>
       <label class="field"><span>Department</span>
         <select id="bDepartment">
@@ -1742,6 +1764,7 @@ async function saveBreakdown(id) {
     body.department_id = $("#bDepartment").value || null;
     body.complaint_id = $("#bComplaint").value || null;
     body.assigned_to = ($("#bAssignee").value || null);
+    if (isUnboundStaff() && $("#bRespAdmin")) body.responsible_admin_id = $("#bRespAdmin").value || null;
   }
   if (!body.fault_description) { toast("Fault description is required", "error"); return; }
   if (isTech() && !body.customer_id) { toast("Customer is required", "error"); return; }
@@ -1774,6 +1797,8 @@ async function openEquipmentEditor(edit) {
   // pick the category from the list, otherwise add the current value as an option
   let catNames = cats.map((x) => x.name);
   if (currentCat && !catNames.includes(currentCat)) catNames.push(currentCat);
+  const defEqCust = (e && e.customer_id) || (isTech() && (state.customers || []).length ? state.customers[0].id : "");
+  const eqRespAdmins = isTech() && defEqCust ? await adminsForCustomer(defEqCust) : [];
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit equipment" : "Add equipment"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
@@ -1783,10 +1808,15 @@ async function openEquipmentEditor(edit) {
         <select id="eqCustomer" onchange="onCustPick('eqCustomer')">
           ${(state.customers || []).map((x) => `<option value="${x.id}" ${e && e.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
+      ${isUnboundStaff() ? `
+      <label class="field" id="eqRespAdminField" style="${defEqCust ? "" : "display:none"}"><span>Responsible tenant admin</span>
+        <select id="eqRespAdmin">
+          ${respAdminOpts(eqRespAdmins, e && e.responsible_admin_id, true)}
+        </select></label>` : ""}
       <div class="section-label">Location</div>
       <label class="field"><span>Location *</span>
         <select id="eqLocation" onchange="onLocPick('eqLocation')">
-          ${locOpts(state.locations || [], e && e.location_id, e && e.customer_id)}
+          ${locOpts(state.locations || [], e && e.location_id, defEqCust)}
         </select></label>
       <div class="section-label">Department</div>
       <label class="field"><span>Department *</span>
@@ -1836,6 +1866,33 @@ async function deleteEquipment(id) {
 }
 
 // --- shared cascading helpers for the customer → location → department chain ---
+async function adminsForCustomer(customerId) {
+  if (!customerId) return [];
+  if (_adminsCache[customerId]) return _adminsCache[customerId];
+  try {
+    const list = await API.get("/api/tenant-admins?customer_id=" + encodeURIComponent(customerId));
+    _adminsCache[customerId] = list;
+    return list;
+  } catch (e) { return []; }
+}
+
+// Options for the "Responsible tenant admin" picker. Master/provider staff see an
+// explicit "— None —" choice so they can leave it unset when a customer has no
+// tenant admin yet; tenant staff are always defaulted by the backend.
+function respAdminOpts(admins, selectedId, allowNone) {
+  return (allowNone ? `<option value="">— None / not assigned —</option>` : "")
+    + admins.map((a) => `<option value="${a.id}" ${String(selectedId) === String(a.id) ? "selected" : ""}>${esc(a.name)} · ${esc(a.email)}</option>`).join("");
+}
+
+async function onRespCustomerPick(customerSelId, respSelId) {
+  const cust = $("#" + customerSelId).value;
+  const admins = await adminsForCustomer(cust);
+  const box = $("#" + respSelId);
+  if (box) box.innerHTML = respAdminOpts(admins, null, isUnboundStaff());
+  const field = $("#" + respSelId + "Field");
+  if (field) field.style.display = cust ? "" : "none";
+}
+
 function locOpts(locations, selectedId, customerId) {
   const list = customerId ? locations.filter((l) => String(l.customer_id) === String(customerId)) : locations;
   return `<option value="">— Select location —</option>` + list.map((l) =>
@@ -1854,6 +1911,7 @@ function onCustPick(custSelId) {
   $("#eqLocation").value = "";
   $("#eqDepartment").innerHTML = deptOpts(state.departments || [], null, null);
   $("#eqDepartment").value = "";
+  if ($("#eqRespAdmin")) onRespCustomerPick(custSelId, "eqRespAdmin");
 }
 
 function onLocPick(locSelId) {
@@ -1868,6 +1926,7 @@ function onCustPickComplaint() {
   $("#fLocation").value = "";
   $("#fDepartment").innerHTML = deptOpts(state.departments || [], null, null);
   $("#fDepartment").value = "";
+  if ($("#fRespAdmin")) onRespCustomerPick("fCustomer", "fRespAdmin");
 }
 
 function onLocPickComplaint() {
@@ -1882,6 +1941,7 @@ function onCustPickBreakdown() {
   $("#bLocation").value = "";
   $("#bDepartment").innerHTML = deptOpts(state.departments || [], null, null);
   $("#bDepartment").value = "";
+  if ($("#bRespAdmin")) onRespCustomerPick("bCustomer", "bRespAdmin");
 }
 
 function onLocPickBreakdown() {
@@ -1909,6 +1969,7 @@ async function saveEquipment(id) {
     notes: $("#eqNotes").value.trim(),
   };
   if (isTech()) body.customer_id = $("#eqCustomer").value;
+  if (isTech() && isUnboundStaff() && $("#eqRespAdmin")) body.responsible_admin_id = $("#eqRespAdmin").value || null;
   if (!body.name) { toast("Equipment name is required", "error"); return; }
   if (isTech() && !body.customer_id) { toast("Customer is required", "error"); return; }
   if (isTech() && !body.location_id) { toast("Location is required", "error"); return; }
@@ -1998,6 +2059,14 @@ async function openUserEditor(edit, id) {
   // bind admin/technician to a customer (tenant) or leave them LabCare-wide.
   const showCustFields = master || startCust;
   const showLocDept = startCust;
+  // responsible tenant admin: only the master picks it (tenant staff are auto-assigned by the backend)
+  const startCustId = u && u.customer_id ? u.customer_id : (state.user && !master ? state.user.customer_id : "");
+  const respAdmins = (u && u.customer_id) || (state.user && !master && state.user.customer_id)
+    ? await adminsForCustomer(startCustId || null)
+    : [];
+  const respOptions = master
+    ? respAdminOpts(respAdmins, u && u.responsible_admin_id, true)
+    : "";
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit user" : "Add user"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
@@ -2023,6 +2092,8 @@ async function openUserEditor(edit, id) {
           <select id="uDepartment">
             ${deptOpts(state.departments || [], u && u.department_id, u && u.location_id)}
           </select></label>
+        ${master ? `<label class="field" id="uRespAdminField" style="${startCustId ? "" : "display:none"}"><span>Responsible tenant admin</span>
+          <select id="uRespAdmin">${respOptions}</select></label>` : ""}
       </div>
       <label class="field"><span>${edit ? "New password (leave blank to keep)" : "Password *"}</span><input id="uPassword" type="password" placeholder="${edit ? "••••••••" : "Set a password"}"></label>
     </div>
@@ -2045,6 +2116,7 @@ function toggleCustomerSelect() {
     const sel = $("#uCustomer");
     if (sel && state.user && state.user.customer_id) sel.value = String(state.user.customer_id);
   }
+  onUserCustPick();
 }
 
 function onUserCustPick() {
@@ -2053,6 +2125,8 @@ function onUserCustPick() {
   $("#uLocation").value = "";
   $("#uDepartment").innerHTML = deptOpts(state.departments || [], null, null);
   $("#uDepartment").value = "";
+  // refresh the responsible tenant admin picker for the newly chosen customer
+  if (isMaster() && $("#uRespAdmin")) onRespCustomerPick("uCustomer", "uRespAdmin");
 }
 
 function onUserLocPick() {
@@ -2073,11 +2147,13 @@ async function saveUser(id) {
     body.location_id = $("#uLocation").value || null;
     body.department_id = $("#uDepartment").value || null;
     if (!body.customer_id) { toast("Linked customer is required for customer accounts", "error"); return; }
+    if (isMaster() && $("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else if (isMaster()) {
     // master may bind an admin/technician to a customer (tenant admin/tech) or leave global
     body.customer_id = $("#uCustomer").value || null;
     body.location_id = null;
     body.department_id = null;
+    if ($("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else {
     body.customer_id = null;
     body.location_id = null;

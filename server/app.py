@@ -195,6 +195,83 @@ def assignee_allowed(u, assignee_id, c):
     return row["customer_id"] == u.get("customer_id")
 
 
+def validate_responsible_admin(c, customer_id, responsible_admin_id):
+    """Validate an explicit "responsible tenant admin" for a record.
+
+    The value must be an active account with role=admin, and it must belong to the
+    record's customer (or be LabCare-wide when the record itself is customer-less).
+    Returns (error_json, code) on failure, or (None, None) when valid/empty."""
+    if responsible_admin_id in (None, "", 0, "0"):
+        return None, None
+    row = c.execute("SELECT role, customer_id, active FROM users WHERE id=?",
+                    (responsible_admin_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Responsible tenant admin not found"}), 400
+    if row["active"] != 1:
+        return jsonify({"error": "Responsible tenant admin account is disabled"}), 400
+    if row["role"] != "admin":
+        return jsonify({"error": "Responsible account must be an administrator"}), 400
+    if customer_id is None:
+        if row["customer_id"] is not None:
+            return jsonify({"error": "A LabCare-wide record needs a LabCare-wide administrator"}), 400
+    elif row["customer_id"] != customer_id:
+        return jsonify({"error": "Responsible tenant admin must belong to the selected organisation"}), 400
+    return None, None
+
+
+def _responsible_admin_name(c, responsible_admin_id):
+    """Name of a record's responsible tenant admin (or None)."""
+    if not responsible_admin_id:
+        return None
+    row = c.execute("SELECT name FROM users WHERE id=?", (responsible_admin_id,)).fetchone()
+    return row["name"] if row else None
+
+
+def _customer_tenant_admin_id(c, customer_id):
+    """The id of a customer's tenant admin when it is unambiguous (exactly one
+    active tenant admin for that customer), else None."""
+    ids = _customer_tenant_admin_ids(c, customer_id)
+    return ids[0] if len(ids) == 1 else None
+
+
+def _customer_tenant_admin_ids(c, customer_id):
+    """Ids of a customer's active tenant admins."""
+    if not customer_id:
+        return []
+    rows = c.execute(
+        "SELECT id FROM users WHERE role='admin' AND customer_id=? AND active=1",
+        (customer_id,)).fetchall()
+    return [r["id"] for r in rows]
+
+
+def resolve_responsible_admin(c, u, customer_id, provided):
+    """Resolve and validate the responsible tenant admin for a new/updated record.
+
+    * Tenant admins default to themselves; tenant technicians defer to their
+      customer's tenant admin.
+    * The master / provider staff: auto-fill the customer's tenant admin when it
+      is unambiguous; when a customer has several tenant admins one MUST be
+      chosen explicitly (enforced), otherwise the field may stay empty.
+    * Customer users may leave it empty (their admin is resolved later).
+    Returns (ra_id, error_json, code).
+    """
+    ra_id = provided or None
+    bound = scoped_customer_id(u)
+    if not ra_id:
+        if bound and u["role"] == "admin":
+            ra_id = u["id"]
+        elif customer_id:
+            ra_id = _customer_tenant_admin_id(c, customer_id)
+    if not ra_id and customer_id and bound is None and u["role"] != "customer":
+        if len(_customer_tenant_admin_ids(c, customer_id)) > 1:
+            return None, jsonify({
+                "error": "This organisation has several tenant admins — please choose the responsible one"}), 400
+    err, code = validate_responsible_admin(c, customer_id, ra_id)
+    if err:
+        return None, err, code
+    return ra_id, None, None
+
+
 def public_user(u):
     """Strip password hash before returning user object."""
     u = dict(u)
@@ -218,6 +295,7 @@ def complaint_payload(c, row):
     # portal submissions record who actually reported the issue
     d["reporter_name"] = d.get("reporter_name") or ""
     d["reporter_phone"] = d.get("reporter_phone") or ""
+    d["responsible_admin_name"] = _responsible_admin_name(c, d.get("responsible_admin_id"))
     return d
 
 
@@ -234,6 +312,7 @@ def breakdown_payload(c, row):
     d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq else None
     d["reported_by_name"] = reporter["name"] if reporter else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
+    d["responsible_admin_name"] = _responsible_admin_name(c, d.get("responsible_admin_id"))
     return d
 
 
@@ -1025,10 +1104,12 @@ def list_equipment():
     if err:
         return err, code
     c = conn()
-    q = ("SELECT e.*, cu.name AS customer_name, l.name AS location_name, d.name AS department_name "
+    q = ("SELECT e.*, cu.name AS customer_name, l.name AS location_name, d.name AS department_name, "
+         "ra.name AS responsible_admin_name "
          "FROM equipment e JOIN customers cu ON cu.id=e.customer_id "
          "LEFT JOIN locations l ON l.id=e.location_id "
-         "LEFT JOIN departments d ON d.id=e.department_id")
+         "LEFT JOIN departments d ON d.id=e.department_id "
+         "LEFT JOIN users ra ON ra.id=e.responsible_admin_id")
     where, params = [], []
     if u["role"] == "customer":
         if u.get("customer_id"):
@@ -1075,6 +1156,10 @@ def create_equipment():
     if err_r:
         c.close()
         return err_r, code_r
+    ra_id, err_r, code_r = resolve_responsible_admin(c, u, b["customer_id"], b.get("responsible_admin_id"))
+    if err_r:
+        c.close()
+        return err_r, code_r
     serial = (b.get("serial_number") or "").strip()
     if serial:
         dup = c.execute("SELECT id FROM equipment WHERE customer_id=? AND serial_number=?",
@@ -1083,18 +1168,20 @@ def create_equipment():
             c.close()
             return jsonify({"error": f"Serial number '{serial}' is already registered for this customer"}), 409
     cur = c.execute(
-        "INSERT INTO equipment (customer_id,location_id,department_id,name,model,serial_number,category,installed_date,warranty_expiry,status,notes,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO equipment (customer_id,location_id,department_id,name,model,serial_number,category,installed_date,warranty_expiry,status,notes,responsible_admin_id,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (b["customer_id"], b.get("location_id"), b.get("department_id"),
          b["name"].strip(), b.get("model", ""), serial, b.get("category", ""),
          b.get("installed_date", ""), b.get("warranty_expiry", ""), b.get("status", "active"),
-         b.get("notes", ""), now()),
+         b.get("notes", ""), ra_id, now()),
     )
     c.commit()
     row = c.execute(
-        "SELECT e.*, cu.name AS customer_name, l.name AS location_name, d.name AS department_name "
+        "SELECT e.*, cu.name AS customer_name, l.name AS location_name, d.name AS department_name, ra.name AS responsible_admin_name "
         "FROM equipment e JOIN customers cu ON cu.id=e.customer_id "
-        "LEFT JOIN locations l ON l.id=e.location_id LEFT JOIN departments d ON d.id=e.department_id WHERE e.id=?",
+        "LEFT JOIN locations l ON l.id=e.location_id LEFT JOIN departments d ON d.id=e.department_id "
+        "LEFT JOIN users ra ON ra.id=e.responsible_admin_id "
+        "WHERE e.id=?",
         (cur.lastrowid,)).fetchone()
     c.close()
     return jsonify(dict(row)), 201
@@ -1124,6 +1211,11 @@ def update_equipment(eid):
     if err_r:
         c.close()
         return err_r, code_r
+    ra_id = b.get("responsible_admin_id", existing["responsible_admin_id"])
+    err_r, code_r = validate_responsible_admin(c, customer_id, ra_id)
+    if err_r:
+        c.close()
+        return err_r, code_r
     serial = (b.get("serial_number") or "").strip()
     if serial:
         dup = c.execute("SELECT id FROM equipment WHERE customer_id=? AND serial_number=? AND id!=?",
@@ -1132,17 +1224,19 @@ def update_equipment(eid):
             c.close()
             return jsonify({"error": f"Serial number '{serial}' is already registered for this customer"}), 409
     c.execute(
-        "UPDATE equipment SET customer_id=?,location_id=?,department_id=?,name=?,model=?,serial_number=?,category=?,installed_date=?,warranty_expiry=?,status=?,notes=? WHERE id=?",
+        "UPDATE equipment SET customer_id=?,location_id=?,department_id=?,name=?,model=?,serial_number=?,category=?,installed_date=?,warranty_expiry=?,status=?,notes=?,responsible_admin_id=? WHERE id=?",
         (customer_id, b.get("location_id"), b.get("department_id"),
          b.get("name", ""), b.get("model", ""), serial, b.get("category", ""),
          b.get("installed_date", ""), b.get("warranty_expiry", ""), b.get("status", "active"),
-         b.get("notes", ""), eid),
+         b.get("notes", ""), ra_id, eid),
     )
     c.commit()
     row = c.execute(
-        "SELECT e.*, cu.name AS customer_name, l.name AS location_name, d.name AS department_name "
+        "SELECT e.*, cu.name AS customer_name, l.name AS location_name, d.name AS department_name, ra.name AS responsible_admin_name "
         "FROM equipment e JOIN customers cu ON cu.id=e.customer_id "
-        "LEFT JOIN locations l ON l.id=e.location_id LEFT JOIN departments d ON d.id=e.department_id WHERE e.id=?",
+        "LEFT JOIN locations l ON l.id=e.location_id LEFT JOIN departments d ON d.id=e.department_id "
+        "LEFT JOIN users ra ON ra.id=e.responsible_admin_id "
+        "WHERE e.id=?",
         (eid,)).fetchone()
     c.close()
     return jsonify(dict(row)) if row else (jsonify({"error": "Not found"}), 404)
@@ -1258,13 +1352,17 @@ def create_complaint():
     if not customer_id:
         c.close()
         return jsonify({"error": "Customer is required"}), 400
+    ra_id, err_r, code_r = resolve_responsible_admin(c, u, customer_id, b.get("responsible_admin_id"))
+    if err_r:
+        c.close()
+        return err_r, code_r
     code_ = next_code_for("complaints", "CMP")
     cur = c.execute(
-        "INSERT INTO complaints (code,customer_id,equipment_id,location_id,department_id,subject,description,category,priority,status,created_by,assigned_to,created_at,updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO complaints (code,customer_id,equipment_id,location_id,department_id,subject,description,category,priority,status,created_by,assigned_to,created_at,updated_at,responsible_admin_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (code_, customer_id, equipment_id, location_id, department_id,
          b["subject"].strip(), b.get("description", ""), b.get("category", "General"),
-         b.get("priority", "medium"), "open", u["id"], b.get("assigned_to") or None, now(), now()),
+         b.get("priority", "medium"), "open", u["id"], b.get("assigned_to") or None, now(), now(), ra_id),
     )
     c.commit()
     new_id = cur.lastrowid
@@ -1381,7 +1479,7 @@ def update_complaint(cid):
             params.append(b["status"])
     else:
         for f in ("subject", "description", "category", "customer_id", "equipment_id", "assigned_to",
-                  "location_id", "department_id"):
+                  "location_id", "department_id", "responsible_admin_id"):
             if f in b:
                 fields.append(f"{f}=?")
                 params.append(b[f])
@@ -1397,6 +1495,13 @@ def update_complaint(cid):
             else:
                 fields.append("resolved_at=?")
                 params.append(None)
+    # validate the responsible tenant admin against the resulting customer scope
+    target_customer = b.get("customer_id", row["customer_id"])
+    ra_id = b.get("responsible_admin_id", row["responsible_admin_id"])
+    err_r, code_r = validate_responsible_admin(c, target_customer, ra_id)
+    if err_r:
+        c.close()
+        return err_r, code_r
     old_assignee = row["assigned_to"]
     old_status = row["status"]
     # Auto-assign: a technician/admin who starts working an unassigned ticket
@@ -1558,13 +1663,17 @@ def create_breakdown():
     if not customer_id:
         c.close()
         return jsonify({"error": "Customer is required"}), 400
+    ra_id, err_r, code_r = resolve_responsible_admin(c, u, customer_id, b.get("responsible_admin_id"))
+    if err_r:
+        c.close()
+        return err_r, code_r
     code_ = next_code_for("breakdowns", "BRK")
     cur = c.execute(
-        "INSERT INTO breakdowns (code,equipment_id,customer_id,complaint_id,location_id,department_id,fault_description,root_cause,priority,status,reported_by,assigned_to,resolution_notes,created_at,updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO breakdowns (code,equipment_id,customer_id,complaint_id,location_id,department_id,fault_description,root_cause,priority,status,reported_by,assigned_to,resolution_notes,created_at,updated_at,responsible_admin_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (code_, equipment_id, customer_id, b.get("complaint_id") or None, location_id, department_id,
          b["fault_description"].strip(), b.get("root_cause", ""), b.get("priority", "medium"), "reported",
-         u["id"], b.get("assigned_to") or None, b.get("resolution_notes", ""), now(), now()),
+         u["id"], b.get("assigned_to") or None, b.get("resolution_notes", ""), now(), now(), ra_id),
     )
     c.commit()
     new_id = cur.lastrowid
@@ -1632,10 +1741,17 @@ def update_breakdown(bid):
     fields = []
     params = []
     for f in ("equipment_id", "customer_id", "complaint_id", "fault_description", "root_cause",
-              "assigned_to", "resolution_notes", "location_id", "department_id"):
+              "assigned_to", "resolution_notes", "location_id", "department_id", "responsible_admin_id"):
         if f in b:
             fields.append(f"{f}=?")
             params.append(b[f])
+    # validate the responsible tenant admin against the resulting customer scope
+    target_customer = b.get("customer_id", row["customer_id"])
+    ra_id = b.get("responsible_admin_id", row["responsible_admin_id"])
+    err_r, code_r = validate_responsible_admin(c, target_customer, ra_id)
+    if err_r:
+        c.close()
+        return err_r, code_r
     if "priority" in b:
         fields.append("priority=?")
         params.append(b["priority"])
@@ -1824,6 +1940,7 @@ def list_users():
             d["customer_name"] = cu["name"] if cu else None
         d["location_name"] = _name_of(c, "locations", r["location_id"])
         d["department_name"] = _name_of(c, "departments", r["department_id"])
+        d["responsible_admin_name"] = _responsible_admin_name(c, r["responsible_admin_id"])
         out.append(d)
     c.close()
     return jsonify(out)
@@ -1843,6 +1960,41 @@ def list_technicians():
     if bound:
         q += " AND (customer_id=? OR (customer_id IS NULL AND role='technician'))"
         params.append(bound)
+    q += " ORDER BY name"
+    rows = c.execute(q, params).fetchall()
+    c.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.get("/api/tenant-admins")
+def list_tenant_admins():
+    """Administrators available as a record's 'responsible tenant admin'.
+
+    * customer_id=<n>  -> the tenant admin(s) of that customer
+    * global=1         -> LabCare-wide (unbound) administrators only
+    * (neither)        -> scoped to the actor's customer; master gets all admins
+    """
+    u, err, code = require_role("admin", "technician", "customer")
+    if err:
+        return err, code
+    c = conn()
+    q = "SELECT id, name, email, role, customer_id FROM users WHERE role='admin' AND active=1"
+    params = []
+    cust = request.args.get("customer_id")
+    if request.args.get("global") == "1":
+        q += " AND customer_id IS NULL"
+    elif cust:
+        q += " AND customer_id=?"
+        params.append(cust)
+    else:
+        bound = scoped_customer_id(u)
+        if bound:
+            q += " AND customer_id=?"
+            params.append(bound)
+        elif u["role"] == "customer":
+            # customer users may only learn about their own organisation's admin
+            q += " AND customer_id=?"
+            params.append(u.get("customer_id"))
     q += " ORDER BY name"
     rows = c.execute(q, params).fetchall()
     c.close()
@@ -1891,14 +2043,18 @@ def create_user():
         if err_r:
             c.close()
             return err_r, code_r
+    ra_id, err_r, code_r = resolve_responsible_admin(c, u, customer_id, b.get("responsible_admin_id"))
+    if err_r:
+        c.close()
+        return err_r, code_r
     exists = c.execute("SELECT id FROM users WHERE lower(email)=?", (b["email"].strip().lower(),)).fetchone()
     if exists:
         c.close()
         return jsonify({"error": "Email already in use"}), 409
     cur = c.execute(
-        "INSERT INTO users (name,email,phone,password_hash,role,customer_id,location_id,department_id,active,created_at) VALUES (?,?,?,?,?,?,?,?,1,?)",
+        "INSERT INTO users (name,email,phone,password_hash,role,customer_id,location_id,department_id,active,responsible_admin_id,created_at) VALUES (?,?,?,?,?,?,?,?,1,?,?)",
         (b["name"].strip(), b["email"].strip().lower(), b.get("phone", ""), hash_password(b["password"]),
-         role, customer_id, location_id, department_id, now()),
+         role, customer_id, location_id, department_id, ra_id, now()),
     )
     c.commit()
     row = c.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
@@ -1956,6 +2112,13 @@ def update_user(uid):
             c.close()
             return err_r, code_r
 
+    # validate the responsible tenant admin against the resulting customer scope
+    ra_id = b.get("responsible_admin_id", existing["responsible_admin_id"])
+    err_r, code_r = validate_responsible_admin(c, new_customer_id, ra_id)
+    if err_r:
+        c.close()
+        return err_r, code_r
+
     if "role" in b and b["role"] not in ("admin", "technician", "customer"):
         c.close()
         return jsonify({"error": "Invalid role"}), 400
@@ -1969,7 +2132,7 @@ def update_user(uid):
             c.close()
             return jsonify({"error": "Email already in use"}), 409
     fields, params = [], []
-    for f in ("name", "phone", "role", "customer_id", "location_id", "department_id", "active"):
+    for f in ("name", "phone", "role", "customer_id", "location_id", "department_id", "active", "responsible_admin_id"):
         if f in b:
             fields.append(f"{f}=?")
             params.append(b[f])
@@ -1990,6 +2153,7 @@ def update_user(uid):
         out["customer_name"] = cu["name"] if cu else None
     out["location_name"] = _name_of(c, "locations", row["location_id"]) if row else None
     out["department_name"] = _name_of(c, "departments", row["department_id"]) if row else None
+    out["responsible_admin_name"] = _responsible_admin_name(c, row["responsible_admin_id"]) if row else None
     c.close()
     return jsonify(out) if row else (jsonify({"error": "Not found"}), 404)
 
@@ -2018,7 +2182,9 @@ def delete_user(uid):
     for table, col in (("complaints", "assigned_to"), ("complaints", "created_by"),
                        ("breakdowns", "assigned_to"), ("breakdowns", "reported_by"),
                        ("comments", "user_id"), ("pm_schedules", "assigned_to"),
-                       ("pm_logs", "performed_by")):
+                       ("pm_logs", "performed_by"),
+                       ("users", "responsible_admin_id"), ("equipment", "responsible_admin_id"),
+                       ("complaints", "responsible_admin_id"), ("breakdowns", "responsible_admin_id")):
         n = c.execute(f"SELECT COUNT(*) n FROM {table} WHERE {col}=?", (uid,)).fetchone()["n"]
         if n:
             refs.append(f"{n} {table.rsplit('_',1)[-1]}")
@@ -3039,13 +3205,15 @@ def portal_submit_complaint(token):
     created_by = creator["id"] if creator else 1
     equip_id = row["equipment_id"] or body.get("equipment_id") or None
     eq_cust, eq_loc, eq_dept = equipment_scope(c, equip_id)
+    # portal tickets are owned by the customer's tenant admin (unambiguous = auto)
+    ra_id = _customer_tenant_admin_id(c, row["customer_id"])
     code_ = next_code_for("complaints", "CMP")
     cur = c.execute(
-        "INSERT INTO complaints (code,customer_id,equipment_id,location_id,department_id,subject,description,category,priority,status,created_by,assigned_to,created_at,updated_at,reporter_name,reporter_phone) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO complaints (code,customer_id,equipment_id,location_id,department_id,subject,description,category,priority,status,created_by,assigned_to,created_at,updated_at,reporter_name,reporter_phone,responsible_admin_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (code_, row["customer_id"], equip_id, eq_loc, eq_dept, subject, body.get("description", ""),
          body.get("category", "General"), body.get("priority", "medium"), "open",
-         created_by, None, now(), now(), reporter_name, reporter_phone),
+         created_by, None, now(), now(), reporter_name, reporter_phone, ra_id),
     )
     c.commit()
     newrow = c.execute("SELECT * FROM complaints WHERE id=?", (cur.lastrowid,)).fetchone()

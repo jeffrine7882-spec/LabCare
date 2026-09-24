@@ -282,6 +282,14 @@ def _migrate(c):
     if "reporter_phone" not in complaint_cols:
         c.execute("ALTER TABLE complaints ADD COLUMN reporter_phone TEXT DEFAULT ''")
 
+    # Multi-tenant: an explicit "responsible tenant admin" for each record so the
+    # master (or tenant admins) can see who cares for it. References users.id; the
+    # value must be an active admin linked to the record's customer.
+    for table in ("users", "equipment", "complaints", "breakdowns"):
+        cols = [r["name"] for r in c.execute(f"PRAGMA table_info({table})")]
+        if "responsible_admin_id" not in cols:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN responsible_admin_id INTEGER")
+
 
 def hash_password(pw):
     salt = "labcare::"

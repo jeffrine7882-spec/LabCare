@@ -118,6 +118,14 @@ Password for all demo accounts is **`Demo123!`**
   - The master can create tenant admins/technicians directly (via Team & users)
     and approve self-sign-ups; tenant admins can only create technicians and
     customer users for their own customer.
+- **Responsible tenant admin**: every user, piece of equipment, complaint and
+  breakdown carries an explicit `responsible_admin_id` — the tenant admin who
+  "cares for" that record. The master (and provider staff) see a *Responsible
+  tenant admin* picker on each form and the choice is validated server-side
+  (must be an active admin of the record's organisation). When a customer has
+  exactly one tenant admin it is filled in automatically; with several, one must
+  be chosen explicitly; tenant admins/technicians are always assigned
+  automatically (themselves or their customer's admin).
 - **Ticket numbering**: complaints `CMP-0001…`, breakdowns `BRK-0001…`.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.
