@@ -33,7 +33,7 @@ LabCare runs on **InsForge**: PostgreSQL (`database.insforge.app`) for all data,
 plus a Flask container on InsForge **compute**. The same `database.py` keeps
 working against plain SQLite for local development.
 
-- **Frontend (InsForge hosting):** `https://yj675q8e.insforge.site`
+- **Frontend (InsForge hosting):** `https://labcare.insforge.site`
   (static app; `/api/*` is rewrite-proxied to the compute container below).
 - **Compute container (Flask API, also serves static):**
   `https://labcare-api-ee5bd3a7-8f78-4005-87ea-6c57ff5728aa.fly.dev`
@@ -111,7 +111,7 @@ Full step-by-step: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 | `LABCARE_DATABASE_URL` / `DATABASE_URL` | *(unset = SQLite)* | PostgreSQL connection string — point at InsForge Postgres |
 | `LABCARE_TICKET_CAP`   | `2000`                        | max tickets per type (FIFO)               |
 | `LABCARE_HISTORY_LOG`  | `<server>/ticket_history.log` | append-only archive of evicted tickets    |
-| `LABCARE_PORTAL_URL`   | *(derived from request)*      | public base URL encoded into QR codes, e.g. `https://labcareassist.netlify.app` |
+| `LABCARE_PORTAL_URL`   | `https://labcare.insforge.site` | public base URL encoded into QR codes |
 
 ## Demo accounts
 
