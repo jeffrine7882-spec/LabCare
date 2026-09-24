@@ -138,6 +138,63 @@ def require_role(*roles):
     return u, None, None
 
 
+def is_master_admin(u):
+    """True only for the global master admin (role=admin and no customer link)."""
+    return u.get("role") == "admin" and not u.get("customer_id")
+
+
+def is_tenant_admin(u):
+    """True for an admin bound to one customer (tenant admin)."""
+    return u.get("role") == "admin" and bool(u.get("customer_id"))
+
+
+def scoped_customer_id(u):
+    """The customer id an admin/technician is bound to (tenant scope), else None.
+
+    Master admin and provider technicians have customer_id NULL and are unscoped."""
+    if u.get("role") in ("admin", "technician"):
+        return u.get("customer_id") or None
+    return None
+
+
+def require_master():
+    """Admin auth plus a tenant check: only the master (unbound) admin may manage
+    customers, categories, onboarding requests or admin accounts."""
+    u = auth_user()
+    if not u:
+        return None, jsonify({"error": "Not authenticated"}), 401
+    if u["role"] != "admin":
+        return None, jsonify({"error": "Not authorised"}), 403
+    if u.get("customer_id"):
+        return None, jsonify({"error": "Only the master administrator can perform this action"}), 403
+    return u, None, None
+
+
+def tenant_guard(u, customer_id):
+    """Reject tenant-scoped staff touching another customer's record.
+    Returns (error_json, code) or (None, None)."""
+    bound = scoped_customer_id(u)
+    if bound and customer_id != bound:
+        return jsonify({"error": "Not authorised — this record belongs to another organisation"}), 403
+    return None, None
+
+
+def assignee_allowed(u, assignee_id, c):
+    """Can the actor assign work to assignee_id?
+
+    Master/admin-without-customer may assign anyone. Tenant-scoped staff may only
+    assign their own tenant staff or the provider's (unbound) technicians — never
+    users from other customers and never the master admin."""
+    if not assignee_id or not scoped_customer_id(u):
+        return True
+    row = c.execute("SELECT role, customer_id FROM users WHERE id=?", (assignee_id,)).fetchone()
+    if not row or row["role"] not in ("technician", "admin"):
+        return False
+    if row["customer_id"] is None:
+        return row["role"] == "technician"
+    return row["customer_id"] == u.get("customer_id")
+
+
 def public_user(u):
     """Strip password hash before returning user object."""
     u = dict(u)
@@ -269,8 +326,11 @@ def _stakeholder_ids(kind, rec, include_team=False):
         if rec.get("reported_by"): ids.add(rec["reported_by"])
     if include_team:
         c = conn()
-        for r in c.execute("SELECT id FROM users WHERE role IN ('technician','admin') AND active=1").fetchall():
-            ids.add(r["id"])
+        cust = rec.get("customer_id")
+        for r in c.execute(
+                "SELECT id, customer_id FROM users WHERE role IN ('technician','admin') AND active=1").fetchall():
+            if cust is None or r["customer_id"] in (None, cust):
+                ids.add(r["id"])
         c.close()
     return ids
 
@@ -467,8 +527,9 @@ def signup():
         (name, email, b.get("phone", ""), hash_password(pw), role, customer_id, location_id, department_id, "pending", now()),
     )
     c.commit()
-    # Notify all admins that a new joiner is waiting for approval.
-    for r in c.execute("SELECT id FROM users WHERE role='admin' AND active=1").fetchall():
+    # Notify the master admin(s) that a new joiner is waiting for approval
+    # (tenant admins do not review onboarding requests).
+    for r in c.execute("SELECT id FROM users WHERE role='admin' AND customer_id IS NULL AND active=1").fetchall():
         notify(r["id"], f"New join request from {name} ({email}) is awaiting your approval.",
                "onboarding", cur.lastrowid, None)
     c.close()
@@ -477,7 +538,7 @@ def signup():
 
 @app.get("/api/onboarding")
 def list_onboarding():
-    u, err, code = require_role("admin")
+    u, err, code = require_master()
     if err:
         return err, code
     c = conn()
@@ -494,7 +555,7 @@ def list_onboarding():
 
 @app.post("/api/onboarding/<int:aid>/review")
 def review_onboarding(aid):
-    u, err, code = require_role("admin")
+    u, err, code = require_master()
     if err:
         return err, code
     b = get_body()
@@ -539,9 +600,10 @@ def list_customers():
         return err, code
     c = conn()
     where, params = "", []
-    if u["role"] == "customer":
-        # customers only see their own organisation
-        where, params = " WHERE id=?", [u.get("customer_id")]
+    bound = scoped_customer_id(u)
+    if u["role"] == "customer" or bound:
+        # customers see only their own organisation; tenant staff only their customer
+        where, params = " WHERE id=?", [u.get("customer_id") or bound]
     rows = c.execute("SELECT * FROM customers" + where + " ORDER BY name", params).fetchall()
     out = []
     for r in rows:
@@ -559,7 +621,7 @@ def list_customers():
 
 @app.post("/api/customers")
 def create_customer():
-    u, err, code = require_role("admin")
+    u, err, code = require_master()
     if err:
         return err, code
     b = get_body()
@@ -579,7 +641,7 @@ def create_customer():
 
 @app.put("/api/customers/<int:cid>")
 def update_customer(cid):
-    u, err, code = require_role("admin")
+    u, err, code = require_master()
     if err:
         return err, code
     b = get_body()
@@ -597,7 +659,7 @@ def update_customer(cid):
 
 @app.delete("/api/customers/<int:cid>")
 def delete_customer(cid):
-    u, err, code = require_role("admin")
+    u, err, code = require_master()
     if err:
         return err, code
     c = conn()
@@ -639,9 +701,10 @@ def list_locations():
         return err, code
     c = conn()
     where, params = [], []
-    if u["role"] == "customer":
+    bound = scoped_customer_id(u)
+    if u["role"] == "customer" or bound:
         where.append("l.customer_id=?")
-        params.append(u.get("customer_id"))
+        params.append(u.get("customer_id") or bound)
     else:
         cust = request.args.get("customer_id")
         if cust:
@@ -665,6 +728,9 @@ def create_location():
     b = get_body()
     if not (b.get("name") or "").strip() or not b.get("customer_id"):
         return jsonify({"error": "Location name and customer are required"}), 400
+    err_t, code_t = tenant_guard(u, b["customer_id"])
+    if err_t:
+        return err_t, code_t
     c = conn()
     cur = c.execute(
         "INSERT INTO locations (customer_id,name,address,city,created_at) VALUES (?,?,?,?,?)",
@@ -685,9 +751,22 @@ def update_location(lid):
         return err, code
     b = get_body()
     c = conn()
+    existing = c.execute("SELECT customer_id FROM locations WHERE id=?", (lid,)).fetchone()
+    if not existing:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, existing["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
+    new_customer_id = b.get("customer_id", existing["customer_id"])
+    err_t, code_t = tenant_guard(u, new_customer_id)
+    if err_t:
+        c.close()
+        return err_t, code_t
     c.execute(
         "UPDATE locations SET name=?,address=?,city=?,customer_id=? WHERE id=?",
-        (b.get("name", ""), b.get("address", ""), b.get("city", ""), b.get("customer_id"), lid),
+        (b.get("name", ""), b.get("address", ""), b.get("city", ""), new_customer_id, lid),
     )
     c.commit()
     row = c.execute("SELECT l.*, cu.name AS customer_name FROM locations l JOIN customers cu ON cu.id=l.customer_id WHERE l.id=?",
@@ -702,6 +781,14 @@ def delete_location(lid):
     if err:
         return err, code
     c = conn()
+    if is_tenant_admin(u):
+        row = c.execute("SELECT customer_id FROM locations WHERE id=?", (lid,)).fetchone()
+        if not row:
+            c.close()
+            return jsonify({"error": "Not found"}), 404
+        if row["customer_id"] != u["customer_id"]:
+            c.close()
+            return jsonify({"error": "Not authorised — this location belongs to another organisation"}), 403
     n = c.execute("SELECT COUNT(*) n FROM departments WHERE location_id=?", (lid,)).fetchone()["n"]
     n2 = c.execute("SELECT COUNT(*) n FROM equipment WHERE location_id=?", (lid,)).fetchone()["n"]
     if n or n2:
@@ -720,9 +807,10 @@ def list_departments():
         return err, code
     c = conn()
     where, params = [], []
-    if u["role"] == "customer":
+    bound = scoped_customer_id(u)
+    if u["role"] == "customer" or bound:
         where.append("d.customer_id=?")
-        params.append(u.get("customer_id"))
+        params.append(u.get("customer_id") or bound)
     else:
         for f in ("customer_id", "location_id"):
             v = request.args.get(f)
@@ -753,6 +841,10 @@ def create_department():
     if not loc:
         c.close()
         return jsonify({"error": "Location not found"}), 404
+    err_t, code_t = tenant_guard(u, loc["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
     cur = c.execute(
         "INSERT INTO departments (customer_id,location_id,name,created_at) VALUES (?,?,?,?)",
         (loc["customer_id"], b["location_id"], b["name"].strip(), now()),
@@ -773,8 +865,21 @@ def update_department(did):
         return err, code
     b = get_body()
     c = conn()
+    existing = c.execute("SELECT customer_id, location_id FROM departments WHERE id=?", (did,)).fetchone()
+    if not existing:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, existing["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
+    new_loc_id = b.get("location_id", existing["location_id"])
+    new_loc = c.execute("SELECT customer_id FROM locations WHERE id=?", (new_loc_id,)).fetchone() if new_loc_id else None
+    if new_loc_id and (not new_loc or new_loc["customer_id"] != existing["customer_id"]):
+        c.close()
+        return jsonify({"error": "Location does not belong to the selected customer"}), 400
     c.execute("UPDATE departments SET name=?,location_id=? WHERE id=?",
-              (b.get("name", ""), b.get("location_id"), did))
+              (b.get("name", ""), new_loc_id, did))
     c.commit()
     row = c.execute(
         "SELECT d.*, cu.name AS customer_name, l.name AS location_name FROM departments d "
@@ -790,6 +895,14 @@ def delete_department(did):
     if err:
         return err, code
     c = conn()
+    if is_tenant_admin(u):
+        row = c.execute("SELECT customer_id FROM departments WHERE id=?", (did,)).fetchone()
+        if not row:
+            c.close()
+            return jsonify({"error": "Not found"}), 404
+        if row["customer_id"] != u["customer_id"]:
+            c.close()
+            return jsonify({"error": "Not authorised — this department belongs to another organisation"}), 403
     n = c.execute("SELECT COUNT(*) n FROM equipment WHERE department_id=?", (did,)).fetchone()["n"]
     if n:
         c.close()
@@ -809,22 +922,38 @@ def list_categories():
     if err:
         return err, code
     c = conn()
-    rows = c.execute("SELECT * FROM categories ORDER BY name").fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["equipment_count"] = c.execute(
-            "SELECT COUNT(*) n FROM equipment WHERE category=?", (r["name"],)).fetchone()["n"]
-        out.append(d)
+    bound = scoped_customer_id(u)
+    if bound:
+        # tenant staff see only the categories used by their own customer's equipment
+        rows = c.execute(
+            "SELECT name, "
+            "(SELECT COUNT(*) n FROM equipment e WHERE e.category=cat.name AND e.customer_id=?) AS n "
+            "FROM categories cat "
+            "WHERE name IN (SELECT category FROM equipment WHERE customer_id=?) "
+            "ORDER BY name", (bound, bound)).fetchall()
+        out = [{"name": r["name"], "equipment_count": r["n"]} for r in rows]
+    else:
+        rows = c.execute("SELECT * FROM categories ORDER BY name").fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["equipment_count"] = c.execute(
+                "SELECT COUNT(*) n FROM equipment WHERE category=?", (r["name"],)).fetchone()["n"]
+            out.append(d)
     c.close()
     return jsonify(out)
 
 
 @app.post("/api/categories")
 def create_category():
+    # Categories are global (not per customer), so only unbound provider staff
+    # (the master admin or LabCare's own technicians) may add them. Tenant-scoped
+    # staff may not create global categories.
     u, err, code = require_role("admin", "technician")
     if err:
         return err, code
+    if scoped_customer_id(u):
+        return jsonify({"error": "Only the master administrator can manage categories"}), 403
     b = get_body()
     name = (b.get("name") or "").strip()
     if not name:
@@ -842,7 +971,7 @@ def create_category():
 
 @app.put("/api/categories/<int:catid>")
 def rename_category(catid):
-    u, err, code = require_role("admin")
+    u, err, code = require_master()
     if err:
         return err, code
     b = get_body()
@@ -868,7 +997,7 @@ def rename_category(catid):
 
 @app.delete("/api/categories/<int:catid>")
 def delete_category(catid):
-    u, err, code = require_role("admin")
+    u, err, code = require_master()
     if err:
         return err, code
     c = conn()
@@ -912,9 +1041,13 @@ def list_equipment():
             where.append("e.department_id=?")
             params.append(u["department_id"])
     else:
+        if scoped_customer_id(u):
+            # tenant technicians/admins only see their own customer's equipment
+            where.append("e.customer_id=?")
+            params.append(scoped_customer_id(u))
         for f in ("customer_id", "location_id", "department_id"):
             v = request.args.get(f)
-            if v:
+            if v and f != "customer_id":
                 where.append(f"e.{f}=?")
                 params.append(v)
     if where:
@@ -934,6 +1067,9 @@ def create_equipment():
     b = get_body()
     if not (b.get("name") or "").strip() or not b.get("customer_id"):
         return jsonify({"error": "Equipment name and customer are required"}), 400
+    err_t, code_t = tenant_guard(u, b["customer_id"])
+    if err_t:
+        return err_t, code_t
     c = conn()
     err_r, code_r = _validate_loc_dept(c, b["customer_id"], b.get("location_id"), b.get("department_id"))
     if err_r:
@@ -975,7 +1111,15 @@ def update_equipment(eid):
     if not existing:
         c.close()
         return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, existing["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
     customer_id = b.get("customer_id", existing["customer_id"])
+    err_t, code_t = tenant_guard(u, customer_id)
+    if err_t:
+        c.close()
+        return err_t, code_t
     err_r, code_r = _validate_loc_dept(c, customer_id, b.get("location_id"), b.get("department_id"))
     if err_r:
         c.close()
@@ -1010,6 +1154,14 @@ def delete_equipment(eid):
     if err:
         return err, code
     c = conn()
+    existing = c.execute("SELECT customer_id FROM equipment WHERE id=?", (eid,)).fetchone()
+    if not existing:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, existing["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
     n = c.execute("SELECT COUNT(*) n FROM complaints WHERE equipment_id=?", (eid,)).fetchone()["n"]
     if n:
         c.close()
@@ -1040,6 +1192,10 @@ def list_complaints():
         if u.get("department_id"):
             where.append("cmp.department_id=?")
             params.append(u["department_id"])
+    elif scoped_customer_id(u):
+        # tenant technicians/admins only see their own customer's tickets
+        where.append("cmp.customer_id=?")
+        params.append(scoped_customer_id(u))
     for f in ("status", "priority", "customer_id", "assigned_to", "equipment_id", "location_id", "department_id"):
         v = request.args.get(f)
         if v:
@@ -1084,6 +1240,17 @@ def create_complaint():
             return jsonify({"error": "Equipment is not in your department"}), 403
     else:
         customer_id = b.get("customer_id")
+        bound = scoped_customer_id(u)
+        if bound:
+            if customer_id != bound:
+                c.close()
+                return jsonify({"error": "You can only raise complaints for your own organisation"}), 403
+            if equipment_id and eq_cust is not None and eq_cust != bound:
+                c.close()
+                return jsonify({"error": "Equipment does not belong to your organisation"}), 403
+        if not assignee_allowed(u, b.get("assigned_to") or None, c):
+            c.close()
+            return jsonify({"error": "You can only assign to your own team"}), 403
         # default ticket location/dept from the chosen equipment when not provided
         location_id = b.get("location_id") or eq_loc
         department_id = b.get("department_id") or eq_dept
@@ -1114,10 +1281,20 @@ def create_complaint():
 
 
 def _customer_allowed(u, customer_id, location_id=None, department_id=None):
-    """True if a customer-role user may access a record with the given scope.
-    Admins/technicians are always allowed."""
-    if u["role"] != "customer":
+    """True if a user may access a record with the given scope.
+
+    * Master admin (admin, no customer): always allowed.
+    * Tenant admin / technician bound to a customer: only their own customer.
+    * Customer users: their own customer + location + department.
+    """
+    bound = scoped_customer_id(u)
+    if bound:
+        return customer_id == bound
+    if u["role"] == "admin":
         return True
+    if u["role"] == "technician" and not bound:
+        return True  # provider technician, unscoped
+    # customer-role user: scope to customer/location/department
     if u.get("customer_id") and customer_id != u.get("customer_id"):
         return False
     if u.get("location_id") and location_id is not None and location_id != u.get("location_id"):
@@ -1163,6 +1340,20 @@ def update_complaint(cid):
     if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
         c.close()
         return jsonify({"error": "Not authorised"}), 403
+    # tenant staff cannot move a ticket to another customer, their equipment, or
+    # assign it to anyone outside their team
+    if scoped_customer_id(u):
+        if "customer_id" in b and b["customer_id"] != row["customer_id"]:
+            c.close()
+            return jsonify({"error": "You cannot move this complaint to another organisation"}), 403
+        if "equipment_id" in b and b["equipment_id"]:
+            e_row = c.execute("SELECT customer_id FROM equipment WHERE id=?", (b["equipment_id"],)).fetchone()
+            if not e_row or e_row["customer_id"] != row["customer_id"]:
+                c.close()
+                return jsonify({"error": "Equipment does not belong to this organisation"}), 403
+        if "assigned_to" in b and not assignee_allowed(u, b["assigned_to"] or None, c):
+            c.close()
+            return jsonify({"error": "You can only assign to your own team"}), 403
     old_row = dict(row)
 
     fields = []
@@ -1269,6 +1460,9 @@ def delete_complaint(cid):
     if not row:
         c.close()
         return jsonify({"error": "Not found"}), 404
+    if is_tenant_admin(u) and row["customer_id"] != u["customer_id"]:
+        c.close()
+        return jsonify({"error": "Not authorised — this complaint belongs to another organisation"}), 403
     # nested breakdowns lose their source-complaint link, not themselves
     c.execute("UPDATE breakdowns SET complaint_id=NULL WHERE complaint_id=?", (cid,))
     c.execute("DELETE FROM comments WHERE entity_type='complaint' AND entity_id=?", (cid,))
@@ -1301,6 +1495,9 @@ def list_breakdowns():
         if u.get("department_id"):
             where.append("brk.department_id=?")
             params.append(u["department_id"])
+    elif scoped_customer_id(u):
+        where.append("brk.customer_id=?")
+        params.append(scoped_customer_id(u))
     for f in ("status", "priority", "customer_id", "assigned_to", "equipment_id", "location_id", "department_id"):
         v = request.args.get(f)
         if v:
@@ -1344,6 +1541,17 @@ def create_breakdown():
             return jsonify({"error": "Equipment is not in your department"}), 403
     else:
         customer_id = b.get("customer_id")
+        bound = scoped_customer_id(u)
+        if bound:
+            if customer_id != bound:
+                c.close()
+                return jsonify({"error": "You can only raise breakdowns for your own organisation"}), 403
+            if equipment_id and eq_cust is not None and eq_cust != bound:
+                c.close()
+                return jsonify({"error": "Equipment does not belong to your organisation"}), 403
+        if not assignee_allowed(u, b.get("assigned_to") or None, c):
+            c.close()
+            return jsonify({"error": "You can only assign to your own team"}), 403
         location_id = b.get("location_id") or eq_loc
         department_id = b.get("department_id") or eq_dept
 
@@ -1404,6 +1612,21 @@ def update_breakdown(bid):
     if not row:
         c.close()
         return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
+    if scoped_customer_id(u):
+        if "customer_id" in b and b["customer_id"] != row["customer_id"]:
+            c.close()
+            return jsonify({"error": "You cannot move this breakdown to another organisation"}), 403
+        if "equipment_id" in b and b["equipment_id"]:
+            e_row = c.execute("SELECT customer_id FROM equipment WHERE id=?", (b["equipment_id"],)).fetchone()
+            if not e_row or e_row["customer_id"] != row["customer_id"]:
+                c.close()
+                return jsonify({"error": "Equipment does not belong to this organisation"}), 403
+        if "assigned_to" in b and not assignee_allowed(u, b["assigned_to"] or None, c):
+            c.close()
+            return jsonify({"error": "You can only assign to your own team"}), 403
     old_row = dict(row)
 
     fields = []
@@ -1486,6 +1709,9 @@ def delete_breakdown(bid):
     if not row:
         c.close()
         return jsonify({"error": "Not found"}), 404
+    if is_tenant_admin(u) and row["customer_id"] != u["customer_id"]:
+        c.close()
+        return jsonify({"error": "Not authorised — this breakdown belongs to another organisation"}), 403
     c.execute("DELETE FROM comments WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM attachments WHERE entity_type='breakdown' AND entity_id=?", (bid,))
@@ -1511,14 +1737,15 @@ def add_comment():
     eid = b.get("entity_id")
     if entity not in ("complaint", "breakdown") or not eid:
         return jsonify({"error": "Invalid entity"}), 400
-    # authorisation: customers only on their own in-scope tickets
-    if u["role"] == "customer":
-        c = conn()
-        row = c.execute(f"SELECT customer_id, location_id, department_id FROM {entity}s WHERE id=?", (eid,)).fetchone()
-        c.close()
-        if not row or not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
-            return jsonify({"error": "Not authorised"}), 403
+    # authorisation: scope the actor to the ticket (customer, tenant staff, or master)
     c = conn()
+    row = c.execute(f"SELECT customer_id, location_id, department_id FROM {entity}s WHERE id=?", (eid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
     # Auto-assign: the first technician/admin who RESPONDS to an unassigned
     # ticket becomes its assignee (only techs/admins who own the work should
     # answer, so the assignee field always names the actual responder).
@@ -1581,6 +1808,13 @@ def list_users():
     rows = c.execute("SELECT * FROM users ORDER BY role, name").fetchall()
     out = []
     for r in rows:
+        if is_tenant_admin(u):
+            # tenant admins only see their own customer's users, plus the provider's
+            # unbound technicians they may assign work to (never other admins).
+            if r["role"] == "admin":
+                continue
+            if r["customer_id"] not in (None, u["customer_id"]):
+                continue
         d = public_user(r)
         d["customer_name"] = None
         d["location_name"] = None
@@ -1601,7 +1835,16 @@ def list_technicians():
     if err:
         return err, code
     c = conn()
-    rows = c.execute("SELECT id,name,email,role FROM users WHERE role IN ('technician','admin') AND active=1 ORDER BY name").fetchall()
+    # assignee picker: only the player's own tenant staff + provider technicians.
+    # The master admin is never listed as an assignable technician.
+    q = "SELECT id,name,email,role FROM users WHERE role IN ('technician','admin') AND active=1"
+    params = []
+    bound = scoped_customer_id(u)
+    if bound:
+        q += " AND (customer_id=? OR (customer_id IS NULL AND role='technician'))"
+        params.append(bound)
+    q += " ORDER BY name"
+    rows = c.execute(q, params).fetchall()
     c.close()
     return jsonify(rows_to_dicts(rows))
 
@@ -1617,10 +1860,37 @@ def create_user():
     role = b.get("role", "technician")
     if role not in ("admin", "technician", "customer"):
         return jsonify({"error": "Invalid role"}), 400
-    customer_id = b.get("customer_id") if role == "customer" else None
-    location_id = b.get("location_id") if role == "customer" else None
-    department_id = b.get("department_id") if role == "customer" else None
+
+    bound = scoped_customer_id(u)
+    if bound and role == "admin":
+        return jsonify({"error": "Only the master administrator can create admin accounts"}), 403
+
+    if role == "customer":
+        customer_id = b.get("customer_id")
+        location_id = b.get("location_id")
+        department_id = b.get("department_id")
+    elif role == "technician":
+        # tenant staff create technicians bound to their own customer; the master
+        # may optionally bind a technician to a customer (tenant technician).
+        if bound and b.get("customer_id") and b["customer_id"] != bound:
+            return jsonify({"error": "You can only create accounts for your own organisation"}), 403
+        customer_id = bound if bound else (b.get("customer_id") or None)
+        location_id = department_id = None
+    else:  # admin (master only): customer link optional -> tenant admin
+        customer_id = b.get("customer_id") or None
+        location_id = department_id = None
+
+    if bound and customer_id != bound:
+        return jsonify({"error": "You can only create accounts for your own organisation"}), 403
+    if role == "customer" and not customer_id:
+        return jsonify({"error": "Linked customer is required for customer accounts"}), 400
+
     c = conn()
+    if customer_id:
+        err_r, code_r = _validate_loc_dept(c, customer_id, location_id, department_id)
+        if err_r:
+            c.close()
+            return err_r, code_r
     exists = c.execute("SELECT id FROM users WHERE lower(email)=?", (b["email"].strip().lower(),)).fetchone()
     if exists:
         c.close()
@@ -1647,6 +1917,45 @@ def update_user(uid):
     if not existing:
         c.close()
         return jsonify({"error": "Not found"}), 404
+
+    bound = scoped_customer_id(u)
+    if bound:
+        # Tenant admins cannot touch admin accounts, nor anyone outside their customer.
+        if existing["role"] == "admin":
+            c.close()
+            return jsonify({"error": "Only the master administrator can manage admin accounts"}), 403
+        if existing["customer_id"] != bound:
+            c.close()
+            return jsonify({"error": "Not authorised — user belongs to another organisation"}), 403
+        new_role = b.get("role", existing["role"])
+        if new_role == "admin":
+            c.close()
+            return jsonify({"error": "Only the master administrator can create admin accounts"}), 403
+        if new_role == "customer" and b.get("customer_id", existing["customer_id"]) != bound:
+            c.close()
+            return jsonify({"error": "You can only link accounts to your own organisation"}), 403
+        # technicians remain bound to the tenant's own customer
+        if new_role == "technician":
+            b["customer_id"] = bound
+
+    # Resolve the customer scope that would result from this update, so we can
+    # validate any location/department pairing even when role stays 'customer'/'technician'.
+    new_customer_id = existing["customer_id"]
+    if "customer_id" in b:
+        new_customer_id = b["customer_id"]
+    elif "role" in b:
+        if b["role"] == "technician":
+            new_customer_id = bound if bound else None
+        elif b["role"] == "admin":
+            new_customer_id = None
+    if new_customer_id:
+        new_loc = b.get("location_id", existing["location_id"])
+        new_dept = b.get("department_id", existing["department_id"])
+        err_r, code_r = _validate_loc_dept(c, new_customer_id, new_loc, new_dept)
+        if err_r:
+            c.close()
+            return err_r, code_r
+
     if "role" in b and b["role"] not in ("admin", "technician", "customer"):
         c.close()
         return jsonify({"error": "Invalid role"}), 400
@@ -1693,10 +2002,17 @@ def delete_user(uid):
     if uid == u["id"]:
         return jsonify({"error": "You cannot delete your own account"}), 400
     c = conn()
-    existing = c.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone()
+    existing = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     if not existing:
         c.close()
         return jsonify({"error": "Not found"}), 404
+    if is_tenant_admin(u):
+        if existing["role"] == "admin":
+            c.close()
+            return jsonify({"error": "Only the master administrator can manage admin accounts"}), 403
+        if existing["customer_id"] != u["customer_id"]:
+            c.close()
+            return jsonify({"error": "Not authorised — user belongs to another organisation"}), 403
     # Things that reference the user and would break if we delete them:
     refs = []
     for table, col in (("complaints", "assigned_to"), ("complaints", "created_by"),
@@ -1728,6 +2044,9 @@ def dashboard():
 
     # For customer users, restrict every aggregate to their own
     # customer + location + department. Build a list of WHERE conditions.
+    # Tenant-bound staff (technicians/admins with a customer_id) are scoped to
+    # their whole customer.
+    bound = scoped_customer_id(u)
     cust_scopes = []
     if u["role"] == "customer":
         if u.get("customer_id"):
@@ -1736,6 +2055,8 @@ def dashboard():
             cust_scopes.append(("location_id", u["location_id"]))
         if u.get("department_id"):
             cust_scopes.append(("department_id", u["department_id"]))
+    if bound and not cust_scopes:
+        cust_scopes.append(("customer_id", bound))
 
     def scoped(sql, params=None, cols=None):
         """Append customer-scope conditions (as WHERE/AND) before any
@@ -1777,7 +2098,7 @@ def dashboard():
     open_brk = one("SELECT COUNT(*) n FROM breakdowns WHERE status NOT IN ('resolved') AND created_at >= " + WIN)
     resolved_brk = one("SELECT COUNT(*) n FROM breakdowns WHERE status='resolved' AND created_at >= " + WIN)
     total_eq = one("SELECT COUNT(*) n FROM equipment")
-    total_cust = c.execute("SELECT COUNT(*) n FROM customers").fetchone()["n"]
+    total_cust = 1 if bound else c.execute("SELECT COUNT(*) n FROM customers").fetchone()["n"]
 
     # preventive maintenance due — pm_schedules has no location/department of its
     # own, so restrict via the linked equipment for location/department-scoped users.
@@ -1813,6 +2134,12 @@ def dashboard():
                 "SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND (next_due_at IS NULL OR next_due_at <= ?)",
                 [now()]).fetchone()["n"]
             pm_total = c.execute("SELECT COUNT(*) n FROM pm_schedules WHERE active=1").fetchone()["n"]
+    elif bound:
+        pm_due = c.execute(
+            "SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND customer_id=? AND (next_due_at IS NULL OR next_due_at <= ?)",
+            [bound, now()]).fetchone()["n"]
+        pm_total = c.execute(
+            "SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND customer_id=?", [bound]).fetchone()["n"]
     else:
         pm_due = c.execute(
             "SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND (next_due_at IS NULL OR next_due_at <= ?)",
@@ -1965,16 +2292,15 @@ def upload_attachment():
     if entity not in ("complaint", "breakdown") or not eid:
         return jsonify({"error": "Invalid entity"}), 400
     eid = int(eid)
-    # authorisation: customers only on their own tickets
-    if u["role"] == "customer":
-        c = conn()
-        if entity == "complaint":
-            row = c.execute("SELECT customer_id, location_id, department_id FROM complaints WHERE id=?", (eid,)).fetchone()
-        else:
-            row = c.execute("SELECT customer_id, location_id, department_id FROM breakdowns WHERE id=?", (eid,)).fetchone()
-        c.close()
-        if not row or not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
-            return jsonify({"error": "Not authorised"}), 403
+    # authorisation: scope the actor to the ticket (customer, tenant staff, or master)
+    c = conn()
+    if entity == "complaint":
+        row = c.execute("SELECT customer_id, location_id, department_id FROM complaints WHERE id=?", (eid,)).fetchone()
+    else:
+        row = c.execute("SELECT customer_id, location_id, department_id FROM breakdowns WHERE id=?", (eid,)).fetchone()
+    c.close()
+    if not row or not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
+        return jsonify({"error": "Not authorised"}), 403
 
     f = request.files.get("file")
     if not f or not f.filename:
@@ -2057,13 +2383,14 @@ def list_attachments():
     eid = request.args.get("entity_id", type=int)
     if entity not in ("complaint", "breakdown") or not eid:
         return jsonify({"error": "Invalid entity"}), 400
-    if u["role"] == "customer":
-        c = conn()
-        row = c.execute(f"SELECT customer_id, location_id, department_id FROM {entity}s WHERE id=?", (eid,)).fetchone()
-        c.close()
-        if not row or not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
-            return jsonify({"error": "Not authorised"}), 403
     c = conn()
+    row = c.execute(f"SELECT customer_id, location_id, department_id FROM {entity}s WHERE id=?", (eid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
     out = _attachments_meta(c, entity, eid)
     c.close()
     return jsonify(out)
@@ -2104,12 +2431,11 @@ def attachment_file(aid):
     if not row:
         c.close()
         return jsonify({"error": "Not found"}), 404
-    if u["role"] == "customer":
-        tbl = row["entity_type"]
-        trow = c.execute(f"SELECT customer_id, location_id, department_id FROM {tbl}s WHERE id=?", (row["entity_id"],)).fetchone()
-        if not trow or not _customer_allowed(u, trow["customer_id"], trow["location_id"], trow["department_id"]):
-            c.close()
-            return jsonify({"error": "Not authorised"}), 403
+    tbl = row["entity_type"]
+    trow = c.execute(f"SELECT customer_id, location_id, department_id FROM {tbl}s WHERE id=?", (row["entity_id"],)).fetchone()
+    if not trow or not _customer_allowed(u, trow["customer_id"], trow["location_id"], trow["department_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
     data = row["data"]
     mime = row["mime"]
     c.close()
@@ -2123,6 +2449,15 @@ def delete_attachment(aid):
     if err:
         return err, code
     c = conn()
+    row = c.execute("SELECT * FROM attachments WHERE id=?", (aid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    tbl = row["entity_type"]
+    trow = c.execute(f"SELECT customer_id FROM {tbl}s WHERE id=?", (row["entity_id"],)).fetchone()
+    if not trow or not _customer_allowed(u, trow["customer_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
     c.execute("DELETE FROM attachments WHERE id=?", (aid,))
     c.commit()
     c.close()
@@ -2141,14 +2476,19 @@ def export_csv():
     import csv as csv_mod
     c = conn()
     out = ""
+    bound = scoped_customer_id(u)
     if entity == "breakdowns":
-        rows = c.execute("SELECT * FROM breakdowns ORDER BY created_at DESC").fetchall()
+        rows = c.execute(
+            "SELECT * FROM breakdowns" + (" WHERE customer_id=?" if bound else "") + " ORDER BY created_at DESC",
+            [bound] if bound else []).fetchall()
         header = ["Code", "EquipmentID", "CustomerID", "ComplaintID", "FaultDescription", "RootCause",
                   "Priority", "Status", "ReportedBy", "AssignedTo", "ResolutionNotes", "CreatedAt", "ResolvedAt"]
         keys = ["code", "equipment_id", "customer_id", "complaint_id", "fault_description", "root_cause",
                 "priority", "status", "reported_by", "assigned_to", "resolution_notes", "created_at", "resolved_at"]
     else:
-        rows = c.execute("SELECT * FROM complaints ORDER BY created_at DESC").fetchall()
+        rows = c.execute(
+            "SELECT * FROM complaints" + (" WHERE customer_id=?" if bound else "") + " ORDER BY created_at DESC",
+            [bound] if bound else []).fetchall()
         header = ["Code", "CustomerID", "EquipmentID", "Subject", "Description", "Category",
                   "Priority", "Status", "CreatedBy", "AssignedTo", "CreatedAt", "ResolvedAt"]
         keys = ["code", "customer_id", "equipment_id", "subject", "description", "category",
@@ -2212,10 +2552,8 @@ def trend_report_pdf():
     if u["role"] == "customer":
         if u.get("customer_id"):
             cust_scopes.append(u["customer_id"])
-        if u.get("location_id"):
-            cust_scopes.append(u["location_id"])
-        if u.get("department_id"):
-            cust_scopes.append(u["department_id"])
+    elif scoped_customer_id(u):
+        cust_scopes.append(scoped_customer_id(u))
 
     def scope(sql, params=None, col="customer_id"):
         params = list(params or [])
@@ -2299,6 +2637,10 @@ def list_pms():
         if u.get("customer_id"):
             where.append("p.customer_id=?")
             params.append(u["customer_id"])
+    elif scoped_customer_id(u):
+        # tenant staff see only their own customer's schedules
+        where.append("p.customer_id=?")
+        params.append(scoped_customer_id(u))
     mine = request.args.get("mine")
     if mine and is_tech_user(u):
         where.append("(p.assigned_to=? OR p.assigned_to IS NULL)")
@@ -2335,6 +2677,9 @@ def create_pm():
         return jsonify({"error": "Title is required"}), 400
     if not b.get("customer_id"):
         return jsonify({"error": "Customer is required"}), 400
+    err_t, code_t = tenant_guard(u, b["customer_id"])
+    if err_t:
+        return err_t, code_t
     interval_days = int(b.get("interval_days") or 90)
     if interval_days < 1:
         return jsonify({"error": "Interval must be at least 1 day"}), 400
@@ -2342,6 +2687,9 @@ def create_pm():
     if next_due:
         next_due = (next_due[:10] + " 00:00:00") if len(next_due) <= 10 else next_due
     c = conn()
+    if not assignee_allowed(u, b.get("assigned_to") or None, c):
+        c.close()
+        return jsonify({"error": "You can only assign to your own team"}), 403
     cur = c.execute(
         "INSERT INTO pm_schedules (customer_id,equipment_id,title,description,interval_days,last_done_at,next_due_at,assigned_to,active,created_at) "
         "VALUES (?,?,?,?,?,?,?,?,1,?)",
@@ -2366,6 +2714,18 @@ def update_pm(pid):
     if not row:
         c.close()
         return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, row["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
+    if "customer_id" in b:
+        err_t, code_t = tenant_guard(u, b["customer_id"])
+        if err_t:
+            c.close()
+            return err_t, code_t
+    if "assigned_to" in b and not assignee_allowed(u, b["assigned_to"] or None, c):
+        c.close()
+        return jsonify({"error": "You can only assign to your own team"}), 403
     fields, params = [], []
     for f in ("title", "description", "customer_id", "equipment_id", "assigned_to", "active", "last_done_at"):
         if f in b:
@@ -2394,6 +2754,14 @@ def delete_pm(pid):
     if err:
         return err, code
     c = conn()
+    row = c.execute("SELECT customer_id FROM pm_schedules WHERE id=?", (pid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, row["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
     c.execute("DELETE FROM pm_schedules WHERE id=?", (pid,))
     c.commit()
     c.close()
@@ -2411,6 +2779,10 @@ def complete_pm(pid):
     if not row:
         c.close()
         return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, row["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
     performed_at = b.get("performed_at") or now()
     due_in = row["interval_days"]
     # next_due = performed date + interval days
@@ -2442,6 +2814,13 @@ def pm_logs(pid):
     if err:
         return err, code
     c = conn()
+    row = c.execute("SELECT customer_id FROM pm_schedules WHERE id=?", (pid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
     rows = c.execute(
         "SELECT l.*, u.name AS performed_by_name FROM pm_logs l JOIN users u ON u.id=l.performed_by "
         "WHERE l.schedule_id=? ORDER BY l.performed_at DESC", (pid,)).fetchall()
@@ -2479,11 +2858,15 @@ def list_portal_links():
     if err:
         return err, code
     c = conn()
+    where, params = "", []
+    bound = scoped_customer_id(u)
+    if bound:
+        where, params = " WHERE pl.customer_id=?", [bound]
     rows = c.execute(
         "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name, e.model AS equipment_model, e.serial_number AS equipment_serial "
         "FROM portal_links pl JOIN customers cu ON cu.id=pl.customer_id "
-        "LEFT JOIN equipment e ON e.id=pl.equipment_id "
-        "ORDER BY pl.created_at DESC").fetchall()
+        "LEFT JOIN equipment e ON e.id=pl.equipment_id " + where +
+        " ORDER BY pl.created_at DESC", params).fetchall()
     c.close()
     return jsonify(rows_to_dicts(rows))
 
@@ -2496,6 +2879,9 @@ def create_portal_link():
     b = get_body()
     if not b.get("customer_id"):
         return jsonify({"error": "Customer is required"}), 400
+    err_t, code_t = tenant_guard(u, b["customer_id"])
+    if err_t:
+        return err_t, code_t
     token = uuid.uuid4().hex[:16]
     c = conn()
     cur = c.execute(
@@ -2518,9 +2904,14 @@ def portal_link_qr(lid):
         return err, code
     c = conn()
     row = c.execute("SELECT * FROM portal_links WHERE id=?", (lid,)).fetchone()
-    c.close()
     if not row:
+        c.close()
         return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, row["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
+    c.close()
     png = _portal_qr_png(row["token"], row["label"])
     return Response(png, mimetype="image/png", headers={
         "Content-Disposition": f'inline; filename="portal_{row["token"]}.png"'})
@@ -2533,6 +2924,19 @@ def update_portal_link(lid):
         return err, code
     b = get_body()
     c = conn()
+    existing = c.execute("SELECT customer_id FROM portal_links WHERE id=?", (lid,)).fetchone()
+    if not existing:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, existing["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
+    if "customer_id" in b:
+        err_t, code_t = tenant_guard(u, b["customer_id"])
+        if err_t:
+            c.close()
+            return err_t, code_t
     fields, params = [], []
     for f in ("label", "customer_id", "equipment_id", "active"):
         if f in b:
@@ -2556,6 +2960,14 @@ def delete_portal_link(lid):
     if err:
         return err, code
     c = conn()
+    row = c.execute("SELECT customer_id FROM portal_links WHERE id=?", (lid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    err_t, code_t = tenant_guard(u, row["customer_id"])
+    if err_t:
+        c.close()
+        return err_t, code_t
     c.execute("DELETE FROM portal_links WHERE id=?", (lid,))
     c.commit()
     c.close()

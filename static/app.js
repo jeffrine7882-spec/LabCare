@@ -265,6 +265,7 @@ function goBack() {
 const isAdmin = () => state.user && state.user.role === "admin";
 const isTech = () => state.user && (state.user.role === "technician" || state.user.role === "admin");
 const isCust = () => state.user && state.user.role === "customer";
+const isMaster = () => state.user && state.user.role === "admin" && !state.user.customer_id;
 
 // ---------------------------------------------------------------- Render root
 function render() {
@@ -1060,7 +1061,7 @@ async function viewOrg(v, tab) {
     ? [["customers", "🏢 Customers"], ["locations", "📍 Locations"], ["departments", "🏥 Departments"]]
     : [["customers", "🏢 My organisation"]];
   const addBtn = t === "customers"
-    ? (isAdmin() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
+    ? (isMaster() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
     : t === "locations"
       ? (isTech() ? `<button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location</button>` : "")
       : (isTech() ? `<button class="btn btn-primary" onclick="openDepartmentEditor(false)">＋ Add department</button>` : "");
@@ -1152,7 +1153,7 @@ async function viewCustomerDetail(v) {
       ${eq.length ? `<div class="list">${eq.map(equipmentCard).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">No equipment registered.</p></div>`}
       <div class="section-title">Recent complaints (${cmp.length})</div>
       ${cmp.length ? `<div class="list">${cmp.slice(0, 3).map(complaintCard).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">None.</p></div>`}
-      ${isAdmin() ? `<div class="action-panel" style="margin-top:14px"><button class="btn btn-ghost" onclick="openCustomerEditor(true)">✏️ Edit customer</button></div>` : ""}
+      ${isMaster() ? `<div class="action-panel" style="margin-top:14px"><button class="btn btn-ghost" onclick="openCustomerEditor(true)">✏️ Edit customer</button></div>` : ""}
     `;
   } catch (e) {
     v.innerHTML = `<div class="empty"><h3>Could not load</h3><p>${esc(e.message)}</p></div>`;
@@ -1339,10 +1340,12 @@ async function viewUsers(v) {
   try {
     const list = await API.get("/api/users");
     state.users = list;
+    const canEdit = (usr) => isMaster()
+      || (isAdmin() && usr.role !== "admin" && usr.customer_id === state.user.customer_id);
     v.innerHTML = `
       ${isAdmin() ? `<div class="btn-row" style="margin-bottom:12px"><button class="btn btn-primary" onclick="openUserEditor(false)">＋ Add user</button></div>` : ""}
       <div class="list list-grid">${list.map((u) => `
-        <div class="item" onclick="${isAdmin() ? `openUserEditor(true, ${u.id})` : ""}">
+        <div class="item" onclick="${canEdit(u) ? `openUserEditor(true, ${u.id})` : ""}">
           <div class="item-top">
             <div class="c-avatar">${esc(initials(u.name))}</div>
             <div class="item-main">
@@ -1367,11 +1370,11 @@ async function viewCategories(v) {
         <h2>Equipment categories</h2>
         <p>Manage the categories used when adding equipment.</p>
       </div>
-      ${isAdmin() ? `<div class="btn-row" style="margin-bottom:12px">
+      ${isMaster() ? `<div class="btn-row" style="margin-bottom:12px">
         <button class="btn btn-primary" onclick="openCategoryEditor(false)">＋ Add category</button>
       </div>` : ""}
       <div class="list list-grid">${cats.map((c) => `
-        <div class="item" onclick="${isAdmin() ? `openCategoryEditor(true, ${c.id}, '${esc(c.name)}')` : ""}">
+        <div class="item" onclick="${isMaster() ? `openCategoryEditor(true, ${c.id}, '${esc(c.name)}')` : ""}">
           <div class="item-top">
             <div class="c-avatar">🏷️</div>
             <div class="item-main">
@@ -1509,9 +1512,9 @@ function viewMore(v) {
   const items = [];
   items.push(`<button class="menu-item" onclick="navigate('profile')"><span class="mi-ico">👤</span> My account <span class="mi-arrow">›</span></button>`);
   if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Customers, locations &amp; departments <span class="mi-arrow">›</span></button>`);
-  if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('categories')"><span class="mi-ico">🏷️</span> Categories <span class="mi-arrow">›</span></button>`);
+  if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('categories')"><span class="mi-ico">🏷️</span> Categories <span class="mi-arrow">›</span></button>`);
   if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('users')"><span class="mi-ico">👥</span> Team & users <span class="mi-arrow">›</span></button>`);
-  if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('onboarding')"><span class="mi-ico">📥</span> Join requests <span class="mi-arrow">›</span></button>`);
+  if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('onboarding')"><span class="mi-ico">📥</span> Join requests <span class="mi-arrow">›</span></button>`);
 
   // Create new: quick access from the menu (same as the ＋ button)
   const createItems = [];
@@ -1798,7 +1801,7 @@ async function openEquipmentEditor(edit) {
         <select id="eqCategory" onchange="eqCategoryPick()">
           <option value="">— Select —</option>
           ${catNames.map((x) => `<option value="${esc(x)}" ${currentCat === x ? "selected" : ""}>${esc(x)}</option>`).join("")}
-          <option value="__custom__">＋ New category…</option>
+          ${isMaster() ? `<option value="__custom__">＋ New category…</option>` : ""}
         </select></label>
       <label class="field" id="eqCategoryCustomWrap" style="display:none"><span>New category name</span><input id="eqCategoryCustom" placeholder="Type a new category"></label>
       <label class="field"><span>Warranty expiry</span><input id="eqWarranty" type="date" value="${e && e.warranty_expiry ? e.warranty_expiry.slice(0, 10) : ""}"></label>
@@ -1988,6 +1991,13 @@ async function openUserEditor(edit, id) {
     ]);
   } catch (e) {}
   const u = edit ? state.users?.find((x) => x.id === id) : null;
+  const master = isMaster();
+  const startRole = u ? u.role : "technician";
+  const startCust = startRole === "customer";
+  // who sees which fields: customers always get the full pickers; the master may
+  // bind admin/technician to a customer (tenant) or leave them LabCare-wide.
+  const showCustFields = master || startCust;
+  const showLocDept = startCust;
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit user" : "Add user"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
@@ -1996,18 +2006,20 @@ async function openUserEditor(edit, id) {
       <label class="field"><span>Phone</span><input id="uPhone" value="${esc(u ? u.phone : "")}"></label>
       <label class="field"><span>Role</span>
         <select id="uRole" onchange="toggleCustomerSelect()">
-          ${["admin", "technician", "customer"].map((r) => `<option value="${r}" ${u && u.role === r ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("")}
+          ${(master ? ["admin", "technician", "customer"] : ["technician", "customer"])
+            .map((r) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("")}
         </select></label>
-      <div id="uCustomerFields" style="${u && u.role === "customer" ? "" : "display:none"}">
-        <label class="field"><span>Linked customer</span>
+      <div id="uCustomerFields" style="${showCustFields ? "" : "display:none"}">
+        <label class="field"><span>${master && !startCust ? "Linked customer (optional — leave empty for LabCare-wide)" : "Linked customer"}</span>
           <select id="uCustomer" onchange="onUserCustPick()">
+            ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabCare-wide (no customer) —</option>` : ""}
             ${customers.map((x) => `<option value="${x.id}" ${u && u.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
           </select></label>
-        <label class="field"><span>Linked location</span>
+        <label class="field" id="uLocationField" style="${showLocDept ? "" : "display:none"}"><span>Linked location</span>
           <select id="uLocation" onchange="onUserLocPick()">
             ${locOpts(state.locations || [], u && u.location_id, u && u.customer_id)}
           </select></label>
-        <label class="field"><span>Linked department</span>
+        <label class="field" id="uDepartmentField" style="${showLocDept ? "" : "display:none"}"><span>Linked department</span>
           <select id="uDepartment">
             ${deptOpts(state.departments || [], u && u.department_id, u && u.location_id)}
           </select></label>
@@ -2022,8 +2034,17 @@ async function openUserEditor(edit, id) {
 }
 
 function toggleCustomerSelect() {
-  const show = $("#uRole").value === "customer";
-  $("#uCustomerFields").style.display = show ? "" : "none";
+  const role = $("#uRole").value;
+  const isCustRole = role === "customer";
+  // customer accounts always need the full customer/location/department picker;
+  // master may link admin/technician to a single customer (tenant) or none (global).
+  $("#uCustomerFields").style.display = (isMaster() || isCustRole) ? "" : "none";
+  $("#uLocationField").style.display = isCustRole ? "" : "none";
+  $("#uDepartmentField").style.display = isCustRole ? "" : "none";
+  if (!isMaster()) {
+    const sel = $("#uCustomer");
+    if (sel && state.user && state.user.customer_id) sel.value = String(state.user.customer_id);
+  }
 }
 
 function onUserCustPick() {
@@ -2052,6 +2073,11 @@ async function saveUser(id) {
     body.location_id = $("#uLocation").value || null;
     body.department_id = $("#uDepartment").value || null;
     if (!body.customer_id) { toast("Linked customer is required for customer accounts", "error"); return; }
+  } else if (isMaster()) {
+    // master may bind an admin/technician to a customer (tenant admin/tech) or leave global
+    body.customer_id = $("#uCustomer").value || null;
+    body.location_id = null;
+    body.department_id = null;
   } else {
     body.customer_id = null;
     body.location_id = null;

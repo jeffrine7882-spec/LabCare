@@ -91,16 +91,33 @@ Full step-by-step: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 
 Password for all demo accounts is **`Demo123!`**
 
-| Role       | Email               |
-| ---------- | ------------------- |
-| Admin      | admin@labcare.com   |
-| Technician | aidil@labcare.com   |
-| Customer   | kavita@bioref.com   |
+| Role             | Email               |
+| ---------------- | ------------------- |
+| Master admin     | admin@labcare.com   |
+| Technician       | aidil@labcare.com   |
+| Customer         | kavita@bioref.com   |
 
 ## Key behaviour
 
-- **Roles**: Admin, Technician, Customer — customers are restricted to their
-  own organisation, location and department.
+- **Roles & multi-tenant scoping**: one shared database with strict
+  `customer_id` scoping.
+  - **Master System Admin** (`admin` with no `customer_id`, e.g.
+    `admin@labcare.com`) sees and manages everything: customers, categories,
+    onboarding/join requests and all users. Only the master can create or edit
+    admin accounts and customers.
+  - **Tenant admin** (`admin` linked to one `customer_id`) manages only their
+    own customer — its locations, departments, equipment, tickets, PM schedules
+    and users. They **cannot** create other admins or customers, cannot see
+    other organisations' data, and can only assign work to their own team or
+    LabCare's provider technicians.
+  - **Technician**: provider technicians (`customer_id NULL`) work across all
+    customers; tenant technicians (`customer_id` set) are restricted to their
+    customer.
+  - **Customer** users are restricted to their own organisation, location and
+    department.
+  - The master can create tenant admins/technicians directly (via Team & users)
+    and approve self-sign-ups; tenant admins can only create technicians and
+    customer users for their own customer.
 - **Ticket numbering**: complaints `CMP-0001…`, breakdowns `BRK-0001…`.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.
