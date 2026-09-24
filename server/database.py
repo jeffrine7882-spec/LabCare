@@ -266,6 +266,7 @@ def init_db():
     c = conn()
     c.executescript(SCHEMA)
     _migrate(c)
+    backfill_audit_history(c)
     c.commit()
     c.close()
 
@@ -289,6 +290,135 @@ def _migrate(c):
         cols = [r["name"] for r in c.execute(f"PRAGMA table_info({table})")]
         if "responsible_admin_id" not in cols:
             c.execute(f"ALTER TABLE {table} ADD COLUMN responsible_admin_id INTEGER")
+
+    # Record who closed/resolved each ticket (the "opener" is already stored as
+    # created_by / reported_by).
+    for table in ("complaints", "breakdowns"):
+        cols = [r["name"] for r in c.execute(f"PRAGMA table_info({table})")]
+        if "closed_by" not in cols:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN closed_by INTEGER")
+
+
+_STATUS_LABELS_BACKFILL = {
+    "open": "Open", "in_progress": "In Progress", "resolved": "Resolved", "closed": "Closed",
+    "reported": "Reported", "diagnosed": "Diagnosed", "on_hold": "On Hold",
+}
+
+
+def backfill_audit_history(c):
+    """Idempotent: reconstruct a ticket's opening/closing history when missing.
+
+    Seed data and pre-existing rows predate the audit trail, so this writes the
+    key events — who opened it, who it was assigned to, its status change, and who
+    resolved/closed it — straight from the ticket columns themselves.
+
+    * The "opened/reported" event is always ensured (it is the one answer users
+      always want: who opened the ticket).
+    * The "resolved by / closed by" event is always ensured for resolved/closed
+      tickets — it is the other answer users always want: who closed it.
+    * Assignment / status-transition events are only added when the ticket has no
+      real activity yet, so genuine mid-lifecycle history is never duplicated.
+    """
+    for entity in ("complaint", "breakdown"):
+        table = entity + "s"
+        for r in c.execute(f"SELECT * FROM {table}").fetchall():
+            eid = r["id"]
+            has_created = c.execute(
+                "SELECT 1 FROM audit_logs WHERE entity_type=? AND entity_id=? AND action='created'",
+                (entity, eid)).fetchone() is not None
+            has_resolution = c.execute(
+                "SELECT 1 FROM audit_logs WHERE entity_type=? AND entity_id=? AND action='resolution'",
+                (entity, eid)).fetchone() is not None
+            has_activity = c.execute(
+                "SELECT 1 FROM audit_logs WHERE entity_type=? AND entity_id=? AND action NOT IN ('created','resolution')",
+                (entity, eid)).fetchone() is not None
+            needs_created = not has_created
+            needs_resolution = bool(r["resolved_at"] and not has_resolution)
+            needs_activity = not has_activity
+
+            if needs_created or needs_activity or needs_resolution:
+                _audit_backfill_one(c, entity, r, ensure_created=needs_created,
+                                    ensure_resolution=needs_resolution,
+                                    ensure_activity=needs_activity)
+
+            # keep the ticket's stored closer in sync so the detail panel shows
+            # the same person as the history timeline
+            if r["resolved_at"] and not r["closed_by"]:
+                who_opened = r["created_by"] if entity == "complaint" else r["reported_by"]
+                closer_id = r["assigned_to"] or who_opened
+                c.execute(f"UPDATE {table} SET closed_by=? WHERE id=?",
+                          (closer_id, eid))
+
+
+def _audit_backfill_one(c, entity, r, ensure_created=True, ensure_resolution=False,
+                        ensure_activity=True):
+    def user_name(uid):
+        if not uid:
+            return None
+        row = c.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
+        return row["name"] if row else None
+
+    def writer(uid):
+        return (uid, user_name(uid) or "")
+
+    if entity == "complaint":
+        initial = "open"
+        subject = r["subject"]
+        who_opened = r["created_by"]
+        opener_label = "Opened"
+    else:
+        initial = "reported"
+        subject = (r["fault_description"] or "")[:80]
+        who_opened = r["reported_by"]
+        opener_label = "Reported"
+
+    uid, uname = writer(who_opened)
+    cur = r["status"]
+
+    # 1) opened / reported — always ensured
+    if ensure_created:
+        c.execute(
+            "INSERT INTO audit_logs (entity_type,entity_id,user_id,user_name,action,detail,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (entity, r["id"], uid, uname, "created", f"{opener_label} {r['code']} — {subject}",
+             r["created_at"]),
+        )
+
+    # 2) resolution / close (who did it) — always ensured for resolved tickets
+    if ensure_resolution and r["resolved_at"] and (cur in ("resolved", "closed")):
+        closer_id = r["closed_by"] or r["assigned_to"] or who_opened
+        c_id, c_name = writer(closer_id)
+        label = "Closed" if cur == "closed" else "Marked resolved"
+        c.execute(
+            "INSERT INTO audit_logs (entity_type,entity_id,user_id,user_name,action,detail,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (entity, r["id"], c_id, c_name, "resolution", f"{label} by {c_name}",
+             r["resolved_at"]),
+        )
+
+    # mid-lifecycle activity is only reconstructed for tickets with no live history
+    if not ensure_activity:
+        return
+
+    # 3) assignment (if any)
+    a_uid, a_name = writer(r["assigned_to"])
+    if a_uid and a_uid != uid:
+        c.execute(
+            "INSERT INTO audit_logs (entity_type,entity_id,user_id,user_name,action,detail,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (entity, r["id"], uid, uname, "assigned", f"→ {a_name}", r["created_at"]),
+        )
+
+    # 4) status change to the current status (skip if still initial)
+    if cur and cur != initial:
+        when = r["updated_at"] or r["resolved_at"] or r["created_at"]
+        c.execute(
+            "INSERT INTO audit_logs (entity_type,entity_id,user_id,user_name,action,detail,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (entity, r["id"], uid, uname, "status",
+             f"{_STATUS_LABELS_BACKFILL.get(initial, initial)} → {_STATUS_LABELS_BACKFILL.get(cur, cur)}",
+             when),
+        )
 
 
 def hash_password(pw):

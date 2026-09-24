@@ -296,6 +296,8 @@ def complaint_payload(c, row):
     d["reporter_name"] = d.get("reporter_name") or ""
     d["reporter_phone"] = d.get("reporter_phone") or ""
     d["responsible_admin_name"] = _responsible_admin_name(c, d.get("responsible_admin_id"))
+    closer = c.execute("SELECT name FROM users WHERE id=?", (d["closed_by"],)).fetchone() if d.get("closed_by") else None
+    d["closed_by_name"] = closer["name"] if closer else None
     return d
 
 
@@ -313,6 +315,8 @@ def breakdown_payload(c, row):
     d["reported_by_name"] = reporter["name"] if reporter else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
     d["responsible_admin_name"] = _responsible_admin_name(c, d.get("responsible_admin_id"))
+    closer = c.execute("SELECT name FROM users WHERE id=?", (d["closed_by"],)).fetchone() if d.get("closed_by") else None
+    d["closed_by_name"] = closer["name"] if closer else None
     return d
 
 
@@ -1492,8 +1496,14 @@ def update_complaint(cid):
             if b["status"] in ("resolved", "closed"):
                 fields.append("resolved_at=?")
                 params.append(now())
+                # record who performed the resolve/close
+                if b["status"] == "closed" or (b["status"] == "resolved" and not row["closed_by"]):
+                    fields.append("closed_by=?")
+                    params.append(u["id"])
             else:
                 fields.append("resolved_at=?")
+                params.append(None)
+                fields.append("closed_by=?")
                 params.append(None)
     # validate the responsible tenant admin against the resulting customer scope
     target_customer = b.get("customer_id", row["customer_id"])
@@ -1533,6 +1543,10 @@ def update_complaint(cid):
     if b.get("status") and b["status"] != old_status:
         audit("complaint", cid, u, "status",
               f"{STATUS_LABELS.get(old_status, old_status)} → {STATUS_LABELS.get(b['status'], b['status'])}")
+        if b["status"] == "resolved":
+            audit("complaint", cid, u, "resolution", f"Marked resolved by {u['name']}")
+        elif b["status"] == "closed":
+            audit("complaint", cid, u, "resolution", f"Closed by {u['name']}")
     for label, key in (("Subject", "subject"), ("Description", "description"),
                        ("Category", "category"), ("Priority", "priority")):
         if key in b and (old_row.get(key) or "") != (b[key] or ""):
@@ -1761,8 +1775,14 @@ def update_breakdown(bid):
         if b["status"] == "resolved":
             fields.append("resolved_at=?")
             params.append(now())
+            # first resolve records who did it; keep the original closer on re-resolve
+            if not row["closed_by"]:
+                fields.append("closed_by=?")
+                params.append(u["id"])
         else:
             fields.append("resolved_at=?")
+            params.append(None)
+            fields.append("closed_by=?")
             params.append(None)
     old_assignee = row["assigned_to"]
     old_status = row["status"]
@@ -1793,7 +1813,7 @@ def update_breakdown(bid):
         audit("breakdown", bid, u, "assigned", f"Auto-assigned {u['name']} (responded)")
     if b.get("status") and b["status"] != old_status:
         if b["status"] == "resolved":
-            audit("breakdown", bid, u, "resolution", "Marked resolved")
+            audit("breakdown", bid, u, "resolution", f"Marked resolved by {u['name']}")
         else:
             audit("breakdown", bid, u, "status",
                   f"{STATUS_LABELS.get(old_status, old_status)} → {STATUS_LABELS.get(b['status'], b['status'])}")

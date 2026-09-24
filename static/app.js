@@ -597,10 +597,11 @@ function complaintDetailHtml(c) {
       <div class="kv"><span class="k">Category</span><span class="v">${esc(c.category || "General")}</span></div>
       <div class="kv"><span class="k">Location</span><span class="v">${esc(c.location_name || "—")}</span></div>
       <div class="kv"><span class="k">Department</span><span class="v">${esc(c.department_name || "—")}</span></div>
-      <div class="kv"><span class="k">Reported by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
+      <div class="kv"><span class="k">Opened by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
       ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v"><a class="tel-link" href="${telHref(c.reporter_phone)}">${esc(c.reporter_phone)}</a></span></div>` : ""}
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
       ${c.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(c.responsible_admin_name)}</span></div>` : ""}
+      ${c.closed_by_name ? `<div class="kv"><span class="k">${c.status === "closed" ? "Closed by" : "Resolved by"}</span><span class="v">${esc(c.closed_by_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Created</span><span class="v">${fmtDate(c.created_at)}</span></div>
       ${c.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(c.resolved_at)}</span></div>` : ""}
     </div>
@@ -875,9 +876,10 @@ function breakdownDetailHtml(b) {
     <div class="section-title">Details</div>
     <div class="card">
       ${b.complaint_id ? `<div class="kv"><span class="k">Source complaint</span><span class="v" style="color:var(--brand);text-decoration:underline" onclick="navigate('complaintDetail',{id:${b.complaint_id}})">${esc("View")}</span></div>` : ""}
-      <div class="kv"><span class="k">Reported by</span><span class="v">${esc(b.reported_by_name || "—")}</span></div>
+      <div class="kv"><span class="k">Opened by</span><span class="v">${esc(b.reported_by_name || "—")}</span></div>
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(b.assigned_to_name || "Unassigned")}</span></div>
       ${b.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(b.responsible_admin_name)}</span></div>` : ""}
+      ${b.closed_by_name ? `<div class="kv"><span class="k">Resolved by</span><span class="v">${esc(b.closed_by_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Reported</span><span class="v">${fmtDate(b.created_at)}</span></div>
       ${b.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(b.resolved_at)}</span></div>` : ""}
       ${b.root_cause ? `<div class="kv"><span class="k">Root cause</span><span class="v">${esc(b.root_cause)}</span></div>` : ""}

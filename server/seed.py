@@ -216,6 +216,11 @@ def seed():
         portals,
     )
 
+    # Reconstruct opening/assignment/status/resolution history for the freshly
+    # seeded tickets so the per-ticket activity log is populated on first run.
+    from database import backfill_audit_history
+    backfill_audit_history(c)
+
     c.commit()
     c.close()
     print("Seed complete: locations, departments, users, customers, equipment, complaints, breakdowns created.")
