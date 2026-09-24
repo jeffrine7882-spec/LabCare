@@ -82,6 +82,7 @@ Full step-by-step: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 | `LABCARE_DB`           | `<server>/labcare.db`         | SQLite database file                      |
 | `LABCARE_TICKET_CAP`   | `2000`                        | max tickets per type (FIFO)               |
 | `LABCARE_HISTORY_LOG`  | `<server>/ticket_history.log` | append-only archive of evicted tickets    |
+| `LABCARE_PORTAL_URL`   | *(derived from request)*      | public base URL encoded into QR codes, e.g. `https://labcareassist.netlify.app` |
 
 ## Demo accounts
 

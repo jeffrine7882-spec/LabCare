@@ -2456,12 +2456,21 @@ def _portal_qr_png(token, label):
     import io as _io
     import qrcode as _qr
     from qrcode.image.pil import PilImage
-    base = (request.host_url or "http://localhost:8000/").rstrip("/")
-    url = f"{base}/portal.html?t={token}"
+    base = (os.environ.get("LABCARE_PORTAL_URL") or "").strip() or _public_base()
+    url = f"{base.rstrip('/')}/portal.html?t={token}"
     img = _qr.make(url)
     buf = _io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _public_base():
+    """Best-effort public origin for links that users open on their own devices
+    (QR codes). Prefer an explicit LABCARE_PORTAL_URL; otherwise derive from the
+    Host header, forcing https when the request arrived via a TLS proxy."""
+    scheme = "https" if request.headers.get("X-Forwarded-Proto") == "https" else request.scheme
+    host = request.headers.get("X-Forwarded-Host") or request.host
+    return f"{scheme}://{host}"
 
 
 @app.get("/api/portal-links")
