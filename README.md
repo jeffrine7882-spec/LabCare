@@ -21,6 +21,7 @@ labcare/
 │   ├── app.js          # client logic
 │   ├── styles.css      # responsive styles (mobile + desktop)
 │   ├── manifest.json   # PWA manifest
+│   ├── vercel.json     # InsForge hosting rewrites (/api -> compute, /portal)
 │   └── icons/icon.svg
 ├── Dockerfile          # container build for InsForge compute
 └── requirements.txt
@@ -32,7 +33,9 @@ LabCare runs on **InsForge**: PostgreSQL (`database.insforge.app`) for all data,
 plus a Flask container on InsForge **compute**. The same `database.py` keeps
 working against plain SQLite for local development.
 
-- **Live API + frontend (compute container):**
+- **Frontend (InsForge hosting):** `https://yj675q8e.insforge.site`
+  (static app; `/api/*` is rewrite-proxied to the compute container below).
+- **Compute container (Flask API, also serves static):**
   `https://labcare-api-ee5bd3a7-8f78-4005-87ea-6c57ff5728aa.fly.dev`
 - **Postgres:** host `yj675q8e.ap-southeast.database.insforge.app` (region
   `ap-southeast`). The container connects using `LABCARE_DATABASE_URL`
@@ -40,6 +43,8 @@ working against plain SQLite for local development.
 - **Fresh data policy:** the database starts empty and is seeded with only the
   **Master System Admin** account. Customers, users, equipment and tickets are
   created in-app.
+- **Redeploy:** `npx -y @insforge/cli compute deploy . --name labcare-api --port 8000 --region sin --env-file .env.production`
+  (backend) and `npx -y @insforge/cli deployments deploy ./static` (frontend).
 
 ## Running locally (development)
 
