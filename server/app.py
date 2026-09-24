@@ -1851,7 +1851,7 @@ def update_complaint(cid):
 
 @app.delete("/api/complaints/<int:cid>")
 def delete_complaint(cid):
-    u, err, code = require_role("admin")
+    u, err, code = require_master()
     if err:
         return err, code
     c = conn()
@@ -1859,10 +1859,6 @@ def delete_complaint(cid):
     if not row:
         c.close()
         return jsonify({"error": "Not found"}), 404
-    err_t, code_t = tenant_guard(u, row["customer_id"], c)
-    if err_t:
-        c.close()
-        return err_t, code_t
     # nested breakdowns lose their source-complaint link, not themselves
     c.execute("UPDATE breakdowns SET complaint_id=NULL WHERE complaint_id=?", (cid,))
     c.execute("DELETE FROM comments WHERE entity_type='complaint' AND entity_id=?", (cid,))
@@ -2125,7 +2121,7 @@ def update_breakdown(bid):
 
 @app.delete("/api/breakdowns/<int:bid>")
 def delete_breakdown(bid):
-    u, err, code = require_role("admin")
+    u, err, code = require_master()
     if err:
         return err, code
     c = conn()
@@ -2133,10 +2129,6 @@ def delete_breakdown(bid):
     if not row:
         c.close()
         return jsonify({"error": "Not found"}), 404
-    err_t, code_t = tenant_guard(u, row["customer_id"], c)
-    if err_t:
-        c.close()
-        return err_t, code_t
     c.execute("DELETE FROM comments WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM attachments WHERE entity_type='breakdown' AND entity_id=?", (bid,))

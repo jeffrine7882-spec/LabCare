@@ -633,7 +633,7 @@ function complaintDetailHtml(c) {
       ${canEdit ? `<div class="action-panel" style="margin-top:10px">
         <button class="btn btn-ghost btn-sm" onclick="openComplaintEditor(true)">✏️ Edit</button>
       </div>` : ""}
-      ${isAdmin() ? `<div class="action-panel" style="margin-top:10px">
+      ${isMaster() ? `<div class="action-panel" style="margin-top:10px">
         <button class="btn btn-danger btn-sm" onclick="deleteTicket('complaint',${c.id})">🗑 Delete ticket</button>
       </div>` : ""}
     </div>
@@ -911,7 +911,7 @@ function breakdownDetailHtml(b) {
       ${isTech() ? `<div class="action-panel" style="margin-top:10px">
         <button class="btn btn-ghost btn-sm" onclick="openBreakdownEditor(true)">✏️ Edit</button>
       </div>` : ""}
-      ${isAdmin() ? `<div class="action-panel" style="margin-top:10px">
+      ${isMaster() ? `<div class="action-panel" style="margin-top:10px">
         <button class="btn btn-danger btn-sm" onclick="deleteTicket('breakdown',${b.id})">🗑 Delete ticket</button>
       </div>` : ""}
     </div>
