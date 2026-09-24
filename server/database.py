@@ -51,6 +51,16 @@ CREATE TABLE IF NOT EXISTS customers (
     created_at TEXT NOT NULL
 );
 
+-- Which customers a tenant admin cares for. A tenant admin's PRIMARY customer is
+-- stored on users.customer_id; extra customers are linked here. Together they
+-- form the admin's full scope (their "care list").
+CREATE TABLE IF NOT EXISTS admin_customer_links (
+    admin_id INTEGER NOT NULL,
+    customer_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (admin_id, customer_id)
+);
+
 CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     customer_id INTEGER NOT NULL,
@@ -297,6 +307,15 @@ def _migrate(c):
         cols = [r["name"] for r in c.execute(f"PRAGMA table_info({table})")]
         if "closed_by" not in cols:
             c.execute(f"ALTER TABLE {table} ADD COLUMN closed_by INTEGER")
+
+    # Multi-customer tenant admins: each tenant admin's primary customer
+    # (users.customer_id) is mirrored into the care-list link table so their full
+    # scope is consistent everywhere.
+    for row in c.execute(
+            "SELECT id, customer_id FROM users WHERE role='admin' AND customer_id IS NOT NULL").fetchall():
+        c.execute(
+            "INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
+            (row["id"], row["customer_id"], now()))
 
 
 _STATUS_LABELS_BACKFILL = {

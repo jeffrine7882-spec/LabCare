@@ -1513,6 +1513,7 @@ async function reviewJoin(id, decision) {
 // ---------------------------------------------------------------- Profile & More
 function viewProfile(v) {
   const u = state.user;
+  const isTenantAdmin = u && u.role === "admin" && u.customer_id;
   v.innerHTML = `
     <div class="card" style="text-align:center;padding:26px 16px">
       <div class="c-avatar" style="width:72px;height:72px;font-size:26px;margin:0 auto">${esc(initials(u.name))}</div>
@@ -1528,9 +1529,78 @@ function viewProfile(v) {
       ${u.location_name ? `<div class="kv"><span class="k">Location</span><span class="v">${esc(u.location_name)}</span></div>` : ""}
       ${u.department_name ? `<div class="kv"><span class="k">Department</span><span class="v">${esc(u.department_name)}</span></div>` : ""}
     </div>
+    ${isTenantAdmin ? `
+    <div class="section-title">Customer organisations I care for</div>
+    <div class="card">
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 10px">Pick which customer organisations you manage. You can add technicians and view tickets, equipment and reports for every organisation on your list.</p>
+      <div id="careListHost"></div>
+    </div>` : ""}
     <div class="action-panel" style="margin-top:16px">
       <button class="btn btn-danger" onclick="logout()">Sign out</button>
     </div>`;
+  if (isTenantAdmin) renderCareList();
+}
+
+// ---- Tenant-admin self-select care list ----
+async function renderCareList() {
+  const host = $("#careListHost");
+  if (!host) return;
+  host.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
+  let mine = null, dir = null;
+  try {
+    [mine, dir] = await Promise.all([
+      API.get("/api/my-customers"), API.get("/api/customer-directory"),
+    ]);
+  } catch (e) {
+    host.innerHTML = `<div class="empty"><p>Couldn't load your organisations: ${esc(e.message)}</p></div>`;
+    return;
+  }
+  const linked = mine.customers || [];
+  const myIds = new Set((mine.customer_ids || []).map(String));
+  const others = (dir || []).filter((x) => !myIds.has(String(x.id)));
+  host.innerHTML = `
+    <div class="chip-row" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px">
+      ${linked.map((x) => `
+        <span class="chip" style="display:inline-flex;align-items:center;gap:8px;background:#ede9fe;color:#6d28d9;padding:6px 12px;font-size:12px">
+          ${esc(x.name)}
+          ${String(x.id) === String(mine.primary_id)
+            ? `<span class="badge" style="background:#f1eefc;color:#7c6af0">primary</span>`
+            : `<button class="chip-x" onclick="removeCareCustomer(${x.id})">✕</button>`}
+        </span>`).join("")}
+    </div>
+    ${others.length ? `
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="careAddSel" style="flex:1;min-width:200px">
+          ${others.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("")}
+        </select>
+        <button class="btn btn-primary-2" style="padding:9px 14px" onclick="addCareCustomer(document.getElementById('careAddSel').value)">＋ Add to my list</button>
+      </div>`
+    : `<p style="font-size:13px;color:var(--ink-soft);margin:0">You already care for every customer organisation.</p>`}`;
+}
+
+async function addCareCustomer(id) {
+  if (!id) return;
+  showLoading();
+  try {
+    await API.post("/api/my-customers/" + id);
+    toast("Added to your customer list", "success");
+    state.user = await API.get("/api/me");
+    await renderCareList();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function removeCareCustomer(id) {
+  confirmDialog("Remove organisation", "Deselecting this organisation stops you from managing its users, tickets and equipment.", "Remove", async () => {
+    showLoading();
+    try {
+      await API.del("/api/my-customers/" + id);
+      toast("Removed from your customer list", "success");
+      state.user = await API.get("/api/me");
+      await renderCareList();
+    } catch (e) { toast(e.message, "error"); }
+    hideLoading();
+  });
 }
 
 function viewMore(v) {
@@ -2136,10 +2206,11 @@ function toggleCustomerSelect() {
       ? "Linked customer (required)"
       : "Linked customer (optional — leave empty for LabCare-wide)";
   } else {
-    // tenant staff (admin or technician) can only create for their own customer
+    // tenant staff can create for any organisation in their care list
+    // (which the backend scopes /api/customers to). Default to their primary.
     $("#uCustomerFields").style.display = "";
     const sel = $("#uCustomer");
-    if (sel && state.user && state.user.customer_id) sel.value = String(state.user.customer_id);
+    if (sel && !sel.value && state.user && state.user.customer_id) sel.value = String(state.user.customer_id);
   }
   $("#uLocationField").style.display = isCustRole ? "" : "none";
   $("#uDepartmentField").style.display = isCustRole ? "" : "none";
@@ -2185,7 +2256,9 @@ async function saveUser(id) {
     body.department_id = null;
     if ($("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else {
-    body.customer_id = null;
+    // tenant staff: technicians/customer users go under the customer they picked
+    // (defaults to their primary customer)
+    body.customer_id = $("#uCustomer") ? $("#uCustomer").value || (state.user && state.user.customer_id) || null : null;
     body.location_id = null;
     body.department_id = null;
   }
@@ -3019,6 +3092,7 @@ Object.assign(window, {
   openComplaintEditor, saveComplaint, openBreakdownEditor, saveBreakdown,
   openEquipmentEditor, saveEquipment, deleteEquipment, openCustomerEditor, saveCustomer, deleteCustomer,
   openUserEditor, saveUser, deleteUser, toggleCustomerSelect, logout,
+  renderCareList, addCareCustomer, removeCareCustomer,
   viewOnboarding, reviewJoin, toggleAlertSound, playAlertSound,
   uploadPhotos, viewPhoto, deleteAttachment, downloadReport, openExportSheet,
   openNotifications, openNotif, markAllRead,
