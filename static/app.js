@@ -2144,8 +2144,10 @@ async function openUserEditor(edit, id) {
   const startRole = u ? u.role : "technician";
   const startCust = startRole === "customer";
   // who sees which fields: customers always get the full pickers; the master may
-  // bind admin/technician to a customer (tenant) or leave them LabCare-wide.
-  const showCustFields = master || startCust;
+  // bind admin/technician to a customer (tenant) or leave them LabCare-wide;
+  // non-master tenant admins always pick which of their care-list customers the
+  // new account belongs to.
+  const showCustFields = master || startCust || (isAdmin() && !master);
   const showLocDept = startCust;
   // responsible tenant admin: only the master picks it (tenant staff are auto-assigned by the backend)
   const startCustId = u && u.customer_id ? u.customer_id : (state.user && !master ? state.user.customer_id : "");
@@ -2170,7 +2172,7 @@ async function openUserEditor(edit, id) {
         <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked customer (optional — leave empty for LabCare-wide)" : "Linked customer"}</span>
           <select id="uCustomer" onchange="onUserCustPick()">
             ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabCare-wide (no customer) —</option>` : ""}
-            ${customers.map((x) => `<option value="${x.id}" ${u && u.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+            ${customers.map((x) => `<option value="${x.id}" ${String(x.id) === String(u && u.customer_id ? u.customer_id : (!master ? startCustId : null)) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
           </select></label>
         <label class="field" id="uLocationField" style="${showLocDept ? "" : "display:none"}"><span>Linked location</span>
           <select id="uLocation" onchange="onUserLocPick()">
