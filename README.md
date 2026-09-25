@@ -14,7 +14,6 @@ labcare/
 │   ├── report.py       # ReportLab PDF generation
 │   ├── mailer.py       # email outbox (SMTP or local outbox.log)
 │   ├── seed.py         # first-run seed (Master System Admin only)
-│   ├── seed_minimal.py # reset the database to the minimal demo dataset
 │   ├── run.py          # production entry point (Waitress)
 │   └── wsgi.py         # WSGI entry point for external servers
 ├── static/
@@ -44,11 +43,6 @@ working against plain SQLite for local development.
 - **Fresh data policy:** the database starts empty and is seeded with only the
   **Master System Admin** account. Customers, users, equipment and tickets are
   created in-app.
-- **Minimal demo dataset:** `server/seed_minimal.py` wipes every table and
-  recreates a single organisation (one tenant admin, one technician, one
-  customer user, one piece of equipment, one complaint, one breakdown and one
-  portal link) — run it with the InsForge connection string:
-  `LABCARE_DATABASE_URL="$(npx -y @insforge/cli db connection-string)" python3 server/seed_minimal.py`.
 - **Redeploy:** `./deploy.sh` (backend), `./deploy.sh frontend` (frontend),
   `./deploy.sh all` (both), `./deploy.sh push` (git). The script recovers
   automatically from a fresh sandbox (installs flyctl, re-fetches the Postgres
@@ -87,6 +81,28 @@ waitress-serve --listen=0.0.0.0:8000 wsgi:application
 gunicorn -b 0.0.0.0:8000 wsgi:application
 ```
 
+### Reverse proxy + HTTPS (nginx / Let's Encrypt)
+
+See [`deploy/DEPLOY.md`](deploy/DEPLOY.md) — includes an nginx site config
+(`deploy/nginx-labcare.conf`) and a systemd unit (`deploy/labcare.service`)
+for a full production setup. Summary: run the app with systemd on
+`127.0.0.1:8000`, put nginx in front, and run `certbot --nginx -d your.host`
+for a free auto-renewing TLS certificate. Set `LABCARE_SECURE_COOKIES=1`
+(recommended behind HTTPS) so session cookies are marked `Secure`.
+
+### Deploying on Netlify (frontend) + backend VPS
+
+The chosen production target is `https://labcareassist.netlify.app`:
+
+- **Netlify** hosts the static frontend (`static/` is the publish dir; see
+  [`netlify.toml`](netlify.toml) which proxies all `/api/*` calls to your
+  backend).
+- **Your server** runs the Flask + Waitress backend (Docker image in
+  [`deploy/Dockerfile`](deploy/Dockerfile), or the systemd unit) behind nginx
+  with `certbot` TLS.
+
+Full step-by-step: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
+
 ### Environment variables
 
 | Variable               | Default                       | Purpose                                   |
@@ -111,14 +127,9 @@ Password for the account below is **`Demo123!`**.
 | Master System Admin | admin@labcare.com |
 
 The InsForge database starts **fresh**: only the Master System Admin exists.
-The usual flow is:
-
-1. the Master creates a **tenant admin** account under **Admin → Team & users**
-   (no organisation link needed);
-2. that tenant admin signs in and **creates their own organisation** under
-   **Organizations → Customers** — it becomes theirs automatically;
-3. they then add their locations, departments, equipment, team members and
-   tickets inside it.
+Create customer organisations, then their tenant admins, technicians, users,
+locations, departments, equipment and tickets in-app under **Admin → Customer
+organisations** and **Admin → Team & users**.
 
 ## Key behaviour
 
@@ -127,21 +138,13 @@ The usual flow is:
   - **Master System Admin** — a single, identity-bound account
     (`admin@labcare.com`) that sees and manages everything: customers,
     categories, onboarding/join requests and all users. Only this account can
-    create or edit admin accounts and delete organisations; it may also create
-    organisations directly and link a tenant admin to one. It can never be
-    disabled, demoted or linked to a customer.
+    create or edit admin accounts and customers, and it can never be disabled,
+    demoted or linked to a customer. Every other admin is a tenant admin.
   - **Tenant admin** (`admin` linked to one `customer_id`) manages only their
-    own organisation — its complaints, breakdowns, equipment, locations,
-    departments, PM schedules, portal links and team members. Their scope is
-    exactly that one organisation: they **cannot** create a second
-    organisation, cannot create or edit any admin account, cannot see or edit
-    other organisations' data, and can only assign work to their own team or
-    LabCare's provider technicians.
-  - **Tenant admin without an organisation** — an admin account the master
-    created without linking it. It has **no access to any data at all** until
-    it creates its own organisation (Dashboard is empty, every list is empty,
-    writes are refused). Creating an organisation links the account to it and
-    makes it that organisation's tenant admin.
+    own customer — its locations, departments, equipment, tickets, PM schedules
+    and users. They **cannot** create or edit any admin account, cannot create
+    customers, cannot see other organisations' data, and can only assign work
+    to their own team or LabCare's provider technicians.
   - **Technician**: provider technicians (`customer_id NULL`) work across all
     customers; tenant technicians (`customer_id` set) are restricted to their
     customer.
@@ -151,13 +154,13 @@ The usual flow is:
     and approve self-sign-ups; tenant admins can only create technicians and
     customer users for their own customer.
 - **Responsible tenant admin**: every user, piece of equipment, complaint and
-  breakdown carries an explicit `responsible_admin_id` — the tenant admin
-  responsible for that record. The master (and provider staff) see a
-  *Responsible tenant admin* picker on each form and the choice is validated
-  server-side (must be an active admin of the record's organisation). When a
-  customer has exactly one tenant admin it is filled in automatically; with
-  several, one must be chosen explicitly; tenant admins/technicians are always
-  assigned automatically (themselves or their organisation's admin).
+  breakdown carries an explicit `responsible_admin_id` — the tenant admin who
+  "cares for" that record. The master (and provider staff) see a *Responsible
+  tenant admin* picker on each form and the choice is validated server-side
+  (must be an active admin of the record's organisation). When a customer has
+  exactly one tenant admin it is filled in automatically; with several, one must
+  be chosen explicitly; tenant admins/technicians are always assigned
+  automatically (themselves or their customer's admin).
 - **Ticket numbering**: complaints `CMP-0001…`, breakdowns `BRK-0001…`.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.
@@ -172,6 +175,13 @@ The usual flow is:
   preference. The VAPID keypair lives in [`server/vapid.json`](server/vapid.json)
   (override with `LABCARE_VAPID_PRIVATE`; the public key for clients is derived
   from it). `pywebpush` sends one push per recipient whenever `notify()` runs.
+- **Native mobile alerts (phone rings)**: an [Expo app](mobile/README.md) signs
+  into LabCare and receives every bell notification via **Firebase Cloud
+  Messaging**, so the phone rings even with the browser closed or the phone
+  locked. Backend side (`app_devices` table + `server/apppush.py` + the
+  `/api/app/*` endpoints) is implemented; enabling it only needs Firebase
+  project credentials (`LABCARE_FCM_SERVICE_JSON` + `LABCARE_FCM_PROJECT_ID`).
+  See [`mobile/README.md`](mobile/README.md) for the one-time setup.
 
 ## Data
 

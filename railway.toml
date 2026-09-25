@@ -1,0 +1,23 @@
+# Railway backend — one-command alternative to a VPS/Docker.
+#   railway up   (from this repo root)  → instantly a public HTTPS URL.
+#
+# Railway runs the Flask+Waitress app; the persistent volume holds SQLite
+# + the ticket history log so data survives redeploys.
+# Point netlify.toml's /api proxy at the URL Railway gives you.
+
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+# Waitress already binds 0.0.0.0:$PORT (run.py reads the PORT env var that
+# Railway injects automatically).
+startCommand = "cd server && python3 run.py"
+healthcheckPath = "/api/ping"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Per-env overrides live in Railway's dashboard (not here) — set:
+#   LABCARE_DB=/data/labcare.db
+#   LABCARE_HISTORY_LOG=/data/ticket_history.log
+#   LABCARE_SECURE_COOKIES=1
+# and attach a volume mounted at /data.
