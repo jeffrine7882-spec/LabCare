@@ -66,52 +66,51 @@ jobs:
           PROD: https://yj675q8e.ap-southeast.insforge.app
         run: |
           set -euo pipefail
-          login_body="$(curl -s -w '\n%{http_code}' -X POST "$PROD/api/login" \
+          login_code="$(curl -sS --noproxy '*' -o /tmp/login.json -w '%{http_code}' \
+            --retry 5 --retry-all-errors --retry-delay 3 -X POST "$PROD/api/login" \
             -H 'Content-Type: application/json' \
             -d '{"email":"admin@labcare.com","password":"Demo123!"}')"
-          login_json="$(echo "$login_body" | head -n -1)"
-          login_code="$(echo "$login_body" | tail -n 1)"
-          tok="$(echo "$login_json" | jq -r '.token // empty')"
-          [ -n "$tok" ] || { echo "::error title=login failed::HTTP $login_code: $login_json"; exit 1; }
+          tok="$(jq -r '.token // empty' /tmp/login.json)"
+          [ -n "$tok" ] || { echo "::error title=login failed::HTTP $login_code: $(cat /tmp/login.json)"; exit 1; }
           echo "::notice::login OK (HTTP $login_code)"
 
-          code="$(curl -s -o /dev/null -w '%{http_code}' "$PROD/api/portal/deadbeef0000/events")"
+          code="$(curl -sS --noproxy '*' --retry 5 --retry-all-errors --retry-delay 3 -o /dev/null -w '%{http_code}' "$PROD/api/portal/deadbeef0000/events")"
           [ "$code" = "404" ] || { echo "::error::unknown portal token must 404, got $code"; exit 1; }
           echo "::notice::unknown portal token -> 404 (route deployed)"
 
-          cid="$(curl -sf -X POST "$PROD/api/customers" -H "Authorization: Bearer $tok" \
+          cid="$(curl -sSf --noproxy '*' --retry 5 --retry-all-errors --retry-delay 3 -X POST "$PROD/api/customers" -H "Authorization: Bearer $tok" \
             -H 'Content-Type: application/json' -d '{"name":"Siren Probe Clinic"}' | jq -r .id)"
           echo "CID=$cid" >> "$GITHUB_ENV"
 
-          link_json="$(curl -sf -X POST "$PROD/api/portal-links" -H "Authorization: Bearer $tok" \
+          link_json="$(curl -sSf --noproxy '*' --retry 5 --retry-all-errors --retry-delay 3 -X POST "$PROD/api/portal-links" -H "Authorization: Bearer $tok" \
             -H 'Content-Type: application/json' -d "{\"customer_id\": $cid, \"label\": \"siren probe\"}")"
           ptok="$(echo "$link_json" | jq -r .token)"
           lid="$(echo "$link_json" | jq -r .id)"
           echo "LID=$lid" >> "$GITHUB_ENV"
 
-          cmp_json="$(curl -sf -X POST "$PROD/api/portal/$ptok/complaints" -H 'Content-Type: application/json' \
+          cmp_json="$(curl -sSf --noproxy '*' --retry 5 --retry-all-errors --retry-delay 3 -X POST "$PROD/api/portal/$ptok/complaints" -H 'Content-Type: application/json' \
             -d '{"kind":"complaint","name":"Probe","phone":"0123456789","subject":"siren probe","priority":"low"}')"
           eid="$(echo "$cmp_json" | jq -r .id)"
           echo "EID=$eid" >> "$GITHUB_ENV"
           echo "::notice::probe complaint $(echo "$cmp_json" | jq -r .code) created via portal"
 
-          seed="$(curl -sf "$PROD/api/portal/$ptok/events" | jq -r .latest_id)"
-          n_own="$(curl -sf "$PROD/api/portal/$ptok/events?since_id=$seed" | jq '.events | length')"
+          seed="$(curl -sSf --noproxy '*' --retry 5 --retry-all-errors --retry-delay 3 "$PROD/api/portal/$ptok/events" | jq -r .latest_id)"
+          n_own="$(curl -sSf --noproxy '*' --retry 5 --retry-all-errors --retry-delay 3 "$PROD/api/portal/$ptok/events?since_id=$seed" | jq '.events | length')"
           [ "$n_own" = "0" ] || { echo "::error::reporter's own submission must be silent"; exit 1; }
           echo "::notice::reporter's own submission silent OK (seed=$seed)"
 
-          curl -sf -X POST "$PROD/api/comments" -H "Authorization: Bearer $tok" \
+          curl -sSf --noproxy '*' --retry 5 --retry-all-errors --retry-delay 3 -X POST "$PROD/api/comments" -H "Authorization: Bearer $tok" \
             -H 'Content-Type: application/json' \
             -d "{\"entity_type\":\"complaint\",\"entity_id\":$eid,\"text\":\"Probe reply from staff.\"}" > /dev/null
 
-          ev1="$(curl -sf "$PROD/api/portal/$ptok/events?since_id=$seed")"
+          ev1="$(curl -sSf --noproxy '*' --retry 5 --retry-all-errors --retry-delay 3 "$PROD/api/portal/$ptok/events?since_id=$seed")"
           n1="$(echo "$ev1" | jq '.events | length')"
           [ "$n1" -ge 1 ] || { echo "::error::staff comment must surface; got $ev1"; exit 1; }
           echo "$ev1" | jq -e '.events[] | select(.action=="comment" and (.detail | contains("Probe reply")))' > /dev/null \
             || { echo "::error::comment event malformed: $ev1"; exit 1; }
           echo "::notice::staff comment surfaced OK ($n1 event(s))"
 
-          n_quiet="$(curl -sf "$PROD/api/portal/$ptok/events?since_id=$(echo "$ev1" | jq -r .latest_id)" | jq '.events | length')"
+          n_quiet="$(curl -sSf --noproxy '*' --retry 5 --retry-all-errors --retry-delay 3 "$PROD/api/portal/$ptok/events?since_id=$(echo "$ev1" | jq -r .latest_id)" | jq '.events | length')"
           [ "$n_quiet" = "0" ] || { echo "::error::feed must be quiet with nothing new"; exit 1; }
           echo "::notice::quiet-when-nothing-new OK"
 
