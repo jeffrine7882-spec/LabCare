@@ -157,9 +157,9 @@ const roleLabel = (u) => {
 const roleBadge = (u) => {
   if (!u || !u.role) return "";
   if (u.role === "admin") {
-    return u.customer_id
-      ? `<span class="chip chip-tenant">Tenant admin</span>`
-      : `<span class="chip chip-master">Master admin</span>`;
+    return (u.email || "").toLowerCase() === "admin@labcare.com"
+      ? `<span class="chip chip-master">Master admin</span>`
+      : `<span class="chip chip-tenant">Tenant admin</span>`;
   }
   return roleChip(u.role);
 };
