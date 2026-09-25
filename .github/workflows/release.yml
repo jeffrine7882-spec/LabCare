@@ -40,21 +40,26 @@ jobs:
           set -euo pipefail
           SDKREF="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           [ -d "$SDKREF" ] || { echo "::error::Android SDK not found at $SDKREF"; exit 1; }
-          CMDLINE="$SDKREF/cmdline-tools/latest/bin/sdkmanager"
+          echo "SDKREF=$SDKREF"
+          ls "$SDKREF" || true
           mkdir -p "$ANDROID_SDK/build-tools" "$ANDROID_SDK/platform"
-          bt="$(ls "$SDKREF/build-tools" 2>/dev/null | grep -E '^33\.' | sort -V | tail -1 || true)"
+          # any 33+ build-tools works for aapt2/d8/apksigner on this app
+          bt="$(ls "$SDKREF/build-tools" 2>/dev/null | sort -V | tail -1 || true)"
           if [ -z "$bt" ]; then
-            echo "Installing build-tools;33.0.2"
-            yes | "$CMDLINE" "build-tools;33.0.2" > /dev/null 2>&1 || yes | "$CMDLINE" "build-tools;33.0.2"
-            bt="$(ls "$SDKREF/build-tools" | grep -E '^33\.' | sort -V | tail -1)"
+            echo "installing build-tools;33.0.2"
+            "$SDKREF/cmdline-tools/latest/bin/sdkmanager" "build-tools;33.0.2"
+            bt="$(ls "$SDKREF/build-tools" | sort -V | tail -1)"
           fi
-          if [ ! -d "$SDKREF/platforms/android-33" ]; then
-            echo "Installing platform android-33"
-            yes | "$CMDLINE" "platforms;android-33" > /dev/null 2>&1 || yes | "$CMDLINE" "platforms;android-33"
+          [ -n "$bt" ] || { echo "::error::no Android build-tools available"; exit 1; }
+          plat=""
+          [ -d "$SDKREF/platforms/android-33" ] && plat="android-33" || true
+          if [ -z "$plat" ]; then
+            plat="$(ls "$SDKREF/platforms" 2>/dev/null | sort -V | tail -1 || true)"
           fi
+          [ -n "$plat" ] || { echo "::error::no Android platform available"; exit 1; }
           ln -sfn "$SDKREF/build-tools/$bt" "$ANDROID_SDK/build-tools/android-13"
-          ln -sfn "$SDKREF/platforms/android-33" "$ANDROID_SDK/platform/android-13"
-          echo "::notice::Android SDK ready (build-tools $bt, platform 33)"
+          ln -sfn "$SDKREF/platforms/$plat" "$ANDROID_SDK/platform/android-13"
+          echo "::notice::Android SDK ready (build-tools $bt, platform $plat)"
 
       - name: Build + sign the APK
         run: |
