@@ -3540,18 +3540,35 @@ async function loadJoinOptions() {
 
 function onJoinCust() {
   const cust = $("#jnCustomer").value;
-  const locs = (state.signup?.locations || []).filter((l) => String(l.customer_id) === String(cust));
-  $("#jnLocation").innerHTML = `<option value="">— Select location/department —</option>` + locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  const locs = cust ? (state.signup?.locations || []).filter((l) => String(l.customer_id) === String(cust)) : [];
+  let opts = `<option value="">— Select location/department —</option>`;
+  if (cust) {
+    opts += locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+    opts += `<option value="__new__">＋ Create new location/department…</option>`;
+  }
+  $("#jnLocation").innerHTML = opts;
+  $("#jnLocation").value = "";
+  if ($("#jnNewLocationWrap")) $("#jnNewLocationWrap").classList.add("hidden");
+  if ($("#jnNewLocation")) $("#jnNewLocation").value = "";
   if ($("#jnDepartment")) $("#jnDepartment").innerHTML = `<option value="">— Select department —</option>`;
 }
 
 function onJoinLoc() {
   const loc = $("#jnLocation").value;
-  const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(loc));
-  const dId = depts[0]?.id || loc;
-  if ($("#jnDepartment")) {
-    $("#jnDepartment").innerHTML = `<option value="${dId}" selected>— Select department —</option>`;
-    $("#jnDepartment").value = String(dId);
+  const isNew = loc === "__new__";
+  if ($("#jnNewLocationWrap")) {
+    $("#jnNewLocationWrap").classList.toggle("hidden", !isNew);
+    if (isNew && $("#jnNewLocation")) $("#jnNewLocation").focus();
+  }
+  if (!isNew && loc) {
+    const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(loc));
+    const dId = depts[0]?.id || loc;
+    if ($("#jnDepartment")) {
+      $("#jnDepartment").innerHTML = `<option value="${dId}" selected>— Select department —</option>`;
+      $("#jnDepartment").value = String(dId);
+    }
+  } else if ($("#jnDepartment")) {
+    $("#jnDepartment").innerHTML = `<option value="">— Select department —</option>`;
   }
 }
 
@@ -3584,15 +3601,29 @@ $("#joinForm").addEventListener("submit", async (e) => {
   };
   if (role === "customer") {
     body.customer_id = $("#jnCustomer").value;
-    body.location_id = $("#jnLocation").value;
-    const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(body.location_id));
-    body.department_id = $("#jnDepartment")?.value || depts[0]?.id || body.location_id;
+    const locVal = $("#jnLocation").value;
+    if (locVal === "__new__") {
+      const newLocName = ($("#jnNewLocation")?.value || "").trim();
+      if (!newLocName) {
+        const el = $("#joinError");
+        el.textContent = "Please enter the new location/department name";
+        el.classList.remove("hidden");
+        return;
+      }
+      body.new_location_name = newLocName;
+    } else {
+      body.location_id = locVal;
+      const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(body.location_id));
+      body.department_id = $("#jnDepartment")?.value || depts[0]?.id || body.location_id;
+    }
   }
   try {
     const res = await API.post("/api/signup", body);
     $("#joinOk").textContent = res.message || "Submitted for approval ✓";
     $("#joinOk").classList.remove("hidden");
     $("#joinForm").reset();
+    if ($("#jnNewLocationWrap")) $("#jnNewLocationWrap").classList.add("hidden");
+    if ($("#jnNewLocation")) $("#jnNewLocation").value = "";
     $("#jnCustomerBlock").classList.remove("hidden");
   } catch (err) {
     const el = $("#joinError");

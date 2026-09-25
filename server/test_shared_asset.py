@@ -202,6 +202,66 @@ class SharedAssetAndLocationTest(unittest.TestCase):
         self.assertEqual(c2_eq[0]["name"], "Centrifuge")
         self.assertEqual(c2_eq[0]["serial_number"], "SN-002")
 
+    def test_signup_create_new_location_department(self):
+        # 1. Create organization
+        c1 = self.client.post("/api/customers", json={"name": "Global Health"}).get_json()["id"]
+
+        # 2. Signup requesting a brand new location/department name
+        res = self.client.post("/api/signup", json={
+            "name": "Dr. Sarah",
+            "email": "sarah@globalhealth.test",
+            "password": "password123",
+            "role": "customer",
+            "customer_id": c1,
+            "new_location_name": "Genomics Core",
+        })
+        self.assertEqual(res.status_code, 201)
+
+        # 3. Verify location and department were created with identical names
+        locs = self.client.get(f"/api/locations?customer_id={c1}").get_json()
+        self.assertEqual(len(locs), 1)
+        self.assertEqual(locs[0]["name"], "Genomics Core")
+        new_loc_id = locs[0]["id"]
+
+        depts = self.client.get(f"/api/departments?location_id={new_loc_id}").get_json()
+        self.assertEqual(len(depts), 1)
+        self.assertEqual(depts[0]["name"], "Genomics Core")
+        new_dept_id = depts[0]["id"]
+
+        # 4. Master admin reviews and approves the request
+        onboarding_list = self.client.get("/api/onboarding").get_json()
+        app_item = next(a for a in onboarding_list if a["email"] == "sarah@globalhealth.test")
+        self.assertEqual(app_item["location_id"], new_loc_id)
+        self.assertEqual(app_item["department_id"], new_dept_id)
+        self.assertEqual(app_item["location_name"], "Genomics Core")
+
+        apprv = self.client.post(f"/api/onboarding/{app_item['id']}/review", json={"decision": "approve"})
+        self.assertEqual(apprv.status_code, 200)
+
+        # 5. User can log in and has the newly created location/department
+        client_sarah = app.test_client()
+        login_res = client_sarah.post("/api/login", json={"email": "sarah@globalhealth.test", "password": "password123"})
+        self.assertEqual(login_res.status_code, 200)
+        user_info = login_res.get_json()["user"]
+        self.assertEqual(user_info["location_id"], new_loc_id)
+        self.assertEqual(user_info["department_id"], new_dept_id)
+
+        # 6. Another organization can also create 'Genomics Core' without collision
+        c2 = self.client.post("/api/customers", json={"name": "Metro Health"}).get_json()["id"]
+        res2 = self.client.post("/api/signup", json={
+            "name": "Dr. Alex",
+            "email": "alex@metrohealth.test",
+            "password": "password123",
+            "role": "customer",
+            "customer_id": c2,
+            "new_location_name": "Genomics Core",
+        })
+        self.assertEqual(res2.status_code, 201)
+        locs2 = self.client.get(f"/api/locations?customer_id={c2}").get_json()
+        self.assertEqual(len(locs2), 1)
+        self.assertEqual(locs2[0]["name"], "Genomics Core")
+        self.assertNotEqual(locs2[0]["id"], new_loc_id)
+
     @classmethod
     def tearDownClass(cls):
         if os.path.exists(test_db):

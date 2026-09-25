@@ -873,22 +873,47 @@ def signup():
     customer_id = b.get("customer_id") or None
     location_id = b.get("location_id") or None
     department_id = b.get("department_id") or None
+    new_loc_name = (b.get("new_location_name") or b.get("new_location") or "").strip()
     if role == "customer":
-        if location_id and not department_id:
-            dept = c.execute("SELECT id FROM departments WHERE location_id=?", (location_id,)).fetchone()
-            if dept:
-                department_id = dept["id"]
-        elif department_id and not location_id:
-            loc = c.execute("SELECT location_id FROM departments WHERE id=?", (department_id,)).fetchone()
-            if loc:
-                location_id = loc["location_id"]
-        if not customer_id or not location_id:
+        if not customer_id:
             c.close()
-            return jsonify({"error": "Select your organisation and location/department"}), 400
-        err_r, code_r = _validate_loc_dept(c, customer_id, location_id, department_id)
-        if err_r:
-            c.close()
-            return err_r, code_r
+            return jsonify({"error": "Select your organisation"}), 400
+        if new_loc_name:
+            # Location and department are unified: create or resolve location/department for this customer
+            existing_loc = c.execute(
+                "SELECT id FROM locations WHERE customer_id=? AND lower(name)=?",
+                (customer_id, new_loc_name.lower())).fetchone()
+            if existing_loc:
+                location_id = existing_loc["id"]
+                dept = c.execute("SELECT id FROM departments WHERE location_id=?", (location_id,)).fetchone()
+                department_id = dept["id"] if dept else None
+            else:
+                cur_loc = c.execute(
+                    "INSERT INTO locations (customer_id,name,address,city,created_at) VALUES (?,?,?,?,?)",
+                    (customer_id, new_loc_name, "", "", now()),
+                )
+                location_id = cur_loc.lastrowid
+                cur_dept = c.execute(
+                    "INSERT INTO departments (customer_id,location_id,name,created_at) VALUES (?,?,?,?)",
+                    (customer_id, location_id, new_loc_name, now()),
+                )
+                department_id = cur_dept.lastrowid
+        else:
+            if not location_id:
+                c.close()
+                return jsonify({"error": "Select your location/department or create a new one"}), 400
+            if location_id and not department_id:
+                dept = c.execute("SELECT id FROM departments WHERE location_id=?", (location_id,)).fetchone()
+                if dept:
+                    department_id = dept["id"]
+            elif department_id and not location_id:
+                loc = c.execute("SELECT location_id FROM departments WHERE id=?", (department_id,)).fetchone()
+                if loc:
+                    location_id = loc["location_id"]
+            err_r, code_r = _validate_loc_dept(c, customer_id, location_id, department_id)
+            if err_r:
+                c.close()
+                return err_r, code_r
     else:
         customer_id = location_id = department_id = None
     cur = c.execute(

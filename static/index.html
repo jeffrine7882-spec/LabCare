@@ -101,6 +101,11 @@
             <label class="field"><span>Location/Department *</span>
               <select id="jnLocation" onchange="onJoinLoc()"><option value="">— Select location/department —</option></select>
             </label>
+            <div id="jnNewLocationWrap" class="hidden" style="margin-top:6px">
+              <label class="field"><span>New location/department name *</span>
+                <input id="jnNewLocation" placeholder="e.g. Molecular Biology Lab">
+              </label>
+            </div>
             <select id="jnDepartment" style="display:none"><option value="">— Select department —</option></select>
           </div>
           <label class="field"><span>Password *</span><input id="jnPassword" type="password" placeholder="Min 6 characters" required></label>
@@ -123,6 +128,6 @@
   <!-- Modal host -->
   <div id="modalHost" class="modal-host hidden"></div>
 
-  <script src="/app.js?v=40"></script>
+  <script src="/app.js?v=41"></script>
 </body>
 </html>
