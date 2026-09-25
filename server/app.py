@@ -25,6 +25,12 @@ CORS(app)
 # comparing the actor against this account, not by the bare shape of the record,
 # so an accidental second unbound admin can never gain master powers.
 MASTER_ADMIN_EMAIL = "admin@labcare.com"
+# Reserved account that absorbs references from deleted users: immutable
+# history columns (complaints.created_by, breakdowns.reported_by, comments,
+# attachments, pm_logs) are NOT NULL with enforced FKs, so they cannot simply
+# be unlinked — they are reassigned to this inert placeholder. It can never
+# log in, is hidden from user lists, and cannot itself be deleted.
+FORMER_USER_EMAIL = "former-user@labcare.invalid"
 
 # --------------------------------------------------------------------------
 # FIFO storage & history log
@@ -1762,7 +1768,7 @@ def get_complaint(cid):
         return jsonify({"error": "Not authorised"}), 403
     out = complaint_payload(c, row)
     comments = c.execute(
-        "SELECT cm.*, u.name AS user_name FROM comments cm JOIN users u ON u.id=cm.user_id "
+        "SELECT cm.*, COALESCE(u.name, 'Former user') AS user_name FROM comments cm LEFT JOIN users u ON u.id=cm.user_id "
         "WHERE cm.entity_type='complaint' AND cm.entity_id=? ORDER BY cm.created_at", (cid,)).fetchall()
     out["comments"] = rows_to_dicts(comments)
     c.close()
@@ -2185,7 +2191,7 @@ def get_breakdown(bid):
         return jsonify({"error": "Not authorised"}), 403
     out = breakdown_payload(c, row)
     comments = c.execute(
-        "SELECT cm.*, u.name AS user_name FROM comments cm JOIN users u ON u.id=cm.user_id "
+        "SELECT cm.*, COALESCE(u.name, 'Former user') AS user_name FROM comments cm LEFT JOIN users u ON u.id=cm.user_id "
         "WHERE cm.entity_type='breakdown' AND cm.entity_id=? ORDER BY cm.created_at", (bid,)).fetchall()
     out["comments"] = rows_to_dicts(comments)
     c.close()
@@ -2363,7 +2369,7 @@ def add_comment():
     )
     c.commit()
     row = c.execute(
-        "SELECT cm.*, u.name AS user_name FROM comments cm JOIN users u ON u.id=cm.user_id WHERE cm.id=?",
+        "SELECT cm.*, COALESCE(u.name, 'Former user') AS user_name FROM comments cm LEFT JOIN users u ON u.id=cm.user_id WHERE cm.id=?",
         (cur.lastrowid,)).fetchone()
     c.close()
     if auto_assigned:
@@ -2407,7 +2413,8 @@ def list_users():
     if err:
         return err, code
     c = conn()
-    rows = c.execute("SELECT * FROM users ORDER BY role, name").fetchall()
+    rows = c.execute("SELECT * FROM users WHERE lower(email) != ? ORDER BY role, name",
+                     (FORMER_USER_EMAIL,)).fetchall()
     out = []
     tenant_filter = (u["role"] == "admin" and not is_master_admin(u))
     scope = tenant_scope(u, c) if tenant_filter else None
@@ -2572,6 +2579,9 @@ def create_user():
     if err_r:
         c.close()
         return err_r, code_r
+    if (b["email"] or "").strip().lower() == FORMER_USER_EMAIL:
+        c.close()
+        return jsonify({"error": "That email is reserved for the system placeholder account"}), 400
     exists = c.execute("SELECT id FROM users WHERE lower(email)=?", (b["email"].strip().lower(),)).fetchone()
     if exists:
         c.close()
@@ -2741,6 +2751,9 @@ def delete_user(uid):
     if not existing:
         c.close()
         return jsonify({"error": "Not found"}), 404
+    if (existing["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL:
+        c.close()
+        return jsonify({"error": "The Master System Admin account cannot be deleted"}), 403
     if is_tenant_admin(u):
         if existing["role"] == "admin":
             c.close()
@@ -2749,29 +2762,48 @@ def delete_user(uid):
         if err_t:
             c.close()
             return err_t, code_t
-    # Things that reference the user and would break if we delete them:
-    refs = []
-    for table, col in (("complaints", "assigned_to"), ("complaints", "created_by"),
-                       ("breakdowns", "assigned_to"), ("breakdowns", "reported_by"),
-                       ("comments", "user_id"), ("pm_schedules", "assigned_to"),
-                       ("pm_logs", "performed_by"),
-                       ("users", "responsible_admin_id"), ("equipment", "responsible_admin_id"),
-                       ("complaints", "responsible_admin_id"), ("breakdowns", "responsible_admin_id")):
-        n = c.execute(f"SELECT COUNT(*) n FROM {table} WHERE {col}=?", (uid,)).fetchone()["n"]
-        if n:
-            refs.append(f"{n} {table.rsplit('_',1)[-1]}")
-    if refs:
+    email = (existing["email"] or "").strip().lower()
+    if email == FORMER_USER_EMAIL:
         c.close()
-        return jsonify({"error": "Cannot delete — user is referenced by: " + ", ".join(refs) +
-                        ". Reassign or delete those first."}), 409
-    # Clear the user's own sessions and notifications, then remove the account.
+        return jsonify({"error": "The 'Former user' placeholder is a system account and cannot be deleted"}), 400
+    # The master may delete ANY user (tenant admins: any non-admin in their
+    # scope). Deleting never cascades: every record that references the user is
+    # UNLINKED (nullable reference columns set to NULL) — tickets, equipment,
+    # PM schedules, care lists and history are all kept; immutable history
+    # references move to the "Former user" placeholder.
+    former = c.execute("SELECT id FROM users WHERE lower(email)=?", (FORMER_USER_EMAIL,)).fetchone()
+    if former:
+        former_id = former["id"]
+    else:
+        former_id = c.execute(
+            "INSERT INTO users (name,email,phone,password_hash,role,customer_id,location_id,department_id,active,pending,created_at) "
+            "VALUES ('Former user', ?, '', '!no-login!', 'customer', NULL, NULL, NULL, 0, 0, ?)",
+            (FORMER_USER_EMAIL, now())).lastrowid
+    for table, col in (("complaints", "created_by"), ("breakdowns", "reported_by"),
+                       ("comments", "user_id"), ("attachments", "uploaded_by"),
+                       ("pm_logs", "performed_by")):
+        c.execute(f"UPDATE {table} SET {col}=? WHERE {col}=?", (former_id, uid))
+    for table, col in (
+            ("complaints", "assigned_to"), ("complaints", "accepted_by"),
+            ("complaints", "closed_by"), ("complaints", "responsible_admin_id"),
+            ("breakdowns", "assigned_to"), ("breakdowns", "accepted_by"),
+            ("breakdowns", "closed_by"), ("breakdowns", "responsible_admin_id"),
+            ("users", "responsible_admin_id"), ("equipment", "responsible_admin_id"),
+            ("pm_schedules", "assigned_to"),
+            ("portal_links", "created_by"), ("onboarding_apps", "reviewed_by"),
+            ("audit_logs", "user_id")):
+        c.execute(f"UPDATE {table} SET {col}=NULL WHERE {col}=?", (uid,))
+    # The user's own artifacts are removed outright.
     c.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
     c.execute("DELETE FROM notifications WHERE user_id=?", (uid,))
     c.execute("DELETE FROM notification_pings WHERE user_id=?", (uid,))
+    c.execute("DELETE FROM push_subscriptions WHERE user_id=?", (uid,))
+    c.execute("DELETE FROM app_devices WHERE user_id=?", (uid,))
+    c.execute("DELETE FROM admin_customer_links WHERE admin_id=?", (uid,))
     c.execute("DELETE FROM users WHERE id=?", (uid,))
     c.commit()
     c.close()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "unlinked": True})
 
 
 @app.get("/api/dashboard")
@@ -3716,7 +3748,7 @@ def pm_logs(pid):
         c.close()
         return jsonify({"error": "Not authorised"}), 403
     rows = c.execute(
-        "SELECT l.*, u.name AS performed_by_name FROM pm_logs l JOIN users u ON u.id=l.performed_by "
+        "SELECT l.*, COALESCE(u.name, 'Former user') AS performed_by_name FROM pm_logs l LEFT JOIN users u ON u.id=l.performed_by "
         "WHERE l.schedule_id=? ORDER BY l.performed_at DESC", (pid,)).fetchall()
     c.close()
     return jsonify(rows_to_dicts(rows))

@@ -2437,7 +2437,7 @@ async function saveUser(id) {
 }
 
 async function deleteUser(id) {
-  confirmDialog("Delete user?", "This removes the user account permanently.", "Delete", async () => {
+  confirmDialog("Delete user?", "The account is removed permanently. Their tickets, comments, equipment and history are kept — everything just becomes unassigned/unlinked from this user.", "Delete", async () => {
     showLoading();
     try {
       await API.del("/api/users/" + id);

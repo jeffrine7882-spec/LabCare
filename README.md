@@ -143,7 +143,10 @@ organisations** and **Admin → Team & users**.
     create or edit admin accounts and customers, and it can never be disabled,
     demoted or linked to a customer. Every other admin is a tenant admin.
     **Only the Master System Admin can delete a complaint or breakdown
-    ticket.**
+    ticket.** The master can also **delete any user account** — deleting a
+    user never cascades: their tickets, equipment, PM schedules and other
+    records are kept and simply become unlinked/unassigned (history rows
+    render the author as "Former user").
   - **Tenant admin** (any admin who is not the Master) manages only the
     organisations in their care list — their locations, departments,
     equipment, tickets, PM schedules and users. The master may create a tenant
