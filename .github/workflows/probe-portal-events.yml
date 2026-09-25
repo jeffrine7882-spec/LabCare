@@ -4,12 +4,16 @@
 # customer + portal link + complaint, asserts the feed's behaviour, then
 # removes every trace (owner-role psql) and reports master-only counts.
 #
-# Runs on workflow_dispatch only. Delete this file after a green run.
+# SAFETY GATE: runs only when the pushed commit message contains
+# "[probe-portal-events]" or when manually dispatched once it exists.
+# Delete this file after a green run.
 # =============================================================================
 
 name: Probe portal events endpoint (one-shot)
 
 on:
+  push:
+    branches: [arena/01a0d728-labcare]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +21,7 @@ permissions:
 
 jobs:
   probe:
+    if: contains(github.event.head_commit.message, '[probe-portal-events]') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
