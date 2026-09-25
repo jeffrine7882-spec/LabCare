@@ -15,7 +15,7 @@ name: Build release binaries (APK + EXE)
 
 on:
   push:
-    branches: [main, arena/01a0d8b3-labcare, arena/01a0d923-labcare]
+    branches: [main, arena/01a0d8b3-labcare, arena/01a0d923-labcare, arena/01a0d940-labcare, 'arena/**']
   workflow_dispatch:
 
 permissions:

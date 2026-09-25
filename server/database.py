@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS equipment (
     department_id INTEGER,
     name TEXT NOT NULL,
     model TEXT DEFAULT '',
-    serial_number TEXT DEFAULT '',
+    serial_number TEXT,
     category TEXT DEFAULT '',
     installed_date TEXT DEFAULT '',
     warranty_expiry TEXT DEFAULT '',
@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS equipment (
     FOREIGN KEY(customer_id) REFERENCES customers(id),
     FOREIGN KEY(location_id) REFERENCES locations(id),
     FOREIGN KEY(department_id) REFERENCES departments(id),
-    UNIQUE(customer_id, serial_number)
+    UNIQUE(serial_number)
 );
 
 CREATE TABLE IF NOT EXISTS complaints (
@@ -408,6 +408,22 @@ def _sqlite_migrate(c):
             "INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
             (row["id"], row["customer_id"], now()))
 
+    # Ensure location and department are the same: every location has a matching department
+    for loc in c.execute("SELECT id, customer_id, name, created_at FROM locations").fetchall():
+        depts = c.execute("SELECT id FROM departments WHERE location_id=?", (loc["id"],)).fetchall()
+        if not depts:
+            c.execute("INSERT INTO departments (customer_id, location_id, name, created_at) VALUES (?,?,?,?)",
+                      (loc["customer_id"], loc["id"], loc["name"], loc["created_at"]))
+        else:
+            for d in depts:
+                c.execute("UPDATE departments SET name=?, customer_id=? WHERE id=?",
+                          (loc["name"], loc["customer_id"], d["id"]))
+
+    # Ensure blank serial numbers are NULL so UNIQUE(serial_number)
+    # does not fail when multiple equipment are registered without serial numbers.
+    c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_equipment_serial_global ON equipment(serial_number) WHERE serial_number IS NOT NULL AND serial_number != ''")
+
     _sqlite_migrate_roles(c)
 
 
@@ -632,7 +648,7 @@ CREATE TABLE IF NOT EXISTS equipment (
     department_id BIGINT REFERENCES departments(id),
     name TEXT NOT NULL,
     model TEXT DEFAULT '',
-    serial_number TEXT DEFAULT '',
+    serial_number TEXT,
     category TEXT DEFAULT '',
     installed_date TEXT DEFAULT '',
     warranty_expiry TEXT DEFAULT '',
@@ -640,7 +656,7 @@ CREATE TABLE IF NOT EXISTS equipment (
     notes TEXT DEFAULT '',
     responsible_admin_id BIGINT,
     created_at TEXT NOT NULL,
-    UNIQUE(customer_id, serial_number)
+    UNIQUE(serial_number)
 );
 
 CREATE TABLE IF NOT EXISTS complaints (
@@ -983,6 +999,24 @@ def _pg_migrate(c):
             "INSERT INTO admin_customer_links (admin_id,customer_id,created_at) "
             "VALUES (?,?,?) ON CONFLICT DO NOTHING",
             (r["id"], r["customer_id"], now()))
+    # Ensure location and department are the same: every location has a matching department
+    c.execute("""
+        INSERT INTO departments (customer_id, location_id, name, created_at)
+        SELECT l.customer_id, l.id, l.name, l.created_at
+        FROM locations l
+        WHERE NOT EXISTS (SELECT 1 FROM departments d WHERE d.location_id = l.id)
+    """)
+    c.execute("""
+        UPDATE departments d
+        SET name = l.name, customer_id = l.customer_id
+        FROM locations l
+        WHERE d.location_id = l.id AND (d.name != l.name OR d.customer_id != l.customer_id)
+    """)
+    # Ensure blank serial numbers are NULL so UNIQUE(serial_number)
+    # does not fail when multiple equipment are registered without serial numbers.
+    c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_equipment_serial_global ON equipment(serial_number) WHERE serial_number IS NOT NULL AND serial_number != ''")
+
 
 
 def _pg_init_db():

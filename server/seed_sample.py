@@ -94,10 +94,10 @@ def seed_sample():
     bio_lab = add_location(bio_id, "Main Laboratory", "Level 3, Block A, Tech Park", "Kuala Lumpur")
     bio_cold = add_location(bio_id, "Cold Storage Facility", "Basement 1, Block B", "Kuala Lumpur")
     mer_plant = add_location(mer_id, "Analytical Plant", "Unit 12, Jalan Industri", "Shah Alam")
-    bio_dept1 = add_department(bio_id, bio_lab, "Molecular Diagnostics")
-    bio_dept2 = add_department(bio_id, bio_cold, "Biobank")
-    mer_dept1 = add_department(mer_id, mer_plant, "Analytical Chemistry")
-    mer_dept2 = add_department(mer_id, mer_plant, "Quality Control")
+    bio_dept1 = add_department(bio_id, bio_lab, "Main Laboratory")
+    bio_dept2 = add_department(bio_id, bio_cold, "Cold Storage Facility")
+    mer_dept1 = add_department(mer_id, mer_plant, "Analytical Plant")
+    mer_dept2 = mer_dept1
 
     # ---- customer users ---------------------------------------------------
     kavita = add_user("Dr. Kavita Nair", "kavita@bioref.com", "customer", bio_id,

@@ -418,7 +418,9 @@ def complaint_payload(c, row):
     d["customer_name"] = cust["name"] if cust else None
     d["location_name"] = _name_of(c, "locations", d.get("location_id"))
     d["department_name"] = _name_of(c, "departments", d.get("department_id"))
-    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq else None
+    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq and eq["model"] else (eq["name"] if eq else None)
+    d["equipment_serial"] = eq["serial_number"] if eq else None
+    d["equipment_model"] = eq["model"] if eq else None
     d["created_by_name"] = creator["name"] if creator else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
     # portal submissions record who actually reported the issue
@@ -442,7 +444,9 @@ def breakdown_payload(c, row):
     d["customer_name"] = cust["name"] if cust else None
     d["location_name"] = _name_of(c, "locations", d.get("location_id"))
     d["department_name"] = _name_of(c, "departments", d.get("department_id"))
-    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq else None
+    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq and eq["model"] else (eq["name"] if eq else None)
+    d["equipment_serial"] = eq["serial_number"] if eq else None
+    d["equipment_model"] = eq["model"] if eq else None
     d["reported_by_name"] = reporter["name"] if reporter else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
     d["reporter_name"] = d.get("reporter_name") or ""
@@ -869,14 +873,79 @@ def signup():
     customer_id = b.get("customer_id") or None
     location_id = b.get("location_id") or None
     department_id = b.get("department_id") or None
+    new_cust_name = (b.get("new_customer_name") or b.get("new_organisation_name") or b.get("new_customer") or "").strip()
+    new_loc_name = (b.get("new_location_name") or b.get("new_location") or "").strip()
     if role == "customer":
-        if not customer_id or not location_id or not department_id:
+        if new_cust_name:
+            existing_cust = c.execute(
+                "SELECT id FROM customers WHERE lower(name)=?",
+                (new_cust_name.lower(),)
+            ).fetchone()
+            if existing_cust:
+                customer_id = existing_cust["id"]
+            else:
+                cur_cust = c.execute(
+                    "INSERT INTO customers (name,contact_name,email,phone,address,city,created_at) VALUES (?,?,?,?,?,?,?)",
+                    (new_cust_name, name, email, b.get("phone", ""), "", "", now()),
+                )
+                customer_id = cur_cust.lastrowid
+            if location_id and not new_loc_name:
+                ref_loc = c.execute("SELECT name FROM locations WHERE id=?", (location_id,)).fetchone()
+                if ref_loc:
+                    new_loc_name = ref_loc["name"]
+                    location_id = None
+                    department_id = None
+        elif not customer_id:
             c.close()
-            return jsonify({"error": "Select your organisation, location and department"}), 400
-        err_r, code_r = _validate_loc_dept(c, customer_id, location_id, department_id)
-        if err_r:
-            c.close()
-            return err_r, code_r
+            return jsonify({"error": "Select your organisation or create a new one"}), 400
+
+        if new_loc_name:
+            # Location and department are unified: create or resolve location/department for this customer
+            existing_loc = c.execute(
+                "SELECT id FROM locations WHERE customer_id=? AND lower(name)=?",
+                (customer_id, new_loc_name.lower())).fetchone()
+            if existing_loc:
+                location_id = existing_loc["id"]
+                dept = c.execute("SELECT id FROM departments WHERE location_id=?", (location_id,)).fetchone()
+                department_id = dept["id"] if dept else None
+            else:
+                cur_loc = c.execute(
+                    "INSERT INTO locations (customer_id,name,address,city,created_at) VALUES (?,?,?,?,?)",
+                    (customer_id, new_loc_name, "", "", now()),
+                )
+                location_id = cur_loc.lastrowid
+                cur_dept = c.execute(
+                    "INSERT INTO departments (customer_id,location_id,name,created_at) VALUES (?,?,?,?)",
+                    (customer_id, location_id, new_loc_name, now()),
+                )
+                department_id = cur_dept.lastrowid
+        elif new_cust_name and not location_id:
+            cur_loc = c.execute(
+                "INSERT INTO locations (customer_id,name,address,city,created_at) VALUES (?,?,?,?,?)",
+                (customer_id, "Main Lab", "", "", now()),
+            )
+            location_id = cur_loc.lastrowid
+            cur_dept = c.execute(
+                "INSERT INTO departments (customer_id,location_id,name,created_at) VALUES (?,?,?,?)",
+                (customer_id, location_id, "Main Lab", now()),
+            )
+            department_id = cur_dept.lastrowid
+        else:
+            if not location_id:
+                c.close()
+                return jsonify({"error": "Select your location/department or create a new one"}), 400
+            if location_id and not department_id:
+                dept = c.execute("SELECT id FROM departments WHERE location_id=?", (location_id,)).fetchone()
+                if dept:
+                    department_id = dept["id"]
+            elif department_id and not location_id:
+                loc = c.execute("SELECT location_id FROM departments WHERE id=?", (department_id,)).fetchone()
+                if loc:
+                    location_id = loc["location_id"]
+            err_r, code_r = _validate_loc_dept(c, customer_id, location_id, department_id)
+            if err_r:
+                c.close()
+                return err_r, code_r
     else:
         customer_id = location_id = department_id = None
     cur = c.execute(
@@ -1074,10 +1143,12 @@ def delete_customer(cid):
 
 
 # --------------------------------------------------------------------------
-# Locations & departments
+# Locations & departments (Location and department are unified)
 # --------------------------------------------------------------------------
 def _loc_payload(c, r):
     d = dict(r)
+    dept = c.execute("SELECT id FROM departments WHERE location_id=?", (r["id"],)).fetchone()
+    d["department_id"] = dept["id"] if dept else None
     d["department_count"] = c.execute("SELECT COUNT(*) n FROM departments WHERE location_id=?",
                                       (r["id"],)).fetchone()["n"]
     d["equipment_count"] = c.execute("SELECT COUNT(*) n FROM equipment WHERE location_id=?",
@@ -1103,11 +1174,10 @@ def list_locations():
     if scoped_where:
         where.append(scoped_where)
         params += scoped_params
-    else:
-        cust = request.args.get("customer_id")
-        if cust:
-            where.append("l.customer_id=?")
-            params.append(cust)
+    cust = request.args.get("customer_id")
+    if cust:
+        where.append("l.customer_id=?")
+        params.append(cust)
     q = ("SELECT l.*, cu.name AS customer_name FROM locations l JOIN customers cu ON cu.id=l.customer_id")
     if where:
         q += " WHERE " + " AND ".join(where)
@@ -1125,18 +1195,25 @@ def create_location():
         return err, code
     b = get_body()
     if not (b.get("name") or "").strip() or not b.get("customer_id"):
-        return jsonify({"error": "Location name and customer are required"}), 400
+        return jsonify({"error": "Location/department name and customer are required"}), 400
     err_t, code_t = tenant_guard(u, b["customer_id"])
     if err_t:
         return err_t, code_t
     c = conn()
+    name = b["name"].strip()
     cur = c.execute(
         "INSERT INTO locations (customer_id,name,address,city,created_at) VALUES (?,?,?,?,?)",
-        (b["customer_id"], b["name"].strip(), b.get("address", ""), b.get("city", ""), now()),
+        (b["customer_id"], name, b.get("address", ""), b.get("city", ""), now()),
+    )
+    loc_id = cur.lastrowid
+    # Location and department are the same: automatically create corresponding department
+    c.execute(
+        "INSERT INTO departments (customer_id,location_id,name,created_at) VALUES (?,?,?,?)",
+        (b["customer_id"], loc_id, name, now()),
     )
     c.commit()
     row = c.execute("SELECT l.*, cu.name AS customer_name FROM locations l JOIN customers cu ON cu.id=l.customer_id WHERE l.id=?",
-                    (cur.lastrowid,)).fetchone()
+                    (loc_id,)).fetchone()
     out = _loc_payload(c, row)
     c.close()
     return jsonify(out), 201
@@ -1162,10 +1239,19 @@ def update_location(lid):
     if err_t:
         c.close()
         return err_t, code_t
+    name = b.get("name", "").strip()
     c.execute(
         "UPDATE locations SET name=?,address=?,city=?,customer_id=? WHERE id=?",
-        (b.get("name", ""), b.get("address", ""), b.get("city", ""), new_customer_id, lid),
+        (name, b.get("address", ""), b.get("city", ""), new_customer_id, lid),
     )
+    # Location and department are the same: keep department in sync
+    dept = c.execute("SELECT id FROM departments WHERE location_id=?", (lid,)).fetchone()
+    if dept:
+        c.execute("UPDATE departments SET name=?,customer_id=? WHERE id=?",
+                  (name, new_customer_id, dept["id"]))
+    else:
+        c.execute("INSERT INTO departments (customer_id,location_id,name,created_at) VALUES (?,?,?,?)",
+                  (new_customer_id, lid, name, now()))
     c.commit()
     row = c.execute("SELECT l.*, cu.name AS customer_name FROM locations l JOIN customers cu ON cu.id=l.customer_id WHERE l.id=?",
                     (lid,)).fetchone()
@@ -1188,13 +1274,15 @@ def delete_location(lid):
         if err_t:
             c.close()
             return err_t, code_t
-    n = c.execute("SELECT COUNT(*) n FROM departments WHERE location_id=?", (lid,)).fetchone()["n"]
+    # Location and department are the same: departments of this location are deleted with it
     n2 = c.execute("SELECT COUNT(*) n FROM equipment WHERE location_id=?", (lid,)).fetchone()["n"]
     n3 = c.execute("SELECT COUNT(*) n FROM complaints WHERE location_id=?", (lid,)).fetchone()["n"]
     n4 = c.execute("SELECT COUNT(*) n FROM breakdowns WHERE location_id=?", (lid,)).fetchone()["n"]
-    if n or n2 or n3 or n4:
+    n5 = c.execute("SELECT COUNT(*) n FROM users WHERE location_id=?", (lid,)).fetchone()["n"]
+    if n2 or n3 or n4 or n5:
         c.close()
-        return jsonify({"error": "Location has departments, equipment or tickets; cannot delete."}), 409
+        return jsonify({"error": "Location/department has equipment, users or tickets; cannot delete."}), 409
+    c.execute("DELETE FROM departments WHERE location_id=?", (lid,))
     c.execute("DELETE FROM locations WHERE id=?", (lid,))
     c.commit()
     c.close()
@@ -1212,12 +1300,11 @@ def list_departments():
     if scoped_where:
         where.append(scoped_where)
         params += scoped_params
-    else:
-        for f in ("customer_id", "location_id"):
-            v = request.args.get(f)
-            if v:
-                where.append(f"d.{f}=?")
-                params.append(v)
+    for f in ("customer_id", "location_id"):
+        v = request.args.get(f)
+        if v:
+            where.append(f"d.{f}=?")
+            params.append(v)
     q = ("SELECT d.*, cu.name AS customer_name, l.name AS location_name "
          "FROM departments d JOIN customers cu ON cu.id=d.customer_id JOIN locations l ON l.id=d.location_id")
     if where:
@@ -1454,7 +1541,7 @@ def list_equipment():
         if sw:
             where.append(sw)
             params += sp
-        for f in ("location_id", "department_id"):
+        for f in ("customer_id", "location_id", "department_id"):
             v = request.args.get(f)
             if v:
                 where.append(f"e.{f}=?")
@@ -1480,7 +1567,17 @@ def create_equipment():
     if err_t:
         return err_t, code_t
     c = conn()
-    err_r, code_r = _validate_loc_dept(c, b["customer_id"], b.get("location_id"), b.get("department_id"))
+    loc_id = b.get("location_id") or None
+    dept_id = b.get("department_id") or None
+    if loc_id and not dept_id:
+        dept = c.execute("SELECT id FROM departments WHERE location_id=?", (loc_id,)).fetchone()
+        if dept:
+            dept_id = dept["id"]
+    elif dept_id and not loc_id:
+        loc = c.execute("SELECT location_id FROM departments WHERE id=?", (dept_id,)).fetchone()
+        if loc:
+            loc_id = loc["location_id"]
+    err_r, code_r = _validate_loc_dept(c, b["customer_id"], loc_id, dept_id)
     if err_r:
         c.close()
         return err_r, code_r
@@ -1490,16 +1587,16 @@ def create_equipment():
         return err_r, code_r
     serial = (b.get("serial_number") or "").strip()
     if serial:
-        dup = c.execute("SELECT id FROM equipment WHERE customer_id=? AND serial_number=?",
-                        (b["customer_id"], serial)).fetchone()
+        dup = c.execute("SELECT id FROM equipment WHERE serial_number=?",
+                        (serial,)).fetchone()
         if dup:
             c.close()
-            return jsonify({"error": f"Serial number '{serial}' is already registered for this customer"}), 409
+            return jsonify({"error": f"Serial number '{serial}' is already registered"}), 409
     cur = c.execute(
         "INSERT INTO equipment (customer_id,location_id,department_id,name,model,serial_number,category,installed_date,warranty_expiry,status,notes,responsible_admin_id,created_at) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (b["customer_id"], b.get("location_id"), b.get("department_id"),
-         b["name"].strip(), b.get("model", ""), serial, b.get("category", ""),
+        (b["customer_id"], loc_id, dept_id,
+         b["name"].strip(), b.get("model", ""), serial or None, b.get("category", ""),
          b.get("installed_date", ""), b.get("warranty_expiry", ""), b.get("status", "active"),
          b.get("notes", ""), ra_id, now()),
     )
@@ -1535,7 +1632,17 @@ def update_equipment(eid):
     if err_t:
         c.close()
         return err_t, code_t
-    err_r, code_r = _validate_loc_dept(c, customer_id, b.get("location_id"), b.get("department_id"))
+    loc_id = b.get("location_id", existing["location_id"])
+    dept_id = b.get("department_id", existing["department_id"])
+    if loc_id and not dept_id:
+        dept = c.execute("SELECT id FROM departments WHERE location_id=?", (loc_id,)).fetchone()
+        if dept:
+            dept_id = dept["id"]
+    elif dept_id and not loc_id:
+        loc = c.execute("SELECT location_id FROM departments WHERE id=?", (dept_id,)).fetchone()
+        if loc:
+            loc_id = loc["location_id"]
+    err_r, code_r = _validate_loc_dept(c, customer_id, loc_id, dept_id)
     if err_r:
         c.close()
         return err_r, code_r
@@ -1546,15 +1653,15 @@ def update_equipment(eid):
         return err_r, code_r
     serial = (b.get("serial_number") or "").strip()
     if serial:
-        dup = c.execute("SELECT id FROM equipment WHERE customer_id=? AND serial_number=? AND id!=?",
-                        (customer_id, serial, eid)).fetchone()
+        dup = c.execute("SELECT id FROM equipment WHERE serial_number=? AND id!=?",
+                        (serial, eid)).fetchone()
         if dup:
             c.close()
-            return jsonify({"error": f"Serial number '{serial}' is already registered for this customer"}), 409
+            return jsonify({"error": f"Serial number '{serial}' is already registered"}), 409
     c.execute(
         "UPDATE equipment SET customer_id=?,location_id=?,department_id=?,name=?,model=?,serial_number=?,category=?,installed_date=?,warranty_expiry=?,status=?,notes=?,responsible_admin_id=? WHERE id=?",
-        (customer_id, b.get("location_id"), b.get("department_id"),
-         b.get("name", ""), b.get("model", ""), serial, b.get("category", ""),
+        (customer_id, loc_id, dept_id,
+         (b.get("name") or "").strip() or existing["name"], b.get("model", ""), serial or None, b.get("category", ""),
          b.get("installed_date", ""), b.get("warranty_expiry", ""), b.get("status", "active"),
          b.get("notes", ""), ra_id, eid),
     )
@@ -1684,6 +1791,14 @@ def create_complaint():
         # default ticket location/dept from the chosen equipment when not provided
         location_id = b.get("location_id") or eq_loc
         department_id = b.get("department_id") or eq_dept
+        if location_id and not department_id:
+            dept = c.execute("SELECT id FROM departments WHERE location_id=?", (location_id,)).fetchone()
+            if dept:
+                department_id = dept["id"]
+        elif department_id and not location_id:
+            loc = c.execute("SELECT location_id FROM departments WHERE id=?", (department_id,)).fetchone()
+            if loc:
+                location_id = loc["location_id"]
 
     if not customer_id:
         c.close()
@@ -2147,6 +2262,14 @@ def create_breakdown():
             return jsonify({"error": "You can only assign to your own team"}), 403
         location_id = b.get("location_id") or eq_loc
         department_id = b.get("department_id") or eq_dept
+        if location_id and not department_id:
+            dept = c.execute("SELECT id FROM departments WHERE location_id=?", (location_id,)).fetchone()
+            if dept:
+                department_id = dept["id"]
+        elif department_id and not location_id:
+            loc = c.execute("SELECT location_id FROM departments WHERE id=?", (department_id,)).fetchone()
+            if loc:
+                location_id = loc["location_id"]
 
     if not customer_id:
         c.close()
@@ -2542,6 +2665,17 @@ def create_user():
         customer_id = b.get("customer_id")
         location_id = b.get("location_id")
         department_id = b.get("department_id")
+        _conn_tmp = c or conn()
+        if location_id and not department_id:
+            dept = _conn_tmp.execute("SELECT id FROM departments WHERE location_id=?", (location_id,)).fetchone()
+            if dept:
+                department_id = dept["id"]
+        elif department_id and not location_id:
+            loc = _conn_tmp.execute("SELECT location_id FROM departments WHERE id=?", (department_id,)).fetchone()
+            if loc:
+                location_id = loc["location_id"]
+        if c is None:
+            _conn_tmp.close()
     elif role  in ("engineer", "application"):
         # tenant staff create engineers bound to a customer in their care list;
         # the master may optionally bind an engineer to a customer (tenant engineer).
@@ -2665,6 +2799,14 @@ def update_user(uid):
     if new_customer_id:
         new_loc = b.get("location_id", existing["location_id"])
         new_dept = b.get("department_id", existing["department_id"])
+        if new_loc and not new_dept:
+            dept = c.execute("SELECT id FROM departments WHERE location_id=?", (new_loc,)).fetchone()
+            if dept:
+                new_dept = dept["id"]
+        elif new_dept and not new_loc:
+            loc = c.execute("SELECT location_id FROM departments WHERE id=?", (new_dept,)).fetchone()
+            if loc:
+                new_loc = loc["location_id"]
         err_r, code_r = _validate_loc_dept(c, new_customer_id, new_loc, new_dept)
         if err_r:
             c.close()
@@ -3542,7 +3684,8 @@ def _pm_payload(c, row):
                    (d["equipment_id"],)).fetchone() if d.get("equipment_id") else None
     assignee = c.execute("SELECT name FROM users WHERE id=?", (d["assigned_to"],)).fetchone() if d.get("assigned_to") else None
     d["customer_name"] = cust["name"] if cust else None
-    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq else None
+    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq and eq["model"] else (eq["name"] if eq else None)
+    d["equipment_serial"] = eq["serial_number"] if eq else None
     d["equipment_model"] = eq["model"] if eq else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
     d["log_count"] = c.execute("SELECT COUNT(*) n FROM pm_logs WHERE schedule_id=?", (d["id"],)).fetchone()["n"]
@@ -3818,7 +3961,7 @@ def create_portal_link():
     )
     c.commit()
     row = c.execute(
-        "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name FROM portal_links pl "
+        "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name, e.model AS equipment_model, e.serial_number AS equipment_serial FROM portal_links pl "
         "JOIN customers cu ON cu.id=pl.customer_id LEFT JOIN equipment e ON e.id=pl.equipment_id WHERE pl.id=?",
         (cur.lastrowid,)).fetchone()
     c.close()
@@ -3875,7 +4018,7 @@ def update_portal_link(lid):
         c.execute(f"UPDATE portal_links SET {', '.join(fields)} WHERE id=?", params)
         c.commit()
     row = c.execute(
-        "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name FROM portal_links pl "
+        "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name, e.model AS equipment_model, e.serial_number AS equipment_serial FROM portal_links pl "
         "JOIN customers cu ON cu.id=pl.customer_id LEFT JOIN equipment e ON e.id=pl.equipment_id WHERE pl.id=?",
         (lid,)).fetchone()
     c.close()
@@ -4106,19 +4249,48 @@ def portal_events(token):
 
 
 # --------------------------------------------------------------------------
+# Version check
+# --------------------------------------------------------------------------
+APP_VERSION = "45"
+
+@app.get("/api/version")
+def api_version():
+    return jsonify({"version": APP_VERSION, "ok": True})
+
+
+@app.after_request
+def set_no_cache_headers(response):
+    if request.path == "/" or request.path.endswith(".html") or request.path.endswith(".js"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
+# --------------------------------------------------------------------------
 # Static (mobile web app)
 # --------------------------------------------------------------------------
 @app.get("/")
 def index():
-    return send_from_directory(STATIC_DIR, "index.html")
+    resp = send_from_directory(STATIC_DIR, "index.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.get("/<path:path>")
 def static_files(path):
     full = os.path.join(STATIC_DIR, path)
     if os.path.isfile(full):
-        return send_from_directory(STATIC_DIR, path)
-    return send_from_directory(STATIC_DIR, "index.html")
+        resp = send_from_directory(STATIC_DIR, path)
+    else:
+        resp = send_from_directory(STATIC_DIR, "index.html")
+    if path == "index.html" or path.endswith(".html") or path.endswith(".js"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
 
 
 # --------------------------------------------------------------------------
