@@ -76,11 +76,15 @@ jobs:
           "$aapt" dump badging apps/android/dist/LabCare-Alerts-v1.2.apk | head -5
           tree="$("$aapt" dump xmltree apps/android/dist/LabCare-Alerts-v1.2.apk AndroidManifest.xml)"
           echo "::notice::$(echo "$tree" | sed -n '/uses-sdk/,+3p' | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
-          target_hex="$(echo "$tree" | sed -n 's/.*targetSdkVersion[^=]*=..(type [.0-9a-f]*)0x\([0-9a-f]*\).*/\1/p' | head -1)"
-          target_dec=$((16#${target_hex:-0}))
-          echo "targetSdkVersion: hex=0x$target_hex dec=$target_dec"
-          [ "$target_dec" -ge 34 ] || { echo "::error::targetSdkVersion=$target_dec (<34) or uses-sdk not compiled in"; exit 1; }
-          echo "::notice::APK targets SDK $target_dec — installable on Android 14/15/16"
+          # aapt prints either "0x22" or plain "26" after the type marker; take
+          # the trailing number after the last ')' and normalise to decimal
+          grab() { echo "$tree" | grep "android:$1" | head -1 | sed "s/.*)[[:space:]]*//; s/[^0-9].*//"; }
+          target_dec="$(grab targetSdkVersion)"
+          min_dec="$(grab minSdkVersion)"
+          [ -n "$target_dec" ] && [ -n "$min_dec" ]
+          echo "::notice::uses-sdk: minSdkVersion=$min_dec targetSdkVersion=$target_dec"
+          [ "$target_dec" -ge 34 ] || { echo "::error::targetSdkVersion=$target_dec (<34)"; exit 1; }
+          echo "::notice::APK targets SDK $target_dec (min $min_dec) — installable on Android 14/15/16"
 
       - uses: actions/upload-artifact@v4
         with:
