@@ -1,0 +1,127 @@
+# =============================================================================
+# LabCare — deploy to InsForge (backend compute container + frontend hosting)
+#
+# Why this exists: the coding sandbox this repo is worked on from cannot reach
+# InsForge/Fly.io (egress firewall), so production deploys run on GitHub's
+# runners, which can. Triggers:
+#   * every push to the Arena working branch (arena/01a0d728-labcare)
+#   * every push to main
+#   * manual "Run workflow" (Actions tab)
+#
+# Required repository secret:
+#   INSFORGE_API_KEY   — the InsForge project API key (ik_…). The InsForge CLI
+#                        direct-links with it (no interactive OAuth needed).
+#
+# Optional repository secrets (web-push / FCM; appended to the container env
+# only when set, mirroring deploy.sh's key-preservation behaviour):
+#   LABCARE_VAPID_PRIVATE, LABCARE_VAPID_PUBLIC, LABCARE_FCM_PROJECT_ID,
+#   LABCARE_FCM_SERVICE_JSON, LABCARE_FCM_KEY_B64
+#
+# Mirrors ./deploy.sh (backend → compute, frontend → hosting) but is fully
+# non-interactive. The Postgres DSN is fetched from InsForge at deploy time —
+# never hardcoded, never printed.
+# =============================================================================
+
+name: Deploy to InsForge
+
+on:
+  push:
+    branches: [arena/01a0d728-labcare, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-labcare
+  cancel-in-progress: false
+
+env:
+  SITE_URL: https://labcare.insforge.site
+  BACKEND_ENDPOINT: https://labcare-api-ee5bd3a7-8f78-4005-87ea-6c57ff5728aa.fly.dev
+  API_BASE_URL: https://yj675q8e.ap-southeast.insforge.app
+  SERVICE_NAME: labcare-api
+  SERVICE_PORT: "8000"
+  FLY_REGION: sin
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the INSFORGE_API_KEY secret is configured
+        env:
+          K: ${{ secrets.INSFORGE_API_KEY }}
+        run: |
+          if [ -z "${K:-}" ]; then
+            echo "::error title=Missing repository secret::Add INSFORGE_API_KEY under Settings → Secrets and variables → Actions → New repository secret (InsForge project API key, ik_…), then re-run this workflow (Actions → Deploy to InsForge → Re-run jobs, or push any commit to the branch)."
+            exit 1
+          fi
+          echo "INSFORGE_API_KEY is set (value not shown)."
+
+      - name: Install flyctl (needed for the compute source build)
+        run: |
+          curl -fsSL https://fly.io/install.sh -o /tmp/fly_install.sh
+          FLYCTL_INSTALL="$HOME/.fly" sh /tmp/fly_install.sh >/dev/null
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+
+      - name: Link the InsForge project (API-key auth, no OAuth)
+        env:
+          INSFORGE_API_KEY: ${{ secrets.INSFORGE_API_KEY }}
+        run: |
+          npx --yes @insforge/cli link \
+            --api-base-url "$API_BASE_URL" --api-key "$INSFORGE_API_KEY" --guard off --json
+          test -s .insforge/project.json
+
+      - name: Write .env.production (DSN fetched from InsForge, never echoed)
+        env:
+          LABCARE_VAPID_PRIVATE: ${{ secrets.LABCARE_VAPID_PRIVATE }}
+          LABCARE_VAPID_PUBLIC: ${{ secrets.LABCARE_VAPID_PUBLIC }}
+          LABCARE_FCM_PROJECT_ID: ${{ secrets.LABCARE_FCM_PROJECT_ID }}
+          LABCARE_FCM_SERVICE_JSON: ${{ secrets.LABCARE_FCM_SERVICE_JSON }}
+          LABCARE_FCM_KEY_B64: ${{ secrets.LABCARE_FCM_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          dsn="$(npx --yes @insforge/cli --json db connection-string | jq -r '.connectionURL // empty')"
+          [ -n "$dsn" ] || { echo "::error::could not fetch the database connection string"; exit 1; }
+          {
+            echo "LABCARE_DATABASE_URL=$dsn"
+            echo "LABCARE_SECURE_COOKIES=1"
+            echo "LABCARE_PORTAL_URL=$SITE_URL"
+            echo "LABCARE_APP_URL=$SITE_URL"
+          } > .env.production
+          for k in LABCARE_VAPID_PRIVATE LABCARE_VAPID_PUBLIC LABCARE_FCM_PROJECT_ID LABCARE_FCM_SERVICE_JSON LABCARE_FCM_KEY_B64; do
+            v="${!k:-}"
+            [ -n "$v" ] && echo "$k=$v" >> .env.production
+          done
+          echo "wrote .env.production ($(wc -l < .env.production) entries; contents not echoed)"
+
+      - name: Deploy backend (InsForge compute — remote build)
+        run: |
+          npx --yes @insforge/cli compute deploy . \
+            --name "$SERVICE_NAME" --port "$SERVICE_PORT" --region "$FLY_REGION" \
+            --env-file .env.production --always-on
+
+      - name: Health check — backend
+        run: |
+          for i in $(seq 1 30); do
+            if out="$(curl -fsS -m 60 "$BACKEND_ENDPOINT/api/health" 2>/dev/null)"; then
+              echo "backend healthy: $out"; exit 0
+            fi
+            echo "waiting for backend… ($i/30)"; sleep 10
+          done
+          echo "::error::backend health check failed"; exit 1
+
+      - name: Deploy frontend (InsForge hosting)
+        run: npx --yes @insforge/cli deployments deploy static
+
+      - name: Health check — frontend
+        run: |
+          curl -fsS -m 60 -o /dev/null "$SITE_URL/"
+          echo "frontend live — $SITE_URL"
