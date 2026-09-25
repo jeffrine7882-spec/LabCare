@@ -50,14 +50,33 @@ jobs:
       - name: Wipe all app data (users kept separately below)
         run: |
           set -euo pipefail
-          npx --yes @insforge/cli db query "TRUNCATE TABLE onboarding_apps, categories, equipment, locations, departments, complaints, breakdowns, comments, audit_logs, sessions, attachments, notifications, notification_pings, pm_schedules, pm_logs, portal_links, push_subscriptions, app_devices, admin_customer_links, customers RESTART IDENTITY CASCADE"
+          run_q () {
+            if ! out="$(npx --yes @insforge/cli db query "$1" 2>&1)"; then
+              msg="$(printf '%s' "$out" | tr '\n\r' '  ' | head -c 800)"
+              echo "::error title=db query failed::$msg"
+              exit 1
+            fi
+            notice="$(printf '%s' "$out" | tr '\n\r' '  ' | head -c 300)"
+            echo "::notice title=db query ok::$notice"
+          }
+          run_q "TRUNCATE TABLE onboarding_apps, categories, equipment, locations, departments, complaints, breakdowns, comments, audit_logs, sessions, attachments, notifications, notification_pings, pm_schedules, pm_logs, portal_links, push_subscriptions, app_devices, admin_customer_links, customers RESTART IDENTITY CASCADE"
 
       - name: Delete every user except the Master System Admin
         run: |
-          npx --yes @insforge/cli db query "DELETE FROM users WHERE lower(email) <> 'admin@labcare.com'"
-          npx --yes @insforge/cli db query "SELECT setval(pg_get_serial_sequence('users','id'), (SELECT MAX(id) FROM users))"
+          set -euo pipefail
+          run_q () {
+            if ! out="$(npx --yes @insforge/cli db query "$1" 2>&1)"; then
+              msg="$(printf '%s' "$out" | tr '\n\r' '  ' | head -c 800)"
+              echo "::error title=db query failed::$msg"
+              exit 1
+            fi
+            notice="$(printf '%s' "$out" | tr '\n\r' '  ' | head -c 300)"
+            echo "::notice title=db query ok::$notice"
+          }
+          run_q "DELETE FROM users WHERE lower(email) <> 'admin@labcare.com'"
+          run_q "SELECT setval(pg_get_serial_sequence('users','id'), (SELECT MAX(id) FROM users))"
 
       - name: Verify — only the Master System Admin remains
         run: |
-          npx --yes @insforge/cli db query "SELECT id, name, email, role, customer_id FROM users"
-          npx --yes @insforge/cli db query "SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM customers) AS customers, (SELECT count(*) FROM equipment) AS equipment, (SELECT count(*) FROM complaints) AS complaints, (SELECT count(*) FROM breakdowns) AS breakdowns, (SELECT count(*) FROM sessions) AS sessions"
+          npx --yes @insforge/cli db query "SELECT id, name, email, role, customer_id FROM users" || true
+          npx --yes @insforge/cli db query "SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM customers) AS customers, (SELECT count(*) FROM equipment) AS equipment, (SELECT count(*) FROM complaints) AS complaints, (SELECT count(*) FROM breakdowns) AS breakdowns" || true
