@@ -72,7 +72,7 @@ const API = {
       throw new Error(lastErr ? "Cannot reach the server. Check your internet connection." : "Backend not connected.");
     }
     // 502/503/504 = the frontend is up but the API backend behind it is not
-    // (e.g. an unset/wrong netlify.toml /api proxy target).
+    // (e.g. an unset/wrong /api rewrite target in the InsForge hosting config).
     if (!res.ok || res.status >= 500) {
       if (res.status === 502 || res.status === 503 || res.status === 504) {
         throw new Error("Backend not connected (error " + res.status + "). The API server is unreachable — check that the /api proxy points to a running backend.");
@@ -83,7 +83,7 @@ const API = {
     if (ct.includes("application/json")) {
       try { data = await res.json(); } catch (e) { /* keep {} */ }
     } else {
-      // Netlify error page or proxy HTML — don't dump it into the toast
+      // Hosting error page or proxy HTML — don't dump it into the toast
       data = { error: "Unexpected response from server (" + res.status + ")." };
     }
     if (!res.ok) {
@@ -332,6 +332,9 @@ const isAdmin = () => state.user && state.user.role === "admin";
 const isTech = () => state.user && (state.user.role === "technician" || state.user.role === "admin");
 const isCust = () => state.user && state.user.role === "customer";
 const isMaster = () => state.user && state.user.role === "admin" && !state.user.customer_id && (state.user.email || "").toLowerCase() === "admin@labcare.com";
+// an admin who may create an organisation: the master, or a tenant admin who
+// does not have one yet (their new organisation becomes their own)
+const canCreateOrg = () => isMaster() || (isAdmin() && !state.user.customer_id);
 // staff who are not bound to a customer (master admin or a provider technician)
 const isUnboundStaff = () => state.user && (state.user.role === "admin" || state.user.role === "technician") && !state.user.customer_id;
 // cache of tenant admins per customer for the "Responsible tenant admin" picker
@@ -1239,7 +1242,7 @@ async function viewOrg(v, tab) {
     ? [["customers", "🏢 Customers"], ["locations", "📍 Locations"], ["departments", "🏥 Departments"]]
     : [["customers", "🏢 My organisation"]];
   const addBtn = t === "customers"
-    ? (isAdmin() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
+    ? (canCreateOrg() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
     : t === "locations"
       ? (isTech() ? `<button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location</button>` : "")
       : (isTech() ? `<button class="btn btn-primary" onclick="openDepartmentEditor(false)">＋ Add department</button>` : "");
@@ -1290,7 +1293,18 @@ async function refreshCustomers() {
             <span class="badge b-open">${cu.open_complaints} open complaints</span>
           </div>
         </div>`).join("")}</div>`
-      : emptyState("🏢", "No customers yet", "Add your first customer to start tracking.", "Add customer");
+      : (isMaster()
+          ? emptyState("🏢", "No customers yet", "Add your first customer to start tracking.", "Add customer")
+          : (isAdmin() && !state.user.customer_id
+              ? `<div class="empty">
+                   <div class="e-ico">🏢</div>
+                   <h3>You don't have an organisation yet</h3>
+                   <p>Create your organisation to start adding equipment, team members and tickets.</p>
+                   <div class="action-panel" style="justify-content:center;margin-top:12px">
+                     <button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Create my organisation</button>
+                   </div>
+                 </div>`
+              : `<div class="empty"><h3>No organisation</h3><p>Your account is not linked to an organisation yet.</p></div>`));
   } catch (e) {
     box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
   }
@@ -1666,7 +1680,6 @@ async function reviewJoin(id, decision) {
 // ---------------------------------------------------------------- Profile & More
 function viewProfile(v) {
   const u = state.user;
-  const isTenantAdmin = u && u.role === "admin" && u.customer_id;
   v.innerHTML = `
     <div class="card" style="text-align:center;padding:26px 16px">
       <div class="c-avatar" style="width:72px;height:72px;font-size:26px;margin:0 auto">${esc(initials(u.name))}</div>
@@ -1682,78 +1695,9 @@ function viewProfile(v) {
       ${u.location_name ? `<div class="kv"><span class="k">Location</span><span class="v">${esc(u.location_name)}</span></div>` : ""}
       ${u.department_name ? `<div class="kv"><span class="k">Department</span><span class="v">${esc(u.department_name)}</span></div>` : ""}
     </div>
-    ${isTenantAdmin ? `
-    <div class="section-title">Customer organisations I care for</div>
-    <div class="card">
-      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 10px">Pick which customer organisations you manage. You can add technicians and view tickets, equipment and reports for every organisation on your list.</p>
-      <div id="careListHost"></div>
-    </div>` : ""}
     <div class="action-panel" style="margin-top:16px">
       <button class="btn btn-danger" onclick="logout()">Sign out</button>
     </div>`;
-  if (isTenantAdmin) renderCareList();
-}
-
-// ---- Tenant-admin self-select care list ----
-async function renderCareList() {
-  const host = $("#careListHost");
-  if (!host) return;
-  host.innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto"></div></div>`;
-  let mine = null, dir = null;
-  try {
-    [mine, dir] = await Promise.all([
-      API.get("/api/my-customers"), API.get("/api/customer-directory"),
-    ]);
-  } catch (e) {
-    host.innerHTML = `<div class="empty"><p>Couldn't load your organisations: ${esc(e.message)}</p></div>`;
-    return;
-  }
-  const linked = mine.customers || [];
-  const myIds = new Set((mine.customer_ids || []).map(String));
-  const others = (dir || []).filter((x) => !myIds.has(String(x.id)));
-  host.innerHTML = `
-    <div class="chip-row" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px">
-      ${linked.map((x) => `
-        <span class="chip" style="display:inline-flex;align-items:center;gap:8px;background:#ede9fe;color:#6d28d9;padding:6px 12px;font-size:12px">
-          ${esc(x.name)}
-          ${String(x.id) === String(mine.primary_id)
-            ? `<span class="badge" style="background:#f1eefc;color:#7c6af0">primary</span>`
-            : `<button class="chip-x" onclick="removeCareCustomer(${x.id})">✕</button>`}
-        </span>`).join("")}
-    </div>
-    ${others.length ? `
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <select id="careAddSel" style="flex:1;min-width:200px">
-          ${others.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("")}
-        </select>
-        <button class="btn btn-primary-2" style="padding:9px 14px" onclick="addCareCustomer(document.getElementById('careAddSel').value)">＋ Add to my list</button>
-      </div>`
-    : `<p style="font-size:13px;color:var(--ink-soft);margin:0">You already care for every customer organisation.</p>`}`;
-}
-
-async function addCareCustomer(id) {
-  if (!id) return;
-  showLoading();
-  try {
-    await API.post("/api/my-customers/" + id);
-    toast("Added to your customer list", "success");
-    state.user = await API.get("/api/me");
-    await renderCareList();
-  } catch (e) { toast(e.message, "error"); }
-  hideLoading();
-}
-
-async function removeCareCustomer(id) {
-  confirmDialog("Remove organisation", "Deselecting this organisation stops you from managing its users, tickets and equipment.", "Remove", async () => {
-    showLoading();
-    try {
-      await API.del("/api/my-customers/" + id);
-      toast("Removed from your customer list", "success");
-      state.user = await API.get("/api/me");
-      await renderCareList();
-    } catch (e) { toast(e.message, "error"); }
-    hideLoading();
-  });
 }
 
 function viewMore(v) {
@@ -2241,7 +2185,7 @@ async function openCustomerEditor(edit) {
       <label class="field"><span>Address</span><input id="cuAddress" value="${esc(cu ? cu.address : "")}"></label>
     </div>
     <div class="sheet-foot">
-      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteCustomer(${cu.id})">Delete</button>` : ""}
+      ${edit && isMaster() ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteCustomer(${cu.id})">Delete</button>` : ""}
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
       <button class="btn btn-primary-2" onclick="saveCustomer(${edit ? cu.id : "null"})">${edit ? "Save changes" : "Add customer"}</button>
     </div>`);
@@ -2276,7 +2220,20 @@ async function saveCustomer(id) {
   showLoading();
   try {
     if (id) await API.put("/api/customers/" + id, body);
-    else await API.post("/api/customers", body);
+    else {
+      await API.post("/api/customers", body);
+      // a tenant admin creating an organisation becomes its admin — the new
+      // scope has to be picked up before anything else is rendered
+      if (isAdmin() && !isMaster() && !state.user.customer_id) {
+        state.user = await API.get("/api/me");
+        state.customers = null;
+        toast("Organisation created — you are now its tenant admin", "success");
+        hideLoading();
+        state.orgTab = "customers";
+        navigate("org");
+        return;
+      }
+    }
     toast(id ? "Customer updated" : "Customer added", "success");
     state.customers = null;
     if (state.view === "customerDetail" && id) await viewCustomerDetail($("#view"));
@@ -2298,8 +2255,7 @@ async function openUserEditor(edit, id) {
   const startCust = startRole === "customer";
   // who sees which fields: customers always get the full pickers; the master may
   // bind admin/technician to a customer (tenant) or leave them LabCare-wide;
-  // non-master tenant admins always pick which of their care-list customers the
-  // new account belongs to.
+  // a tenant admin only ever sees their own organisation in the picker.
   const showCustFields = master || startCust || (isAdmin() && !master);
   const showLocDept = startCust;
   // responsible tenant admin: only the master picks it (tenant staff are auto-assigned by the backend)
@@ -2358,11 +2314,11 @@ function toggleCustomerSelect() {
     $("#uCustomerFields").style.display = (isCustRole || isTenantAdminRole) ? "" : "none";
     const lbl = $("#uCustomerLabel");
     if (lbl) lbl.textContent = isTenantAdminRole
-      ? "Linked customer (required)"
+      ? "Linked organisation (optional — the admin can create their own)"
       : "Linked customer (optional — leave empty for LabCare-wide)";
   } else {
-    // tenant staff can create for any organisation in their care list
-    // (which the backend scopes /api/customers to). Default to their primary.
+    // tenant staff can only create for their own organisation
+    // (which the backend scopes /api/customers to). Default to it.
     $("#uCustomerFields").style.display = "";
     const sel = $("#uCustomer");
     if (sel && !sel.value && state.user && state.user.customer_id) sel.value = String(state.user.customer_id);
@@ -2402,10 +2358,8 @@ async function saveUser(id) {
     if (!body.customer_id) { toast("Linked customer is required for customer accounts", "error"); return; }
     if (isMaster() && $("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else if (isMaster()) {
-    // a tenant admin REQUIRES a customer; techs/customers may be global or bound
-    if (body.role === "admin" && !$("#uCustomer").value) {
-      toast("A tenant admin must be linked to an organisation", "error"); return;
-    }
+    // an admin may be created without an organisation — they create their own
+    // after signing in; techs/customers may be global or bound
     body.customer_id = $("#uCustomer").value || null;
     body.location_id = null;
     body.department_id = null;
@@ -3558,7 +3512,6 @@ Object.assign(window, {
   openComplaintEditor, saveComplaint, openBreakdownEditor, saveBreakdown,
   openEquipmentEditor, saveEquipment, deleteEquipment, openCustomerEditor, saveCustomer, deleteCustomer,
   openUserEditor, saveUser, deleteUser, toggleCustomerSelect, logout,
-  renderCareList, addCareCustomer, removeCareCustomer,
   viewOnboarding, reviewJoin, toggleAlertSound, playAlertSound,
   openAlertSheet, pickAlertPreset, onAlertCustomPicked, clearAlertCustom, alertPreviewCustom,
   uploadPhotos, viewPhoto, deleteAttachment, downloadReport, openExportSheet,
@@ -3593,10 +3546,10 @@ async function boot() {
     syncPushAlerts();  // re-register any existing desktop-alert subscription
   }
 
-  // Detect a Netlify-style split deployment where the frontend is live but the
-  // /api proxy target is missing or down — show a clear banner instead of a
-  // mysterious "cannot sign in". Only probe when not signed in.
-  if (!state.user && location.hostname.includes("netlify.app")) {
+  // Detect a split deployment where the frontend is live but the /api rewrite
+  // target is missing or down — show a clear banner instead of a mysterious
+  // "cannot sign in". Only probe when not signed in.
+  if (!state.user) {
     try {
       const r = await fetch("/api/ping", { cache: "no-store" });
       if (!r.ok) showBackendBanner();
@@ -3611,7 +3564,7 @@ function showBackendBanner() {
   if (!ls || ls.querySelector(".backend-warn")) return;
   const bar = document.createElement("div");
   bar.className = "backend-warn";
-  bar.innerHTML = `<b>⚠️ Backend not connected.</b> This site is serving the frontend only — the API server is unreachable (login will fail). Check that <code>netlify.toml</code>'s <code>/api/*</code> proxy points to a running HTTPS backend.`;
+  bar.innerHTML = `<b>⚠️ Backend not connected.</b> This site is serving the frontend only — the API server is unreachable (login will fail). Check that the hosting <code>/api/*</code> rewrite points to a running HTTPS backend.`;
   ls.prepend(bar);
 }
 

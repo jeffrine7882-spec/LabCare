@@ -29,9 +29,6 @@ server/uploads/
 .env
 .env.*
 
-# ---- Netlify ----
-.netlify/
-
 # ---- OS / editor noise ----
 .DS_Store
 Thumbs.db
@@ -55,26 +52,4 @@ Thumbs.db
 .trae
 .windsurf
 
-# ---- Mobile app (Expo) ----
-mobile/.expo/
-mobile/node_modules/
-mobile/ios/
-mobile/android/
-mobile/google-services.json
-mobile/GoogleService-Info.plist
-
-# keep the example template (the real .env stays ignored)
-!mobile/.env.example
-
-# ---- App installers (workspace only; not committed to git) ----
-releases/*.apk
-releases/*.exe
-apps/android/dist/
-apps/desktop/dist/
-
 node_modules/
-
-# Windows build derivatives (icon.ico is the committed source asset)
-apps/desktop/build/tray.png
-apps/desktop/build/icon.png
-apps/desktop/build/icon512.png
