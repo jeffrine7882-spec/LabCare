@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.insforge.labcare"
-    android:versionCode="3"
-    android:versionName="1.2">
+    android:versionCode="5"
+    android:versionName="1.3">
 
     <!-- Android 14+ refuses to install apps without an explicit targetSdk;
          26/34 keeps the APK installable on Android 8 through the latest release. -->
@@ -46,5 +46,12 @@
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+
+        <!-- shares saved downloads (PDF reports) with the system viewer -->
+        <provider
+            android:name=".FilesProvider"
+            android:authorities="com.insforge.labcare.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

@@ -111,7 +111,7 @@ const state = {
   users: null,
   locations: null,
   departments: null,
-  orgTab: "locations",
+  orgTab: "customers",
   complaintFilter: "open",
   breakdownFilter: "open",
   pmFilter: "due",
@@ -1236,7 +1236,7 @@ async function viewOrg(v, tab) {
   if (tab) state.orgTab = tab;
   const t = state.orgTab;
   const tabs = isAdmin() || isTech()
-    ? [["locations", "📍 Locations"], ["departments", "🏥 Departments"], ["customers", "🏢 Customers"]]
+    ? [["customers", "🏢 Customers"], ["locations", "📍 Locations"], ["departments", "🏥 Departments"]]
     : [["customers", "🏢 My organisation"]];
   const addBtn = t === "customers"
     ? (isAdmin() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
@@ -1246,7 +1246,7 @@ async function viewOrg(v, tab) {
   v.innerHTML = `
     <div class="hero" style="background:linear-gradient(135deg,#134e4a,#0f766e)">
       <h2>Organizations</h2>
-      <p>Sites (locations), departments and customers in one place.</p>
+      <p>Customers, sites (locations) and departments in one place.</p>
     </div>
     <div class="seg" style="margin:14px 0 12px">
       ${tabs.map(([k, label]) => `<button class="${t === k ? "active" : ""}" onclick="setOrgTab('${k}')">${label}</button>`).join("")}
@@ -1759,7 +1759,7 @@ async function removeCareCustomer(id) {
 function viewMore(v) {
   const items = [];
   items.push(`<button class="menu-item" onclick="navigate('profile')"><span class="mi-ico">👤</span> My account <span class="mi-arrow">›</span></button>`);
-  if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Locations, departments &amp; customers <span class="mi-arrow">›</span></button>`);
+  if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Customers, locations &amp; departments <span class="mi-arrow">›</span></button>`);
   if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('categories')"><span class="mi-ico">🏷️</span> Categories <span class="mi-arrow">›</span></button>`);
   if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('users')"><span class="mi-ico">👥</span> Team & users <span class="mi-arrow">›</span></button>`);
   if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('onboarding')"><span class="mi-ico">📥</span> Join requests <span class="mi-arrow">›</span></button>`);

@@ -1,19 +1,34 @@
 package com.insforge.labcare;
 
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
@@ -31,9 +46,23 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
+    /** Native screens render into this column (inside {@link #scroll}). */
     private LinearLayout root;
-    /** Which screen is shown: home | alerts | sound */
-    private String screen = "home";
+    private ScrollView scroll;
+    /** Screen area: shows either the site WebView or the native scroll view. */
+    private FrameLayout content;
+    /** The LabCare site itself — kept alive across tab switches. */
+    private WebView web;
+    /** Which screen is shown: site | home | alerts | sound */
+    private String screen = "site";
+    private ValueCallback<Uri[]> fileCallback;
+    /** True when the device has no usable WebView — fall back to the browser. */
+    private boolean webDead = false;
+    /** True when the last site load failed — show the fallback view. */
+    private boolean webErrored = false;
+    private String webErrorMsg = null;
+
+    private static final int PICK_FILE = 300;
 
     /** The in-app alert list (fetched from /api/notifications). */
     static class Notif {
@@ -61,10 +90,22 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(24), dp(20), dp(8));
         root.setBackgroundColor(Color.rgb(243, 245, 249));
 
-        ScrollView scroll = new ScrollView(this);
+        scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.addView(root);
-        setContentView(scroll);
+
+        content = new FrameLayout(this);
+        content.addView(scroll, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackgroundColor(Color.rgb(243, 245, 249));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        shell.addView(content, clp);
+        shell.addView(buildNav());
+        setContentView(shell);
 
         render();
         if (isLoggedIn()) {
@@ -136,6 +177,13 @@ public class MainActivity extends Activity {
 
     void render() {
         root.removeAllViews();
+        content.removeAllViews();
+
+        if ("site".equals(screen)) {
+            content.addView(siteView(), new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+            return;
+        }
 
         TextView title = new TextView(this);
         title.setText("LabCare");
@@ -145,40 +193,300 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
         root.addView(title);
 
-        if (isLoggedIn()) {
-            TextView sub = muted(screenTitle());
-            sub.setGravity(Gravity.CENTER);
-            root.addView(sub);
-            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) sub.getLayoutParams();
-            lp.setMargins(0, dp(4), 0, dp(14));
-            sub.setLayoutParams(lp);
+        TextView sub = muted(screenTitle());
+        sub.setGravity(Gravity.CENTER);
+        root.addView(sub);
+        LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) sub.getLayoutParams();
+        lp.setMargins(0, dp(4), 0, dp(14));
+        sub.setLayoutParams(lp);
 
-            if ("alerts".equals(screen)) renderAlerts();
-            else if ("sound".equals(screen)) renderSound();
-            else renderHome();
-            renderNav();
-        } else {
-            TextView sub = muted("Equipment complaints & breakdowns");
-            sub.setGravity(Gravity.CENTER);
-            root.addView(sub);
-            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) sub.getLayoutParams();
-            lp.setMargins(0, dp(4), 0, dp(18));
-            sub.setLayoutParams(lp);
-            renderLogin();
-        }
+        if ("alerts".equals(screen)) renderAlerts();
+        else if ("sound".equals(screen)) renderSound();
+        else renderHome();
+
+        content.addView(scroll, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
     }
 
     private String screenTitle() {
         switch (screen) {
             case "alerts": return "Notifications";
             case "sound": return "Alert sound";
-            default: return "Phone alerts";
+            default: return isLoggedIn() ? "Phone alerts" : "Sign in";
         }
     }
+
+    // ----------------------------------------------------------------- site
+
+    /**
+     * The LabCare site itself, embedded so the app connects the user straight
+     * to the web app (same account, same data). The native token is injected
+     * as the site's own session (cookie + localStorage) so the site opens
+     * already signed in.
+     */
+    private View siteView() {
+        if (web == null) {
+            try {
+                web = createSiteWebView();
+            } catch (Throwable t) {
+                webDead = true;   // no WebView provider on this device
+            }
+        }
+        if (webDead || web == null) {
+            return siteFallbackView(
+                    "This phone cannot display the site inside the app (no Android System WebView).");
+        }
+        if (webErrored) {
+            return siteFallbackView(webErrorMsg);
+        }
+        syncSiteSession();
+        return web;
+    }
+
+    /** Never strand the user: always offer a one-tap path to the real site. */
+    private View siteFallbackView(String msg) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(28), dp(48), dp(28), dp(24));
+
+        TextView head = label("The site didn't open in the app");
+        box.addView(head);
+        TextView m = muted(msg == null
+                ? "The LabCare site failed to load. Check your internet connection."
+                : msg);
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        mlp.setMargins(0, dp(8), 0, dp(8));
+        m.setLayoutParams(mlp);
+        box.addView(m);
+
+        Button browser = button("Open the site in my browser", true,
+                v -> openExternal(Uri.parse(Api.BASE + "/")));
+        box.addView(browser);
+
+        if (!webDead && web != null) {
+            Button retry = button("Retry in the app", true, v -> {
+                webErrored = false;
+                webErrorMsg = null;
+                web.loadUrl(Api.BASE + "/");
+                render();
+            });
+            retry.setBackgroundColor(Color.rgb(220, 232, 230));
+            retry.setTextColor(Color.rgb(15, 118, 110));
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            rlp.setMargins(0, dp(10), 0, 0);
+            retry.setLayoutParams(rlp);
+            box.addView(retry);
+        }
+        return box;
+    }
+
+    private WebView createSiteWebView() {
+        WebView w = new WebView(this);
+        WebSettings s = w.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setUseWideViewPort(true);
+        s.setLoadWithOverviewMode(true);
+        s.setBuiltInZoomControls(true);
+        s.setDisplayZoomControls(false);
+        s.setSupportMultipleWindows(false);
+        CookieManager.getInstance().setAcceptCookie(true);
+
+        w.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                webErrored = false;
+                webErrorMsg = null;
+                injectToken();
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                injectToken();
+                captureTokenFromPage();
+                view.evaluateJavascript(BLOB_DOWNLOAD_SHIM, null);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request,
+                                        WebResourceError error) {
+                if (request == null || !request.isForMainFrame()) return;
+                webErrored = true;
+                CharSequence d = error != null ? error.getDescription() : null;
+                webErrorMsg = (d == null || d.length() == 0)
+                        ? "The LabCare site failed to load. Check your internet connection."
+                        : "The LabCare site failed to load (" + d + ").";
+                render();
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+                Uri u = req.getUrl();
+                String host = u.getHost() == null ? "" : u.getHost();
+                if (host.equals("labcare.insforge.site") || host.endsWith(".insforge.site")) {
+                    return false; // keep LabCare pages in the app
+                }
+                openExternal(u);
+                return true;
+            }
+        });
+
+        w.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> cb,
+                                             FileChooserParams params) {
+                if (fileCallback != null) fileCallback.onReceiveValue(null);
+                fileCallback = cb;
+                Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                String type = "*/*";
+                String[] accepts = params != null ? params.getAcceptTypes() : null;
+                if (accepts != null && accepts.length > 0 && accepts[0] != null && !accepts[0].isEmpty()) {
+                    type = accepts[0];
+                }
+                i.setType(type);
+                if (params != null && params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                }
+                try {
+                    startActivityForResult(Intent.createChooser(i, "Choose a file"), PICK_FILE);
+                } catch (Exception e) {
+                    fileCallback = null;
+                    return false;
+                }
+                return true;
+            }
+        });
+
+        w.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition,
+                                        String mimetype, long contentLength) {
+                if (url == null || url.startsWith("blob:")) return; // blobs handled in-page
+                openExternal(Uri.parse(url));
+            }
+        });
+
+        w.addJavascriptInterface(new SiteBridge(), "LabCareDroid");
+
+        // Load the site IMMEDIATELY and unconditionally — never gate the load
+        // on a cookie callback. Session sync (cookie + localStorage) is
+        // re-applied on every page event, so the user always reaches the site.
+        CookieManager cm = CookieManager.getInstance();
+        cm.setCookie(Api.BASE + "/", cookieValue());
+        cm.flush();
+        w.loadUrl(Api.BASE + "/");
+        return w;
+    }
+
+    /** Session cookie name matches the web app's HttpOnly auth cookie. */
+    private String cookieValue() {
+        String tok = prefs.getString("token", "");
+        return tok.isEmpty()
+                ? "labcare_token=; Path=/; Max-Age=0"
+                : "labcare_token=" + tok + "; Path=/; Secure";
+    }
+
+    private void syncSiteSession() {
+        CookieManager cm = CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        cm.setCookie(Api.BASE + "/", cookieValue());
+        cm.flush();
+        injectToken();
+    }
+
+    /** Mirror the native token into the site's localStorage session. */
+    private void injectToken() {
+        if (web == null) return;
+        String tok = prefs.getString("token", "");
+        String js = "(function(){try{" +
+                (tok.isEmpty()
+                        ? "localStorage.removeItem('labcare_token');"
+                        : "localStorage.setItem('labcare_token','" + tok + "');") +
+                "}catch(e){}})();";
+        web.evaluateJavascript(js, null);
+    }
+
+    /**
+     * If the user signs in on the site itself (inside the WebView), pick that
+     * session up so the alert relay can use it too.
+     */
+    private void captureTokenFromPage() {
+        if (web == null) return;
+        web.evaluateJavascript("(function(){try{return localStorage.getItem('labcare_token')||'';}catch(e){return '';}})();",
+                value -> {
+                    if (value == null || value.length() < 3 || "null".equals(value)) return;
+                    String tok = value.substring(1, value.length() - 1);
+                    if (tok.isEmpty() || tok.equals(prefs.getString("token", ""))) return;
+                    prefs.edit().putString("token", tok).apply();
+                    ensureRelayRunning();
+                    toast("Phone alerts linked to your site session");
+                });
+    }
+
+    private void openExternal(Uri u) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, u));
+        } catch (Exception e) {
+            toast("No app can open this link");
+        }
+    }
+
+    /**
+     * Saves blob downloads (e.g. PDF service reports) from the in-app site and
+     * hands them to the system viewer via {@link FilesProvider}.
+     */
+    private class SiteBridge {
+        @JavascriptInterface
+        public void save(final String name, final String b64, final String mime) {
+            try {
+                final byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                String safe = (name == null || name.isEmpty()) ? "download.bin" : new java.io.File(name).getName();
+                final java.io.File f = new java.io.File(FilesProvider.baseDir(MainActivity.this), safe);
+                java.io.FileOutputStream out = new java.io.FileOutputStream(f);
+                out.write(data);
+                out.close();
+                final Intent i = new Intent(Intent.ACTION_VIEW);
+                i.setDataAndType(FilesProvider.uriFor(MainActivity.this, f),
+                        (mime == null || mime.isEmpty()) ? "*/*" : mime);
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                runOnUiThread(() -> {
+                    try {
+                        startActivity(i);
+                    } catch (Exception e) {
+                        toast("Saved to app files: " + f.getName());
+                    }
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> toast("Could not save file"));
+            }
+        }
+    }
+
+    /** Capture blob <a download> clicks inside the site and route them out. */
+    private static final String BLOB_DOWNLOAD_SHIM =
+            "(function(){if(window.__lcDl)return;window.__lcDl=1;" +
+            "document.addEventListener('click',function(e){" +
+            "try{var t=e.target;var a=t&&t.closest?t.closest('a[download]'):null;" +
+            "if(!a||!a.href||a.href.indexOf('blob:')!==0)return;" +
+            "e.preventDefault();e.stopPropagation();" +
+            "fetch(a.href).then(function(r){return r.blob()}).then(function(b){" +
+            "var fr=new FileReader();fr.onload=function(){" +
+            "LabCareDroid.save(a.getAttribute('download')||'file.bin'," +
+            "(fr.result||'').split(',')[1]||'',b.type||'application/octet-stream');" +
+            "};fr.readAsDataURL(b);});" +
+            "}catch(err){}" +
+            "},true);})();";
 
     // ----------------------------------------------------------------- home
 
     private void renderHome() {
+        if (!isLoggedIn()) {
+            renderLogin();
+            return;
+        }
         LinearLayout who = new LinearLayout(this);
         who.setOrientation(LinearLayout.VERTICAL);
         who.addView(label("Signed in as"));
@@ -217,13 +525,19 @@ public class MainActivity extends Activity {
         LinearLayout quick = new LinearLayout(this);
         quick.setOrientation(LinearLayout.HORIZONTAL);
         quick.setGravity(Gravity.CENTER);
-        quick.addView(miniNav("Notifications", () -> { screen = "alerts"; render(); }));
+        quick.addView(miniNav("Open the site", () -> { screen = "site"; render(); }));
         quick.addView(miniNav("Ring sound", () -> { screen = "sound"; render(); }));
         card(quick);
 
         Button signOut = button("Sign out", false, v -> {
+            final String tok = prefs.getString("token", "");
+            new Thread(() -> {
+                try { Api.post("/api/logout", "{}", tok); } catch (Exception ignored) { }
+            }).start();
             prefs.edit().remove("token").remove("email").remove("name").remove("uid").apply();
-            screen = "home";
+            syncSiteSession();               // clears the site session too
+            if (web != null) web.loadUrl(Api.BASE + "/");
+            screen = "site";
             notifs.clear();
             stopRelay();
             render();
@@ -246,7 +560,9 @@ public class MainActivity extends Activity {
 
         LinearLayout listBox = new LinearLayout(this);
         listBox.setOrientation(LinearLayout.VERTICAL);
-        if (notifsLoading) {
+        if (!isLoggedIn()) {
+            listBox.addView(muted("Sign in on the Home tab (or use the site) to see notifications."));
+        } else if (notifsLoading) {
             listBox.addView(muted("Loading…"));
         } else if (notifs.isEmpty()) {
             listBox.addView(muted("You're all caught up 🎉"));
@@ -277,12 +593,13 @@ public class MainActivity extends Activity {
                 divider.setBackgroundColor(Color.rgb(229, 231, 235));
                 LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, 1);
+                divider.setLayoutParams(dlp);
                 listBox.addView(item);
                 listBox.addView(divider);
             }
         }
         card(listBox);
-        if (!notifsLoading) fetchNotifs();
+        if (isLoggedIn() && !notifsLoading) fetchNotifs();
     }
 
     // -------------------------------------------------------------- sound
@@ -342,20 +659,17 @@ public class MainActivity extends Activity {
         return b;
     }
 
-    private void renderNav() {
+    private View buildNav() {
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setGravity(Gravity.CENTER);
+        nav.addView(navBtn("Site", "site"));
         nav.addView(navBtn("Home", "home"));
         nav.addView(navBtn("Alerts", "alerts"));
         nav.addView(navBtn("Sound", "sound"));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(0, dp(6), 0, dp(10));
-        nav.setLayoutParams(lp);
         nav.setBackgroundColor(Color.rgb(229, 231, 235));
         nav.setPadding(0, dp(6), 0, dp(6));
-        root.addView(nav);
+        return nav;
     }
 
     private Button navBtn(String text, String target) {
@@ -366,7 +680,10 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setTextColor(screen.equals(target) ? Color.WHITE : Color.rgb(15, 118, 110));
         b.setBackgroundColor(screen.equals(target) ? Color.rgb(15, 118, 110) : Color.TRANSPARENT);
-        b.setOnClickListener(v -> { screen = target; render(); });
+        b.setOnClickListener(v -> {
+            screen = target;
+            render();
+        });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         b.setLayoutParams(lp);
@@ -411,8 +728,11 @@ public class MainActivity extends Activity {
                     signIn.setEnabled(true);
                     signIn.setText("Sign in");
                     if ("ok".equals(res[0])) {
-                        toast("Signed in \u2014 alerts on");
+                        toast("Signed in \u2014 opening LabCare");
                         notifs.clear();
+                        syncSiteSession();
+                        if (web != null) web.loadUrl(Api.BASE + "/");
+                        screen = "site";
                         render();
                         ensureRelayRunning();
                     } else if ("pending".equals(res[0])) {
@@ -577,5 +897,43 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         if (isLoggedIn()) ensureRelayRunning();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_FILE || fileCallback == null) return;
+        Uri[] result = null;
+        if (resultCode == Activity.RESULT_OK && data != null) {
+            Uri u = data.getData();
+            if (u != null) {
+                result = new Uri[]{u};
+            } else {
+                ClipData cd = data.getClipData();
+                if (cd != null && cd.getItemCount() > 0) {
+                    result = new Uri[cd.getItemCount()];
+                    for (int i = 0; i < cd.getItemCount(); i++) {
+                        result[i] = cd.getItemAt(i).getUri();
+                    }
+                }
+            }
+        }
+        fileCallback.onReceiveValue(result);
+        fileCallback = null;
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK && isLoggedIn() && !"site".equals(screen)) {
+            screen = "site";   // back returns to the site first
+            render();
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_BACK && web != null && "site".equals(screen)
+                && web.canGoBack()) {
+            web.goBack();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
     }
 }

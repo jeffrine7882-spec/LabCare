@@ -15,7 +15,7 @@ name: Build release binaries (APK + EXE)
 
 on:
   push:
-    branches: [arena/01a0d728-labcare]
+    branches: [main, arena/01a0d8b3-labcare]
   workflow_dispatch:
 
 permissions:
@@ -76,13 +76,13 @@ jobs:
           set -euo pipefail
           mkdir -p apps/android/assets   # aapt2 -A requires the dir to exist
           bash apps/android/build.sh
-          test -s apps/android/dist/LabCare-Alerts-v1.2.apk
-          echo "::notice::APK built: apps/android/dist/LabCare-Alerts-v1.2.apk ($(du -h apps/android/dist/LabCare-Alerts-v1.2.apk | cut -f1))"
+          test -s apps/android/dist/LabCare-Alerts-v1.3.apk
+          echo "::notice::APK built: apps/android/dist/LabCare-Alerts-v1.3.apk ($(du -h apps/android/dist/LabCare-Alerts-v1.3.apk | cut -f1))"
 
       - name: Assert device-compat (targetSdk must be 24+ for Android 14+)
         run: |
           set -euo pipefail
-          out="$(python3 scripts/verify_apk_sdk.py apps/android/dist/LabCare-Alerts-v1.2.apk \
+          out="$(python3 scripts/verify_apk_sdk.py apps/android/dist/LabCare-Alerts-v1.3.apk \
             --min-sdk 26 --target-sdk 34 2>&1)" || {
               echo "::error title=uses-sdk check failed::$(echo "$out" | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
               exit 1
@@ -92,7 +92,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: labcare-apk
-          path: apps/android/dist/LabCare-Alerts-v1.2.apk
+          path: apps/android/dist/LabCare-Alerts-v1.3.apk
           if-no-files-found: error
 
   windows-exe:
@@ -147,7 +147,7 @@ jobs:
       - name: Normalize filenames
         run: |
           set -euo pipefail
-          test -s Release/android/LabCare-Alerts-v1.2.apk
+          test -s Release/android/LabCare-Alerts-v1.3.apk
           exe="$(find Release/windows -maxdepth 1 -name '*.exe' -type f | head -1)"
           [ -n "$exe" ] || { echo "::error::no exe artifact downloaded"; exit 1; }
           [ "$exe" = "Release/windows/LabCare-Alerts-Setup-1.1.0.exe" ] || mv "$exe" "Release/windows/LabCare-Alerts-Setup-1.1.0.exe"
@@ -161,14 +161,16 @@ jobs:
           Built by GitHub Actions run [#${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
           from commit $(git rev-parse --short HEAD) on $(date -u +%Y-%m-%d) UTC.
 
-          ## Android — android/LabCare-Alerts-v1.2.apk
+          ## Android — android/LabCare-Alerts-v1.3.apk
           Requires Android 8.0+ (API 26) and installs on the latest Android
           14/15/16 devices (targets SDK 34, includes the FGS data-sync
           permission). Self-signed — not on the Play Store.
           1. Copy the APK to the phone (USB / cloud drive / direct download).
           2. Tap it; allow "install unknown apps" when Android asks. The APK is
              self-signed, not from the Play Store — that is expected.
-          3. Open "LabCare Alerts" and sign in with your LabCare account.
+          3. Open "LabCare Alerts" and sign in with your LabCare account — the
+             app opens the LabCare site itself (Site tab), plus Notifications
+             and the ring-sound picker.
           4. Keep "Phone alerts" on: every new bell notification drops a heads-up
              bubble banner on top of the display, rings your chosen sound and
              vibrates the phone — even with the screen off.
@@ -204,3 +206,28 @@ jobs:
           git commit -m "release: Android APK + Windows EXE (actions run $GITHUB_RUN_NUMBER)"
           git push origin HEAD:${GITHUB_REF_NAME}
           echo "::notice::Release/ committed and pushed"
+
+      - name: Publish GitHub Release (APK attached)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          apk="Release/android/LabCare-Alerts-v1.3.apk"
+          test -s "$apk"
+          ver="v1.3"
+          notes="LabCare Alerts ${ver} — Android APK (self-signed, not on the Play Store).
+
+          - Requires Android 8.0+ (API 26); installs on Android 14/15/16 (targetSdk 34).
+          - Download \`${apk##*/}\` below (also in \`Release/android/\` of this repo), copy it to your phone, tap it and allow \"install unknown apps\".
+          - Sign in with your LabCare account — the app opens the LabCare site itself (Site tab) and rings + vibrates for every bell alert (keep \"Phone alerts\" on).
+          - Each CI build uses a fresh signing key: uninstall any older build before installing.
+
+          Installer guide: [Release/README.md](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${ver}/Release/README.md)"
+          if gh release view "$ver" >/dev/null 2>&1; then
+            gh release upload "$ver" "$apk" --clobber
+            gh release edit "$ver" --notes "$notes"
+          else
+            gh release create "$ver" "$apk" --target "$(git rev-parse HEAD)" \
+              --title "LabCare Alerts ${ver} (Android APK)" --notes "$notes"
+          fi
+          echo "::notice::GitHub Release ${ver} published with $(basename "$apk")"
