@@ -87,24 +87,37 @@ class SharedAssetAndLocationTest(unittest.TestCase):
         })
         self.assertEqual(dup.status_code, 409)
 
-        # 3. Same serial number for DIFFERENT customer is permitted
-        eq3 = self.client.post("/api/equipment", json={
+        # 3. Different customers CANNOT register equipment with the same serial numbers
+        eq3_dup = self.client.post("/api/equipment", json={
             "name": "Centrifuge", "customer_id": c2, "location_id": l2,
             "model": "5810 R", "serial_number": "CF-BIO-01"
         })
-        self.assertEqual(eq3.status_code, 201)
+        self.assertEqual(eq3_dup.status_code, 409)
+        self.assertIn("already registered", eq3_dup.get_json()["error"])
 
-        # 4. Multiple equipment with blank serial numbers under same customer are permitted
+        # 4. Different customers CAN share the exact same equipment name with a different serial number
+        eq3_ok = self.client.post("/api/equipment", json={
+            "name": "Centrifuge", "customer_id": c2, "location_id": l2,
+            "model": "Allegra X-30", "serial_number": "CF-MER-01"
+        })
+        self.assertEqual(eq3_ok.status_code, 201)
+        self.assertEqual(eq3_ok.get_json()["name"], "Centrifuge")
+
+        # 5. Multiple equipment with blank serial numbers under same or different customers are permitted
         eq_un1 = self.client.post("/api/equipment", json={
             "name": "Vortex Mixer", "customer_id": c1, "location_id": l1, "serial_number": ""
         })
         eq_un2 = self.client.post("/api/equipment", json={
             "name": "Vortex Mixer", "customer_id": c1, "location_id": l1, "serial_number": ""
         })
+        eq_un3 = self.client.post("/api/equipment", json={
+            "name": "Vortex Mixer", "customer_id": c2, "location_id": l2, "serial_number": ""
+        })
         self.assertEqual(eq_un1.status_code, 201)
         self.assertEqual(eq_un2.status_code, 201)
+        self.assertEqual(eq_un3.status_code, 201)
 
-        # 5. Ticket payloads clearly reflect details (name, model, serial)
+        # 6. Ticket payloads clearly reflect details (name, model, serial)
         cmp = self.client.post("/api/complaints", json={
             "subject": "Rotor imbalance", "customer_id": c1, "location_id": l1, "equipment_id": eq1["id"]
         }).get_json()
@@ -119,7 +132,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
         self.assertEqual(brk["equipment_serial"], "CF-BIO-02")
         self.assertEqual(brk["equipment_model"], "5424")
 
-        # 6. PM payload reflects details
+        # 7. PM payload reflects details
         pm = self.client.post("/api/pms", json={
             "title": "Centrifuge quarterly maintenance", "customer_id": c1, "equipment_id": eq1["id"], "interval_days": 90
         }).get_json()

@@ -1530,11 +1530,11 @@ def create_equipment():
         return err_r, code_r
     serial = (b.get("serial_number") or "").strip()
     if serial:
-        dup = c.execute("SELECT id FROM equipment WHERE customer_id=? AND serial_number=?",
-                        (b["customer_id"], serial)).fetchone()
+        dup = c.execute("SELECT id FROM equipment WHERE serial_number=?",
+                        (serial,)).fetchone()
         if dup:
             c.close()
-            return jsonify({"error": f"Serial number '{serial}' is already registered for this customer"}), 409
+            return jsonify({"error": f"Serial number '{serial}' is already registered"}), 409
     cur = c.execute(
         "INSERT INTO equipment (customer_id,location_id,department_id,name,model,serial_number,category,installed_date,warranty_expiry,status,notes,responsible_admin_id,created_at) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1596,11 +1596,11 @@ def update_equipment(eid):
         return err_r, code_r
     serial = (b.get("serial_number") or "").strip()
     if serial:
-        dup = c.execute("SELECT id FROM equipment WHERE customer_id=? AND serial_number=? AND id!=?",
-                        (customer_id, serial, eid)).fetchone()
+        dup = c.execute("SELECT id FROM equipment WHERE serial_number=? AND id!=?",
+                        (serial, eid)).fetchone()
         if dup:
             c.close()
-            return jsonify({"error": f"Serial number '{serial}' is already registered for this customer"}), 409
+            return jsonify({"error": f"Serial number '{serial}' is already registered"}), 409
     c.execute(
         "UPDATE equipment SET customer_id=?,location_id=?,department_id=?,name=?,model=?,serial_number=?,category=?,installed_date=?,warranty_expiry=?,status=?,notes=?,responsible_admin_id=? WHERE id=?",
         (customer_id, loc_id, dept_id,

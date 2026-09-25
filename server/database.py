@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS equipment (
     department_id INTEGER,
     name TEXT NOT NULL,
     model TEXT DEFAULT '',
-    serial_number TEXT DEFAULT '',
+    serial_number TEXT,
     category TEXT DEFAULT '',
     installed_date TEXT DEFAULT '',
     warranty_expiry TEXT DEFAULT '',
@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS equipment (
     FOREIGN KEY(customer_id) REFERENCES customers(id),
     FOREIGN KEY(location_id) REFERENCES locations(id),
     FOREIGN KEY(department_id) REFERENCES departments(id),
-    UNIQUE(customer_id, serial_number)
+    UNIQUE(serial_number)
 );
 
 CREATE TABLE IF NOT EXISTS complaints (
@@ -419,9 +419,10 @@ def _sqlite_migrate(c):
                 c.execute("UPDATE departments SET name=?, customer_id=? WHERE id=?",
                           (loc["name"], loc["customer_id"], d["id"]))
 
-    # Ensure blank serial numbers are NULL so UNIQUE(customer_id, serial_number)
+    # Ensure blank serial numbers are NULL so UNIQUE(serial_number)
     # does not fail when multiple equipment are registered without serial numbers.
     c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_equipment_serial_global ON equipment(serial_number) WHERE serial_number IS NOT NULL AND serial_number != ''")
 
     _sqlite_migrate_roles(c)
 
@@ -647,7 +648,7 @@ CREATE TABLE IF NOT EXISTS equipment (
     department_id BIGINT REFERENCES departments(id),
     name TEXT NOT NULL,
     model TEXT DEFAULT '',
-    serial_number TEXT DEFAULT '',
+    serial_number TEXT,
     category TEXT DEFAULT '',
     installed_date TEXT DEFAULT '',
     warranty_expiry TEXT DEFAULT '',
@@ -655,7 +656,7 @@ CREATE TABLE IF NOT EXISTS equipment (
     notes TEXT DEFAULT '',
     responsible_admin_id BIGINT,
     created_at TEXT NOT NULL,
-    UNIQUE(customer_id, serial_number)
+    UNIQUE(serial_number)
 );
 
 CREATE TABLE IF NOT EXISTS complaints (
@@ -1011,9 +1012,10 @@ def _pg_migrate(c):
         FROM locations l
         WHERE d.location_id = l.id AND (d.name != l.name OR d.customer_id != l.customer_id)
     """)
-    # Ensure blank serial numbers are NULL so UNIQUE(customer_id, serial_number)
+    # Ensure blank serial numbers are NULL so UNIQUE(serial_number)
     # does not fail when multiple equipment are registered without serial numbers.
     c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_equipment_serial_global ON equipment(serial_number) WHERE serial_number IS NOT NULL AND serial_number != ''")
 
 
 
