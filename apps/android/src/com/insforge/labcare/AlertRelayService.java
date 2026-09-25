@@ -18,12 +18,13 @@ import org.json.JSONObject;
 
 /**
  * Foreground relay: polls the LabCare bell endpoint and, on a new unread
- * notification, plays a chime + posts a notification and vibrates — the
- * phone rings even when the LabCare app UI is closed or the screen is off.
+ * notification, drops a HEADS-UP bubble over the top of the display, rings
+ * the user's chosen sound and vibrates — the phone alerts even when the
+ * LabCare app UI is closed or the screen is off.
  */
 public class AlertRelayService extends Service {
 
-    private static final String CHANNEL = "labcare_alerts";
+    private static final String CHANNEL = "labcare_alerts_v2"; // new id: heads-up settings land on upgrades too
     private Handler handler;
     private Runnable poller;
     private SharedPreferences prefs;
@@ -128,15 +129,48 @@ public class AlertRelayService extends Service {
         PendingIntent pi = PendingIntent.getActivity(this, 0, i,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        Notification n = new Notification.Builder(this, CHANNEL)
-                .setContentTitle("LabCare")
+        // Vibrate: ON-notification channel (O+) handles it, this explicit
+        // buzz keeps older devices buzzing too and overlaps cleanly.
+        buzz();
+
+        Notification.Builder b = new Notification.Builder(this, CHANNEL)
+                .setContentTitle("\uD83D\uDD14 LabCare alert")
                 .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setSmallIcon(R.drawable.ic_stat_bell)
                 .setAutoCancel(true)
-                .setContentIntent(pi)
-                .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
-                .build();
-        nm.notify((int) (System.currentTimeMillis() % Integer.MAX_VALUE), n);
+                .setCategory(Notification.CATEGORY_MESSAGE)
+                .setShowWhen(true)
+                .setContentIntent(pi);
+        if (android.os.Build.VERSION.SDK_INT < 26) {
+            // heads-up banner pre-O comes from the priority, sound & vibration
+            b = b.setPriority(Notification.PRIORITY_MAX)
+                 .setVibrate(new long[]{0, 250, 120, 250, 120, 250})
+                 .setSound(android.net.Uri.parse(
+                         "android.resource://" + getPackageName() + "/" + soundResId()));
+        }
+        nm.notify((int) (System.currentTimeMillis() % Integer.MAX_VALUE), b.build());
+    }
+
+    private void buzz() {
+        try {
+            android.os.Vibrator vib;
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                android.os.VibratorManager vm = (android.os.VibratorManager)
+                        getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                vib = vm != null ? vm.getDefaultVibrator() : null;
+            } else {
+                vib = (android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            }
+            if (vib == null || !vib.hasVibrator()) return;
+            long[] pattern = {0, 250, 120, 250, 120, 250};
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                vib.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1));
+            } else {
+                vib.vibrate(pattern, -1);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private int soundResId() {
@@ -152,9 +186,15 @@ public class AlertRelayService extends Service {
 
     private void createChannel() {
         if (android.os.Build.VERSION.SDK_INT >= 26) {
+            // IMPORTANCE_HIGH = heads-up banner floating on top of any app.
+            // Sound stays null: ring() plays the user's chosen tune itself,
+            // so the user never hears a doubled notification ding.
             NotificationChannel ch = new NotificationChannel(
                     CHANNEL, "LabCare alerts", NotificationManager.IMPORTANCE_HIGH);
-            ch.setDescription("Rings for new LabCare bell notifications");
+            ch.setDescription("Heads-up bubble + sound + vibration for new LabCare bell notifications");
+            ch.enableVibration(true);
+            ch.setVibrationPattern(new long[]{0, 250, 120, 250, 120, 250});
+            ch.enableLights(true);
             NotificationManager nm = getSystemService(NotificationManager.class);
             nm.createNotificationChannel(ch);
         }

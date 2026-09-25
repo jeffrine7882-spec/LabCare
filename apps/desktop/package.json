@@ -1,7 +1,7 @@
 {
   "name": "labcare-desktop",
-  "version": "1.0.0",
-  "description": "LabCare desktop alerts for Windows — rings for every bell notification from the system tray.",
+  "version": "1.1.0",
+  "description": "LabCare desktop alerts for Windows \u2014 rings for every bell notification from the system tray.",
   "main": "main.js",
   "author": "LabCare",
   "license": "UNLICENSED",

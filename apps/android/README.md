@@ -10,8 +10,10 @@
 ## What it does
 * Signs in with the same account as the web app (`https://labcare.insforge.site`).
 * A foreground **alert relay** polls your bell every **10 seconds** and, on a
-  new notification, **plays a chime + vibrates + shows a notification** —
-  even with the phone screen off or the app UI closed.
+  new notification, drops a **heads-up bubble banner on top of the display**,
+  **plays your chosen sound + vibrates** — even with the phone screen off or
+  the app UI closed. (The alert channel is `labcare_alerts_v2`: high
+  importance for the floating banner, so upgrades get the new behaviour.)
 * Auto-starts the relay after the phone reboots.
 * A **Phone alerts** switch turns it on/off; sign-out clears the session.
 

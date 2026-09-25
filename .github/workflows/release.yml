@@ -66,13 +66,13 @@ jobs:
           set -euo pipefail
           mkdir -p apps/android/assets   # aapt2 -A requires the dir to exist
           bash apps/android/build.sh
-          test -s apps/android/dist/LabCare-Alerts-v1.0.apk
-          echo "::notice::APK built: apps/android/dist/LabCare-Alerts-v1.0.apk ($(du -h apps/android/dist/LabCare-Alerts-v1.0.apk | cut -f1))"
+          test -s apps/android/dist/LabCare-Alerts-v1.1.apk
+          echo "::notice::APK built: apps/android/dist/LabCare-Alerts-v1.1.apk ($(du -h apps/android/dist/LabCare-Alerts-v1.1.apk | cut -f1))"
 
       - uses: actions/upload-artifact@v4
         with:
           name: labcare-apk
-          path: apps/android/dist/LabCare-Alerts-v1.0.apk
+          path: apps/android/dist/LabCare-Alerts-v1.1.apk
           if-no-files-found: error
 
   windows-exe:
@@ -121,10 +121,10 @@ jobs:
       - name: Normalize filenames
         run: |
           set -euo pipefail
-          test -s Release/android/LabCare-Alerts-v1.0.apk
+          test -s Release/android/LabCare-Alerts-v1.1.apk
           exe="$(find Release/windows -maxdepth 1 -name '*.exe' -type f | head -1)"
           [ -n "$exe" ] || { echo "::error::no exe artifact downloaded"; exit 1; }
-          [ "$exe" = "Release/windows/LabCare-Alerts-Setup-1.0.0.exe" ] || mv "$exe" "Release/windows/LabCare-Alerts-Setup-1.0.0.exe"
+          [ "$exe" = "Release/windows/LabCare-Alerts-Setup-1.1.0.exe" ] || mv "$exe" "Release/windows/LabCare-Alerts-Setup-1.1.0.exe"
           ls -la Release/android Release/windows
 
       - name: Write Release/README.md
@@ -135,23 +135,26 @@ jobs:
           Built by GitHub Actions run [#${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
           from commit $(git rev-parse --short HEAD) on $(date -u +%Y-%m-%d) UTC.
 
-          ## Android — android/LabCare-Alerts-v1.0.apk
+          ## Android — android/LabCare-Alerts-v1.1.apk
           1. Copy the APK to the phone (USB / cloud drive / direct download).
           2. Tap it; allow "install unknown apps" when Android asks. The APK is
              self-signed, not from the Play Store — that is expected.
           3. Open "LabCare Alerts" and sign in with your LabCare account.
-          4. Keep "Phone alerts" on to get a chime + vibration + notification for
-             every new bell notification, even with the screen off.
+          4. Keep "Phone alerts" on: every new bell notification drops a heads-up
+             bubble banner on top of the display, rings your chosen sound and
+             vibrates the phone — even with the screen off.
           Note: each CI build uses a fresh signing key, so uninstall any older CI
           build before installing a new one.
 
-          ## Windows — windows/LabCare-Alerts-Setup-1.0.0.exe
+          ## Windows — windows/LabCare-Alerts-Setup-1.1.0.exe
           1. Run the installer. SmartScreen will warn about an "unrecognized app"
              (self-signed) — choose **More info → Run anyway**.
           2. It installs under %LOCALAPPDATA%\\LabCare Alerts, adds Start-menu +
              desktop shortcuts, and auto-starts with Windows.
-          3. Sign in once; the app then lives in the system tray and rings for
-             every new bell notification. Clicking a notification opens the web app.
+          3. Sign in once; the app then lives in the system tray. Every new bell
+             notification floats an always-on-top bubble banner (top-right of
+             your screen) with the alert sound + dismiss/open buttons, plus a
+             Windows notification. Clicking either opens the web app.
 
           ## Web app (no install)
           https://labcare.insforge.site — also installable as a PWA
