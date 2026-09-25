@@ -873,11 +873,26 @@ def signup():
     customer_id = b.get("customer_id") or None
     location_id = b.get("location_id") or None
     department_id = b.get("department_id") or None
+    new_cust_name = (b.get("new_customer_name") or b.get("new_organisation_name") or b.get("new_customer") or "").strip()
     new_loc_name = (b.get("new_location_name") or b.get("new_location") or "").strip()
     if role == "customer":
-        if not customer_id:
+        if new_cust_name:
+            existing_cust = c.execute(
+                "SELECT id FROM customers WHERE lower(name)=?",
+                (new_cust_name.lower(),)
+            ).fetchone()
+            if existing_cust:
+                customer_id = existing_cust["id"]
+            else:
+                cur_cust = c.execute(
+                    "INSERT INTO customers (name,contact_name,email,phone,address,city,created_at) VALUES (?,?,?,?,?,?,?)",
+                    (new_cust_name, name, email, b.get("phone", ""), "", "", now()),
+                )
+                customer_id = cur_cust.lastrowid
+        elif not customer_id:
             c.close()
-            return jsonify({"error": "Select your organisation"}), 400
+            return jsonify({"error": "Select your organisation or create a new one"}), 400
+
         if new_loc_name:
             # Location and department are unified: create or resolve location/department for this customer
             existing_loc = c.execute(
@@ -898,6 +913,17 @@ def signup():
                     (customer_id, location_id, new_loc_name, now()),
                 )
                 department_id = cur_dept.lastrowid
+        elif new_cust_name and not location_id:
+            cur_loc = c.execute(
+                "INSERT INTO locations (customer_id,name,address,city,created_at) VALUES (?,?,?,?,?)",
+                (customer_id, "Main Lab", "", "", now()),
+            )
+            location_id = cur_loc.lastrowid
+            cur_dept = c.execute(
+                "INSERT INTO departments (customer_id,location_id,name,created_at) VALUES (?,?,?,?)",
+                (customer_id, location_id, "Main Lab", now()),
+            )
+            department_id = cur_dept.lastrowid
         else:
             if not location_id:
                 c.close()

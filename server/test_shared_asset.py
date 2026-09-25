@@ -262,6 +262,83 @@ class SharedAssetAndLocationTest(unittest.TestCase):
         self.assertEqual(locs2[0]["name"], "Genomics Core")
         self.assertNotEqual(locs2[0]["id"], new_loc_id)
 
+    def test_signup_create_new_organisation(self):
+        # 1. Signup with brand new organization and brand new location/department
+        res = self.client.post("/api/signup", json={
+            "name": "Prof. Charles",
+            "email": "charles@novabiotech.test",
+            "password": "password123",
+            "role": "customer",
+            "new_customer_name": "Nova Biotech Lab",
+            "new_location_name": "Proteomics Facility",
+        })
+        self.assertEqual(res.status_code, 201)
+
+        # 2. Verify new organization was created
+        custs = self.client.get("/api/lookup/customers").get_json()
+        cust = next((c for c in custs if c["name"] == "Nova Biotech Lab"), None)
+        self.assertIsNotNone(cust)
+        cust_id = cust["id"]
+
+        # 3. Verify location and department were created for that customer
+        locs = self.client.get(f"/api/locations?customer_id={cust_id}").get_json()
+        self.assertEqual(len(locs), 1)
+        self.assertEqual(locs[0]["name"], "Proteomics Facility")
+        loc_id = locs[0]["id"]
+
+        depts = self.client.get(f"/api/departments?location_id={loc_id}").get_json()
+        self.assertEqual(len(depts), 1)
+        self.assertEqual(depts[0]["name"], "Proteomics Facility")
+
+        # 4. Master admin reviews and approves the request
+        onboarding_list = self.client.get("/api/onboarding").get_json()
+        app_item = next(a for a in onboarding_list if a["email"] == "charles@novabiotech.test")
+        self.assertEqual(app_item["customer_id"], cust_id)
+        self.assertEqual(app_item["customer_name"], "Nova Biotech Lab")
+        self.assertEqual(app_item["location_id"], loc_id)
+        self.assertEqual(app_item["location_name"], "Proteomics Facility")
+
+        apprv = self.client.post(f"/api/onboarding/{app_item['id']}/review", json={"decision": "approve"})
+        self.assertEqual(apprv.status_code, 200)
+
+        # 5. User can log in with new customer and location
+        client_charles = app.test_client()
+        login_res = client_charles.post("/api/login", json={"email": "charles@novabiotech.test", "password": "password123"})
+        self.assertEqual(login_res.status_code, 200)
+        user_info = login_res.get_json()["user"]
+        self.assertEqual(user_info["customer_id"], cust_id)
+        self.assertEqual(user_info["location_id"], loc_id)
+
+        # 6. Another user signing up with same organisation name reuses existing customer
+        res2 = self.client.post("/api/signup", json={
+            "name": "Dr. Diana",
+            "email": "diana@novabiotech.test",
+            "password": "password123",
+            "role": "customer",
+            "new_customer_name": "Nova Biotech Lab",
+            "new_location_name": "Pathology Suite",
+        })
+        self.assertEqual(res2.status_code, 201)
+        onboarding_list2 = self.client.get("/api/onboarding").get_json()
+        app_item2 = next(a for a in onboarding_list2 if a["email"] == "diana@novabiotech.test")
+        self.assertEqual(app_item2["customer_id"], cust_id)
+        self.assertEqual(app_item2["customer_name"], "Nova Biotech Lab")
+        self.assertEqual(app_item2["location_name"], "Pathology Suite")
+
+        # 7. Signup with new customer without specifying location defaults to Main Lab
+        res3 = self.client.post("/api/signup", json={
+            "name": "Dr. Evan",
+            "email": "evan@apexresearch.test",
+            "password": "password123",
+            "role": "customer",
+            "new_customer_name": "Apex Research",
+        })
+        self.assertEqual(res3.status_code, 201)
+        onboarding_list3 = self.client.get("/api/onboarding").get_json()
+        app_item3 = next(a for a in onboarding_list3 if a["email"] == "evan@apexresearch.test")
+        self.assertEqual(app_item3["customer_name"], "Apex Research")
+        self.assertEqual(app_item3["location_name"], "Main Lab")
+
     @classmethod
     def tearDownClass(cls):
         if os.path.exists(test_db):

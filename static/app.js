@@ -3533,13 +3533,29 @@ async function loadJoinOptions() {
     const opts = await API.get("/api/lookup/options");
     const custSel = $("#jnCustomer");
     custSel.innerHTML = `<option value="">— Select your organisation —</option>` +
-      opts.customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+      opts.customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("") +
+      `<option value="__new__">＋ Create new organisation…</option>`;
     state.signup = { customers: opts.customers, locations: opts.locations, departments: opts.departments };
   } catch (e) { /* ignore */ }
 }
 
 function onJoinCust() {
   const cust = $("#jnCustomer").value;
+  const isNewCust = cust === "__new__";
+  if ($("#jnNewCustomerWrap")) {
+    $("#jnNewCustomerWrap").classList.toggle("hidden", !isNewCust);
+    if (isNewCust && $("#jnNewCustomer")) $("#jnNewCustomer").focus();
+  }
+  if (!isNewCust && $("#jnNewCustomer")) $("#jnNewCustomer").value = "";
+
+  if (isNewCust) {
+    $("#jnLocation").innerHTML = `<option value="__new__" selected>＋ Create new location/department…</option>`;
+    $("#jnLocation").value = "__new__";
+    if ($("#jnNewLocationWrap")) $("#jnNewLocationWrap").classList.remove("hidden");
+    if ($("#jnDepartment")) $("#jnDepartment").innerHTML = `<option value="">— Select department —</option>`;
+    return;
+  }
+
   const locs = cust ? (state.signup?.locations || []).filter((l) => String(l.customer_id) === String(cust)) : [];
   let opts = `<option value="">— Select location/department —</option>`;
   if (cust) {
@@ -3600,7 +3616,25 @@ $("#joinForm").addEventListener("submit", async (e) => {
     role,
   };
   if (role === "customer") {
-    body.customer_id = $("#jnCustomer").value;
+    const custVal = $("#jnCustomer").value;
+    if (custVal === "__new__") {
+      const newCustName = ($("#jnNewCustomer")?.value || "").trim();
+      if (!newCustName) {
+        const el = $("#joinError");
+        el.textContent = "Please enter the new organisation name";
+        el.classList.remove("hidden");
+        return;
+      }
+      body.new_customer_name = newCustName;
+    } else if (custVal) {
+      body.customer_id = custVal;
+    } else {
+      const el = $("#joinError");
+      el.textContent = "Please select or create an organisation";
+      el.classList.remove("hidden");
+      return;
+    }
+
     const locVal = $("#jnLocation").value;
     if (locVal === "__new__") {
       const newLocName = ($("#jnNewLocation")?.value || "").trim();
@@ -3611,10 +3645,15 @@ $("#joinForm").addEventListener("submit", async (e) => {
         return;
       }
       body.new_location_name = newLocName;
-    } else {
+    } else if (locVal) {
       body.location_id = locVal;
       const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(body.location_id));
       body.department_id = $("#jnDepartment")?.value || depts[0]?.id || body.location_id;
+    } else {
+      const el = $("#joinError");
+      el.textContent = "Please select or create a location/department";
+      el.classList.remove("hidden");
+      return;
     }
   }
   try {
@@ -3622,12 +3661,16 @@ $("#joinForm").addEventListener("submit", async (e) => {
     $("#joinOk").textContent = res.message || "Submitted for approval ✓";
     $("#joinOk").classList.remove("hidden");
     $("#joinForm").reset();
+    if ($("#jnNewCustomerWrap")) $("#jnNewCustomerWrap").classList.add("hidden");
+    if ($("#jnNewCustomer")) $("#jnNewCustomer").value = "";
     if ($("#jnNewLocationWrap")) $("#jnNewLocationWrap").classList.add("hidden");
     if ($("#jnNewLocation")) $("#jnNewLocation").value = "";
     $("#jnCustomerBlock").classList.remove("hidden");
+    onJoinCust();
+    loadJoinOptions();
   } catch (err) {
     const el = $("#joinError");
-    el.textContent = err.message;
+    el.textContent = err.message || "Submission failed";
     el.classList.remove("hidden");
   }
 });
