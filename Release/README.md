@@ -1,9 +1,12 @@
 # LabCare — native installers
 
-Built by GitHub Actions run [#3](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36127341323)
-from commit 9941aeb on 2026-09-25 UTC.
+Built by GitHub Actions run [#23](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36135914011)
+from commit 5a02888 on 2026-09-25 UTC.
 
-## Android — android/LabCare-Alerts-v1.1.apk
+## Android — android/LabCare-Alerts-v1.2.apk
+Requires Android 8.0+ (API 26) and installs on the latest Android
+14/15/16 devices (targets SDK 34, includes the FGS data-sync
+permission). Self-signed — not on the Play Store.
 1. Copy the APK to the phone (USB / cloud drive / direct download).
 2. Tap it; allow "install unknown apps" when Android asks. The APK is
    self-signed, not from the Play Store — that is expected.
