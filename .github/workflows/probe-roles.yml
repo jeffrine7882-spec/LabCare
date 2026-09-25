@@ -68,7 +68,7 @@ jobs:
           DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe');
           DELETE FROM audit_logs    WHERE (entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe'))
                                      OR (entity_type='customer'  AND entity_id IN (SELECT id FROM customers WHERE name='Roles Probe Clinic'));
-          DELETE FROM breakdowns    WHERE subject='roles probe';
+          DELETE FROM breakdowns    WHERE fault_description='roles probe';
           DELETE FROM users         WHERE email LIKE '%@rolesprobe.example';
           DELETE FROM customers     WHERE name='Roles Probe Clinic';
           SQL
@@ -123,7 +123,7 @@ jobs:
           # parity on ticket work: application accepts + comments
           bid="$(curl -sSf -X POST "$PROD/api/breakdowns" -H "Authorization: Bearer $etok" \
             -H 'Content-Type: application/json' \
-            -d "{\"customer_id\":$cid,\"subject\":\"roles probe\",\"fault_description\":\"probe\",\"priority\":\"low\"}" | jq -r .id)"
+            -d "{\"customer_id\":$cid,\"subject\":\"roles probe\",\"fault_description\":\"roles probe\",\"priority\":\"low\"}" | jq -r .id)"
           curl -sSf -X POST "$PROD/api/breakdowns/$bid/accept" -H "Authorization: Bearer $atok" \
             -H 'Content-Type: application/json' -d '{}' > /dev/null
           curl -sSf -X POST "$PROD/api/comments" -H "Authorization: Bearer $atok" \
