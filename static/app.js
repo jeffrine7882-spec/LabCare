@@ -1446,7 +1446,7 @@ async function openLocationEditor(edit, id) {
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit location/department" : "Add location/department"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
-      <label class="field"><span>Location/Department name *</span><input id="locName" value="${esc(l ? l.name : "")}" placeholder="e.g. Molecular Diagnostics"></label>
+      <label class="field"><span>Location/Department name *</span><input id="locName" value="${esc(l ? l.name : "")}" placeholder="e.g. Molecular Lab"></label>
       <label class="field"><span>Customer *</span>
         <select id="locCustomer">
           ${customers.map((x) => `<option value="${x.id}" ${l && l.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
@@ -2306,7 +2306,7 @@ async function openCustomerEditor(edit) {
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit customer" : "Add customer"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
-      <label class="field"><span>Organisation name *</span><input id="cuName" value="${esc(cu ? cu.name : "")}" placeholder="e.g. BioReference Labs"></label>
+      <label class="field"><span>Organisation name *</span><input id="cuName" value="${esc(cu ? cu.name : "")}" placeholder="e.g. Hospital/Clinic"></label>
       <label class="field"><span>Contact person</span><input id="cuContact" value="${esc(cu ? cu.contact_name : "")}"></label>
       <label class="field"><span>Email</span><input id="cuEmail" type="email" value="${esc(cu ? cu.email : "")}"></label>
       <label class="field"><span>Phone</span><input id="cuPhone" value="${esc(cu ? cu.phone : "")}"></label>
