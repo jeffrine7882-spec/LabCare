@@ -127,7 +127,9 @@ Password for the account below is **`Demo123!`**.
 | Master System Admin | admin@labcare.com |
 
 The InsForge database starts **fresh**: only the Master System Admin exists.
-Create customer organisations, then their tenant admins, technicians, users,
+The master creates **tenant admins** (linked to a customer, or entirely
+unlinked — an unlinked tenant admin creates their own organisation after
+first login). Tenant admins then create their own customers, users,
 locations, departments, equipment and tickets in-app under **Admin → Customer
 organisations** and **Admin → Team & users**.
 
@@ -140,19 +142,27 @@ organisations** and **Admin → Team & users**.
     categories, onboarding/join requests and all users. Only this account can
     create or edit admin accounts and customers, and it can never be disabled,
     demoted or linked to a customer. Every other admin is a tenant admin.
-  - **Tenant admin** (`admin` linked to one `customer_id`) manages only their
-    own customer — its locations, departments, equipment, tickets, PM schedules
-    and users. They **cannot** create or edit any admin account, cannot create
-    customers, cannot see other organisations' data, and can only assign work
-    to their own team or LabCare's provider technicians.
+    **Only the Master System Admin can delete a complaint or breakdown
+    ticket.**
+  - **Tenant admin** (any admin who is not the Master) manages only the
+    organisations in their care list — their locations, departments,
+    equipment, tickets, PM schedules and users. The master may create a tenant
+    admin **without linking any customer/equipment/organisation**: after first
+    login that tenant admin creates their **own** customer organisation (it is
+    automatically added to their care list), then its users (technicians and
+    customer accounts), locations, departments and equipment. They **cannot**
+    create or edit any admin account, cannot see other organisations' data,
+    and can only assign work to their own team or LabCare's provider
+    technicians.
   - **Technician**: provider technicians (`customer_id NULL`) work across all
     customers; tenant technicians (`customer_id` set) are restricted to their
     customer.
   - **Customer** users are restricted to their own organisation, location and
     department.
-  - The master can create tenant admins/technicians directly (via Team & users)
-    and approve self-sign-ups; tenant admins can only create technicians and
-    customer users for their own customer.
+  - The master can create tenant admins (linked **or** unlinked), technicians
+    and customer users directly (via Team & users) and approve self-sign-ups;
+    tenant admins can only create technicians and customer users for their own
+    customers.
 - **Responsible tenant admin**: every user, piece of equipment, complaint and
   breakdown carries an explicit `responsible_admin_id` — the tenant admin who
   "cares for" that record. The master (and provider staff) see a *Responsible

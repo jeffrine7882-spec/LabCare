@@ -150,7 +150,7 @@ const roleChip = (role) => `<span class="chip chip-${role === "admin" ? "admin" 
 // a user's human-readable role (distinguishes Master admin from Tenant admin)
 const roleLabel = (u) => {
   if (!u) return "";
-  if (u.role === "admin") return u.customer_id ? "Tenant admin" : "Master admin";
+  if (u.role === "admin") return (u.email || "").toLowerCase() === "admin@labcare.com" ? "Master admin" : "Tenant admin";
   return ROLE_LABELS[u.role] || u.role;
 };
 // coloured chip that separates Master admin, Tenant admin, Technician and Customer
@@ -2297,9 +2297,10 @@ async function openUserEditor(edit, id) {
   const startRole = u ? u.role : "technician";
   const startCust = startRole === "customer";
   // who sees which fields: customers always get the full pickers; the master may
-  // bind admin/technician to a customer (tenant) or leave them LabCare-wide;
-  // non-master tenant admins always pick which of their care-list customers the
-  // new account belongs to.
+  // bind technicians to a customer or leave them LabCare-wide, and may create
+  // tenant admins linked to a customer or entirely unlinked (they create their
+  // own organisations after first login); non-master tenant admins always pick
+  // which of their care-list customers the new account belongs to.
   const showCustFields = master || startCust || (isAdmin() && !master);
   const showLocDept = startCust;
   // responsible tenant admin: only the master picks it (tenant staff are auto-assigned by the backend)
@@ -2345,6 +2346,8 @@ async function openUserEditor(edit, id) {
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
       <button class="btn btn-primary-2" onclick="saveUser(${edit ? id : "null"})">${edit ? "Save changes" : "Add user"}</button>
     </div>`);
+  // set labels/visibility correctly for the initially-selected role
+  toggleCustomerSelect();
 }
 
 function toggleCustomerSelect() {
@@ -2353,13 +2356,17 @@ function toggleCustomerSelect() {
   const isTenantAdminRole = role === "admin";
   if (isMaster()) {
     // customer accounts always need the full customer/location/department picker;
-    // a tenant admin MUST be linked to a customer (the master is admin@labcare.com
-    // and is never created through this form).
+    // a tenant admin MAY stay unlinked — after first login they create their own
+    // organisations, which land in their care list automatically.
     $("#uCustomerFields").style.display = (isCustRole || isTenantAdminRole) ? "" : "none";
     const lbl = $("#uCustomerLabel");
     if (lbl) lbl.textContent = isTenantAdminRole
-      ? "Linked customer (required)"
+      ? "Linked customer (optional — they create their own after login)"
       : "Linked customer (optional — leave empty for LabCare-wide)";
+    const emptyOpt = document.querySelector("#uCustomer option[value='']");
+    if (emptyOpt) emptyOpt.textContent = isTenantAdminRole
+      ? "— Not linked yet (they create their own later) —"
+      : "— LabCare-wide (no customer) —";
   } else {
     // tenant staff can create for any organisation in their care list
     // (which the backend scopes /api/customers to). Default to their primary.
@@ -2402,10 +2409,8 @@ async function saveUser(id) {
     if (!body.customer_id) { toast("Linked customer is required for customer accounts", "error"); return; }
     if (isMaster() && $("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else if (isMaster()) {
-    // a tenant admin REQUIRES a customer; techs/customers may be global or bound
-    if (body.role === "admin" && !$("#uCustomer").value) {
-      toast("A tenant admin must be linked to an organisation", "error"); return;
-    }
+    // a tenant admin may be created WITHOUT a customer — they build their own
+    // organisation after first login; techs/customers may be global or bound
     body.customer_id = $("#uCustomer").value || null;
     body.location_id = null;
     body.department_id = null;
