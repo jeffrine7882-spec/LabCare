@@ -1,7 +1,11 @@
 # LabCare Alerts — Android APK
 
 ## Install
-1. Copy **`LabCare-Alerts-v1.0.apk`** (in `dist/`) to your Android phone —
+Requirements: **Android 8.0+**, installable on the latest Android 14/15/16
+(targets SDK 34). Self-signed, not on the Play Store.
+
+
+1. Copy **`LabCare-Alerts-v1.2.apk`** (in `dist/`) to your Android phone —
    e.g. over USB, cloud drive, or direct download.
 2. Tap it in Files. Android will ask you to allow "install unknown apps"
    for that app — allow it. (The APK is self-signed, not from the Play Store.)
@@ -10,8 +14,10 @@
 ## What it does
 * Signs in with the same account as the web app (`https://labcare.insforge.site`).
 * A foreground **alert relay** polls your bell every **10 seconds** and, on a
-  new notification, **plays a chime + vibrates + shows a notification** —
-  even with the phone screen off or the app UI closed.
+  new notification, drops a **heads-up bubble banner on top of the display**,
+  **plays your chosen sound + vibrates** — even with the phone screen off or
+  the app UI closed. (The alert channel is `labcare_alerts_v2`: high
+  importance for the floating banner, so upgrades get the new behaviour.)
 * Auto-starts the relay after the phone reboots.
 * A **Phone alerts** switch turns it on/off; sign-out clears the session.
 
@@ -27,7 +33,7 @@ The APK **also** needs the LabCare server to stay reachable (it's HTTPS, always-
 ## Build (optional)
 Requires JDK 11 and `~/android-sdk` with build-tools 33.0.2 + platform 33:
 ```
-./build.sh        # → dist/LabCare-Alerts-v1.0.apk (signed)
+./build.sh        # → dist/LabCare-Alerts-v1.2.apk (signed)
 ```
 
 In-app emergency access: the app has no "demo" account built in; use any

@@ -122,9 +122,9 @@ check("portal breakdown", r.status_code == 201 and r.get_json().get("code", "").
 r = c.get(f"/api/portal/{token}/history")
 check("portal history", r.status_code == 200 and isinstance(r.get_json(), list))
 
-# 9. users + technician + PM
+# 9. users + engineer + PM
 r = j("POST", "/api/users", {"name": "Tech One", "email": "tech1@smoke.test", "password": "Demo123!",
-                              "role": "technician", "customer_id": cid}, tok)
+                              "role": "engineer", "customer_id": cid}, tok)
 uid = r.get_json().get("id") if r.status_code == 201 else None
 check("create user", r.status_code == 201, uid)
 

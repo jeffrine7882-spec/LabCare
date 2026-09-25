@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LabCare alert</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  body { width: 360px; height: 112px; }
+  #bubble {
+    box-sizing: border-box;
+    width: 344px; height: 96px; margin: 6px; padding: 10px 12px;
+    background: #ffffff;
+    border: 2px solid #0f766e;
+    border-radius: 16px;
+    box-shadow: 0 12px 40px rgba(15, 23, 42, .35);
+    display: flex; gap: 10px; align-items: flex-start;
+    font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+    color: #0f172a;
+    animation: pop .18s ease-out;
+  }
+  #bubble.flash { animation: pop .18s ease-out, flash 1s ease-in-out 3; }
+  @keyframes pop { from { transform: scale(.92); opacity: .2; } to { transform: scale(1); opacity: 1; } }
+  @keyframes flash { 50% { border-color: #dc2626; box-shadow: 0 12px 40px rgba(220, 38, 38, .45); } }
+  #bell { font-size: 24px; line-height: 1.2; animation: shake .6s ease-in-out infinite; }
+  @keyframes shake { 0%,100% { transform: rotate(-10deg);} 50% { transform: rotate(10deg);} }
+  #content { flex: 1; min-width: 0; }
+  #title { font-weight: 800; color: #0f766e; font-size: 12.5px; letter-spacing: .4px; }
+  #text { margin-top: 2px; max-height: 36px; overflow: hidden; display: -webkit-box;
+          -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  #row { margin-top: 7px; display: flex; gap: 8px; }
+  button {
+    border: none; border-radius: 999px; padding: 4px 14px; cursor: pointer;
+    font: 700 12px "Segoe UI", system-ui, sans-serif;
+  }
+  #open { background: #0f766e; color: #fff; }
+  #close {
+    position: absolute; top: 8px; right: 10px; background: transparent;
+    color: #94a3b8; font-size: 14px; padding: 0 4px;
+  }
+  #close:hover { color: #0f172a; }
+</style>
+</head>
+<body>
+  <div id="bubble">
+    <div id="bell">🔔</div>
+    <div id="content">
+      <div id="title">LABCARE — NEW ALERT</div>
+      <div id="text"></div>
+      <div id="row"><button id="open">Open LabCare</button></div>
+    </div>
+    <button id="close" title="Dismiss">✕</button>
+  </div>
+  <audio id="player" preload="auto"></audio>
+  <script>
+    const VALID_SOUNDS = ["chime", "bell", "beep", "alarm"];
+    const bubbleEl = document.getElementById("bubble");
+    const textEl = document.getElementById("text");
+    const player = document.getElementById("player");
+
+    window.bubble.onShow((text, soundId) => {
+      textEl.textContent = text || "New LabCare alert";
+      try {
+        const s = VALID_SOUNDS.includes(soundId) ? soundId : "chime";
+        player.src = "assets/" + s + ".wav";
+        player.currentTime = 0;
+        player.play().catch(() => {});
+      } catch (e) {}
+      bubbleEl.classList.remove("flash");
+      void bubbleEl.offsetWidth; // restart the flash animation
+      bubbleEl.classList.add("flash");
+    });
+
+    document.getElementById("open").addEventListener("click", () => window.bubble.openApp());
+    document.getElementById("close").addEventListener("click", () => window.bubble.dismiss());
+    document.getElementById("title").addEventListener("click", () => window.bubble.openApp());
+  </script>
+</body>
+</html>

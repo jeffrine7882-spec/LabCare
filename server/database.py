@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT UNIQUE NOT NULL,
     phone TEXT DEFAULT '',
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('admin','technician','customer')),
+    role TEXT NOT NULL CHECK(role IN ('admin','engineer','application','customer')),
     customer_id INTEGER,
     location_id INTEGER,
     department_id INTEGER,
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS onboarding_apps (
     email TEXT UNIQUE NOT NULL,
     phone TEXT DEFAULT '',
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('technician','customer')),
+    role TEXT NOT NULL CHECK(role IN ('engineer','application','customer')),
     customer_id INTEGER,
     location_id INTEGER,
     department_id INTEGER,
@@ -408,6 +408,37 @@ def _sqlite_migrate(c):
             "INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
             (row["id"], row["customer_id"], now()))
 
+    _sqlite_migrate_roles(c)
+
+
+def _sqlite_migrate_roles(c):
+    """Rename the technician role to engineer and add the application role.
+
+    Tables created by older versions carry CHECK constraints mentioning
+    'technician', which would reject the new role values. When detected,
+    rebuild those tables with the widened CHECK, copying all rows.
+    """
+    for table in ("users", "onboarding_apps"):
+        row = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table,)).fetchone()
+        sql = row["sql"] if row else ""
+        if "'technician'" in sql:
+            new_sql = sql.replace(
+                "CHECK(role IN ('admin','technician','customer'))",
+                "CHECK(role IN ('admin','engineer','application','customer'))").replace(
+                "CHECK(role IN ('technician','customer'))",
+                "CHECK(role IN ('engineer','application','customer'))")
+            new_sql = re.sub(r"^CREATE TABLE\s+[\w\x22\']+\s*\(",
+                             f"CREATE TABLE {table}_mig (", new_sql.strip())
+            c.execute(new_sql)
+            cols = ", ".join(r["name"] for r in c.execute(f"PRAGMA table_info({table})"))
+            c.execute(f"INSERT INTO {table}_mig ({cols}) SELECT {cols} FROM {table}")
+            c.execute(f"DROP TABLE {table}")
+            c.execute(f"ALTER TABLE {table}_mig RENAME TO {table}")
+    c.execute("UPDATE users SET role='engineer' WHERE role='technician'")
+    c.execute("UPDATE onboarding_apps SET role='engineer' WHERE role='technician'")
+
 
 # ---------------------------------------------------------------------------
 # Audit backfill — shared by both engines (uses only the conn() interface).
@@ -527,7 +558,7 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT UNIQUE NOT NULL,
     phone TEXT DEFAULT '',
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('admin','technician','customer')),
+    role TEXT NOT NULL CHECK(role IN ('admin','engineer','application','customer')),
     customer_id BIGINT,
     location_id BIGINT,
     department_id BIGINT,
@@ -543,7 +574,7 @@ CREATE TABLE IF NOT EXISTS onboarding_apps (
     email TEXT UNIQUE NOT NULL,
     phone TEXT DEFAULT '',
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('technician','customer')),
+    role TEXT NOT NULL CHECK(role IN ('engineer','application','customer')),
     customer_id BIGINT,
     location_id BIGINT,
     department_id BIGINT,
@@ -935,6 +966,17 @@ class _PGConn:
 def _pg_migrate(c):
     for stmt in _PG_ALTERS:
         c.execute(stmt)
+    # Role rename: technician -> engineer, plus the new 'application' role.
+    # Older databases pin an incompatible CHECK on the role column, so do
+    # drop -> convert -> widen (an ADD over the old data would fail).
+    c.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check")
+    c.execute("UPDATE users SET role='engineer' WHERE role='technician'")
+    c.execute("ALTER TABLE users ADD CONSTRAINT users_role_check "
+              "CHECK (role IN ('admin','engineer','application','customer'))")
+    c.execute("ALTER TABLE onboarding_apps DROP CONSTRAINT IF EXISTS onboarding_apps_role_check")
+    c.execute("UPDATE onboarding_apps SET role='engineer' WHERE role='technician'")
+    c.execute("ALTER TABLE onboarding_apps ADD CONSTRAINT onboarding_apps_role_check "
+              "CHECK (role IN ('engineer','application','customer'))")
     for r in c.execute(
             "SELECT id, customer_id FROM users WHERE role='admin' AND customer_id IS NOT NULL").fetchall():
         c.execute(

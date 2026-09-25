@@ -11,8 +11,9 @@ launches on finish. **SmartScreen** will warn about an "unrecognized app"
   window; it keeps running in the tray.
 * **Auto-starts with Windows** (login item).
 * Polls your bell every 10 s. On a new notification it:
-  * shows a native **Windows notification**, and
-  * plays the LabCare **chime** (via Windows' SoundPlayer).
+  * floats an **always-on-top bubble banner** at the top-right of your screen
+    (no focus theft, dismiss or "Open LabCare" buttons), with **sound**, and
+  * adds a native **Windows notification** as a durable breadcrumb.
 * Clicking a notification opens the LabCare web app in your browser.
 * Right-click the tray icon for **Alerts on/off**, **Open LabCare**, **Sign out**, **Quit**.
 

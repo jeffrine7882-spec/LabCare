@@ -1,0 +1,206 @@
+# =============================================================================
+# Build the LabCare native installers — Android APK + Windows EXE — and commit
+# them into the Release/ folder so they are downloadable straight from GitHub.
+#
+# SAFETY GATE: builds are heavy (~10-15 min), so this runs ONLY when the pushed
+# commit message contains "[release]" (or when dispatched manually).
+#
+# Sources built:
+#   apps/android  -> Gradle-free native APK (aapt2/javac/d8/apksigner), see
+#                    apps/android/build.sh + apps/android/README.md
+#   apps/desktop  -> Electron NSIS installer, see apps/desktop/package.json
+# =============================================================================
+
+name: Build release binaries (APK + EXE)
+
+on:
+  push:
+    branches: [arena/01a0d728-labcare]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-builds
+  cancel-in-progress: false
+
+jobs:
+  android-apk:
+    if: contains(github.event.head_commit.message, '[release]') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANDROID_SDK: /home/runner/android-sdk-labcare
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare the SDK layout apps/android/build.sh expects
+        run: |
+          set -euo pipefail
+          SDKREF="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          [ -d "$SDKREF" ] || { echo "::error::Android SDK not found at $SDKREF"; exit 1; }
+          echo "SDKREF=$SDKREF"
+          ls "$SDKREF" || true
+          mkdir -p "$ANDROID_SDK/build-tools" "$ANDROID_SDK/platform"
+          # any 33+ build-tools works for aapt2/d8/apksigner on this app
+          bt="$(ls "$SDKREF/build-tools" 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "$bt" ]; then
+            echo "installing build-tools;33.0.2"
+            "$SDKREF/cmdline-tools/latest/bin/sdkmanager" "build-tools;33.0.2"
+            bt="$(ls "$SDKREF/build-tools" | sort -V | tail -1)"
+          fi
+          [ -n "$bt" ] || { echo "::error::no Android build-tools available"; exit 1; }
+          # IMPORTANT: must be a STABLE numeric platform. Compiling against a
+          # codename/DEV platform silently strips numeric minSdk/targetSdk
+          # values from the manifest (Android release-codename quirk), which
+          # makes Android 14+ refuse the very install we ship here.
+          plat=""
+          for want in android-33 android-34 android-35 android-36; do
+            [ -d "$SDKREF/platforms/$want" ] && plat="$want" && break
+          done
+          if [ -z "$plat" ]; then
+            echo "no stable platform found; installing android-35"
+            "$SDKREF/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35"
+            plat="android-35"
+          fi
+          if [ "$plat" = "${plat##*[0-9]}" ] || [[ "$plat" == *beta* ]] || [[ "$plat" == *-beta* ]]; then
+            echo "::error::platform $plat is not stable"; exit 1
+          fi
+          ln -sfn "$SDKREF/build-tools/$bt" "$ANDROID_SDK/build-tools/android-13"
+          ln -sfn "$SDKREF/platforms/$plat" "$ANDROID_SDK/platform/android-13"
+          echo "::notice::Android SDK ready (build-tools $bt, platform $plat)"
+
+      - name: Build + sign the APK
+        run: |
+          set -euo pipefail
+          mkdir -p apps/android/assets   # aapt2 -A requires the dir to exist
+          bash apps/android/build.sh
+          test -s apps/android/dist/LabCare-Alerts-v1.2.apk
+          echo "::notice::APK built: apps/android/dist/LabCare-Alerts-v1.2.apk ($(du -h apps/android/dist/LabCare-Alerts-v1.2.apk | cut -f1))"
+
+      - name: Assert device-compat (targetSdk must be 24+ for Android 14+)
+        run: |
+          set -euo pipefail
+          out="$(python3 scripts/verify_apk_sdk.py apps/android/dist/LabCare-Alerts-v1.2.apk \
+            --min-sdk 26 --target-sdk 34 2>&1)" || {
+              echo "::error title=uses-sdk check failed::$(echo "$out" | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
+              exit 1
+          }
+          echo "::notice::$(echo "$out" | head -1) — installable on Android 14/15/16"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: labcare-apk
+          path: apps/android/dist/LabCare-Alerts-v1.2.apk
+          if-no-files-found: error
+
+  windows-exe:
+    if: contains(github.event.head_commit.message, '[release]') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build the Windows installer (NSIS)
+        working-directory: apps/desktop
+        run: npx electron-builder --win nsis --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: labcare-exe
+          path: apps/desktop/dist/*.exe
+          if-no-files-found: error
+
+  publish-release-folder:
+    if: contains(github.event.head_commit.message, '[release]') || github.event_name == 'workflow_dispatch'
+    needs: [android-apk, windows-exe]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # older published binaries must not leak into the new publish (rename
+      # collisions, stale versions) — wipe binaries, keep only README/history
+      - name: Clean previously published binaries
+        run: |
+          rm -f Release/android/*.apk Release/windows/*.exe 2>/dev/null || true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: labcare-apk
+          path: Release/android
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: labcare-exe
+          path: Release/windows
+
+      - name: Normalize filenames
+        run: |
+          set -euo pipefail
+          test -s Release/android/LabCare-Alerts-v1.2.apk
+          exe="$(find Release/windows -maxdepth 1 -name '*.exe' -type f | head -1)"
+          [ -n "$exe" ] || { echo "::error::no exe artifact downloaded"; exit 1; }
+          [ "$exe" = "Release/windows/LabCare-Alerts-Setup-1.1.0.exe" ] || mv "$exe" "Release/windows/LabCare-Alerts-Setup-1.1.0.exe"
+          ls -la Release/android Release/windows
+
+      - name: Write Release/README.md
+        run: |
+          cat > Release/README.md <<EOF
+          # LabCare — native installers
+
+          Built by GitHub Actions run [#${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+          from commit $(git rev-parse --short HEAD) on $(date -u +%Y-%m-%d) UTC.
+
+          ## Android — android/LabCare-Alerts-v1.2.apk
+          Requires Android 8.0+ (API 26) and installs on the latest Android
+          14/15/16 devices (targets SDK 34, includes the FGS data-sync
+          permission). Self-signed — not on the Play Store.
+          1. Copy the APK to the phone (USB / cloud drive / direct download).
+          2. Tap it; allow "install unknown apps" when Android asks. The APK is
+             self-signed, not from the Play Store — that is expected.
+          3. Open "LabCare Alerts" and sign in with your LabCare account.
+          4. Keep "Phone alerts" on: every new bell notification drops a heads-up
+             bubble banner on top of the display, rings your chosen sound and
+             vibrates the phone — even with the screen off.
+          Note: each CI build uses a fresh signing key, so uninstall any older CI
+          build before installing a new one.
+
+          ## Windows — windows/LabCare-Alerts-Setup-1.1.0.exe
+          1. Run the installer. SmartScreen will warn about an "unrecognized app"
+             (self-signed) — choose **More info → Run anyway**.
+          2. It installs under %LOCALAPPDATA%\\LabCare Alerts, adds Start-menu +
+             desktop shortcuts, and auto-starts with Windows.
+          3. Sign in once; the app then lives in the system tray. Every new bell
+             notification floats an always-on-top bubble banner (top-right of
+             your screen) with the alert sound + dismiss/open buttons, plus a
+             Windows notification. Clicking either opens the web app.
+
+          ## Web app (no install)
+          https://labcare.insforge.site — also installable as a PWA
+          ("Add to Home screen").
+          EOF
+          echo "::notice::README written"
+
+      - name: Commit Release/ to the branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Release
+          if git diff --cached --quiet; then
+            echo "::notice::binaries unchanged — nothing to commit"
+            exit 0
+          fi
+          git commit -m "release: Android APK + Windows EXE (actions run $GITHUB_RUN_NUMBER)"
+          git push origin HEAD:${GITHUB_REF_NAME}
+          echo "::notice::Release/ committed and pushed"

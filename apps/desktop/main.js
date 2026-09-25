@@ -17,6 +17,8 @@ const POLL_INTERVAL_MS = 10000;
 
 let tray = null;
 let win = null;
+let bubble = null;
+let bubbleTimer = null;
 let token = "";
 let email = "";
 let pollTimer = null;
@@ -142,6 +144,59 @@ function signOut() {
   showWindow();
 }
 
+// ---- floating alert bubble (always on top of the display, no focus theft) --
+function createBubble() {
+  const { screen } = require("electron");
+  const area = screen.getPrimaryDisplay().workArea;
+  bubble = new BrowserWindow({
+    width: 360,
+    height: 112,
+    x: area.x + area.width - 372,
+    y: area.y + 12,
+    frame: false,
+    resizable: false,
+    maximizable: false,
+    show: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,           // never steal focus from whatever the user is doing
+    transparent: true,          // lets the rounded-corner bubble look work
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: path.join(__dirname, "bubble-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  bubble.loadFile(path.join(__dirname, "bubble.html"));
+  bubble.setAlwaysOnTop(true, "screen-saver"); // float above (almost) everything
+  bubble.on("closed", () => { bubble = null; });
+  bubble.webContents.on("did-finish-load", () => {
+    if (bubble) bubble.webContents.send("bubble:primed");
+  });
+}
+
+function showBubble(text) {
+  try {
+    if (!bubble) createBubble();
+    const fire = () => {
+      if (!bubble) return;
+      bubble.webContents.send("bubble:show", String(text).slice(0, 180), sound);
+      bubble.showInactive(); // appear without taking focus
+      if (bubbleTimer) clearTimeout(bubbleTimer);
+      bubbleTimer = setTimeout(() => { try { bubble && bubble.hide(); } catch (e) {} }, 10000);
+    };
+    if (bubble.webContents.isLoading()) {
+      bubble.webContents.once("did-finish-load", fire);
+    } else {
+      fire();
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 // ---- polling + alerts ------------------------------------------------------
 function schedulePolling() {
   if (pollTimer) clearInterval(pollTimer);
@@ -174,15 +229,17 @@ async function pollOnce() {
 }
 
 async function ring(text) {
-  // 1. Windows notification (with sound)
+  // 1. Floating bubble on top of the display + sound (preferred path)
+  const bubbleOk = showBubble(text);
+  // 2. Windows notification centre entry as a durable breadcrumb
   if (Notification.isSupported()) {
     const n = new Notification({ title: "LabCare", body: String(text).slice(0, 180) });
     n.on("click", () => { openWebApp(); });
     n.show();
   }
-  // 2. Play the user's chosen sound for a reliable audible ring
-  playSound(sound);
-  // 3. flash tray / update menu badge text
+  // 3. Sound fallback if the bubble window could not be created
+  if (!bubbleOk) playSound(sound);
+  // 4. flash tray tooltip
   tray.setToolTip("LabCare — new alert");
 }
 
@@ -280,6 +337,23 @@ ipcMain.handle("sound:set", (evt, id) => {
 });
 
 ipcMain.handle("sound:test", (evt, id) => {
-  playSound(id || sound);
+  // play via the bubble preview so the user hears what an alert looks + sounds like
+  const ok = showBubble("Test alert — this is how a new complaint or breakdown rings on this PC.");
+  if (!ok) playSound(id || sound);
   return true;
+});
+
+ipcMain.on("bubble:open", () => {
+  if (bubbleTimer) clearTimeout(bubbleTimer);
+  if (bubble) try { bubble.hide(); } catch (e) {}
+  openWebApp();
+});
+
+ipcMain.on("bubble:dismiss", () => {
+  if (bubbleTimer) clearTimeout(bubbleTimer);
+  if (bubble) try { bubble.hide(); } catch (e) {}
+});
+
+app.on("before-quit", () => {
+  if (bubble) try { bubble.destroy(); } catch (e) {}
 });

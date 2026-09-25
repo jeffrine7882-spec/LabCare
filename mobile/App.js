@@ -293,7 +293,7 @@ export default function App() {
 }
 
 function roleLabel(role) {
-  return { admin: "Administrator", technician: "Technician", customer: "Customer" }[role] || role;
+  return { admin: "Administrator", engineer: "Engineer", application: "Application", customer: "Customer" }[role] || role;
 }
 
 const styles = StyleSheet.create({
