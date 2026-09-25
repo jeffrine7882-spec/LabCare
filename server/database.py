@@ -419,6 +419,10 @@ def _sqlite_migrate(c):
                 c.execute("UPDATE departments SET name=?, customer_id=? WHERE id=?",
                           (loc["name"], loc["customer_id"], d["id"]))
 
+    # Ensure blank serial numbers are NULL so UNIQUE(customer_id, serial_number)
+    # does not fail when multiple equipment are registered without serial numbers.
+    c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
+
     _sqlite_migrate_roles(c)
 
 
@@ -1007,6 +1011,10 @@ def _pg_migrate(c):
         FROM locations l
         WHERE d.location_id = l.id AND (d.name != l.name OR d.customer_id != l.customer_id)
     """)
+    # Ensure blank serial numbers are NULL so UNIQUE(customer_id, serial_number)
+    # does not fail when multiple equipment are registered without serial numbers.
+    c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
+
 
 
 def _pg_init_db():

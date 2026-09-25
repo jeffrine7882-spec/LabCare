@@ -418,7 +418,9 @@ def complaint_payload(c, row):
     d["customer_name"] = cust["name"] if cust else None
     d["location_name"] = _name_of(c, "locations", d.get("location_id"))
     d["department_name"] = _name_of(c, "departments", d.get("department_id"))
-    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq else None
+    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq and eq["model"] else (eq["name"] if eq else None)
+    d["equipment_serial"] = eq["serial_number"] if eq else None
+    d["equipment_model"] = eq["model"] if eq else None
     d["created_by_name"] = creator["name"] if creator else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
     # portal submissions record who actually reported the issue
@@ -442,7 +444,9 @@ def breakdown_payload(c, row):
     d["customer_name"] = cust["name"] if cust else None
     d["location_name"] = _name_of(c, "locations", d.get("location_id"))
     d["department_name"] = _name_of(c, "departments", d.get("department_id"))
-    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq else None
+    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq and eq["model"] else (eq["name"] if eq else None)
+    d["equipment_serial"] = eq["serial_number"] if eq else None
+    d["equipment_model"] = eq["model"] if eq else None
     d["reported_by_name"] = reporter["name"] if reporter else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
     d["reporter_name"] = d.get("reporter_name") or ""
@@ -1113,11 +1117,10 @@ def list_locations():
     if scoped_where:
         where.append(scoped_where)
         params += scoped_params
-    else:
-        cust = request.args.get("customer_id")
-        if cust:
-            where.append("l.customer_id=?")
-            params.append(cust)
+    cust = request.args.get("customer_id")
+    if cust:
+        where.append("l.customer_id=?")
+        params.append(cust)
     q = ("SELECT l.*, cu.name AS customer_name FROM locations l JOIN customers cu ON cu.id=l.customer_id")
     if where:
         q += " WHERE " + " AND ".join(where)
@@ -1240,12 +1243,11 @@ def list_departments():
     if scoped_where:
         where.append(scoped_where)
         params += scoped_params
-    else:
-        for f in ("customer_id", "location_id"):
-            v = request.args.get(f)
-            if v:
-                where.append(f"d.{f}=?")
-                params.append(v)
+    for f in ("customer_id", "location_id"):
+        v = request.args.get(f)
+        if v:
+            where.append(f"d.{f}=?")
+            params.append(v)
     q = ("SELECT d.*, cu.name AS customer_name, l.name AS location_name "
          "FROM departments d JOIN customers cu ON cu.id=d.customer_id JOIN locations l ON l.id=d.location_id")
     if where:
@@ -1482,7 +1484,7 @@ def list_equipment():
         if sw:
             where.append(sw)
             params += sp
-        for f in ("location_id", "department_id"):
+        for f in ("customer_id", "location_id", "department_id"):
             v = request.args.get(f)
             if v:
                 where.append(f"e.{f}=?")
@@ -1537,7 +1539,7 @@ def create_equipment():
         "INSERT INTO equipment (customer_id,location_id,department_id,name,model,serial_number,category,installed_date,warranty_expiry,status,notes,responsible_admin_id,created_at) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (b["customer_id"], loc_id, dept_id,
-         b["name"].strip(), b.get("model", ""), serial, b.get("category", ""),
+         b["name"].strip(), b.get("model", ""), serial or None, b.get("category", ""),
          b.get("installed_date", ""), b.get("warranty_expiry", ""), b.get("status", "active"),
          b.get("notes", ""), ra_id, now()),
     )
@@ -1602,7 +1604,7 @@ def update_equipment(eid):
     c.execute(
         "UPDATE equipment SET customer_id=?,location_id=?,department_id=?,name=?,model=?,serial_number=?,category=?,installed_date=?,warranty_expiry=?,status=?,notes=?,responsible_admin_id=? WHERE id=?",
         (customer_id, loc_id, dept_id,
-         b.get("name", ""), b.get("model", ""), serial, b.get("category", ""),
+         (b.get("name") or "").strip() or existing["name"], b.get("model", ""), serial or None, b.get("category", ""),
          b.get("installed_date", ""), b.get("warranty_expiry", ""), b.get("status", "active"),
          b.get("notes", ""), ra_id, eid),
     )
@@ -3625,7 +3627,8 @@ def _pm_payload(c, row):
                    (d["equipment_id"],)).fetchone() if d.get("equipment_id") else None
     assignee = c.execute("SELECT name FROM users WHERE id=?", (d["assigned_to"],)).fetchone() if d.get("assigned_to") else None
     d["customer_name"] = cust["name"] if cust else None
-    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq else None
+    d["equipment_name"] = f"{eq['name']} — {eq['model']}" if eq and eq["model"] else (eq["name"] if eq else None)
+    d["equipment_serial"] = eq["serial_number"] if eq else None
     d["equipment_model"] = eq["model"] if eq else None
     d["assigned_to_name"] = assignee["name"] if assignee else None
     d["log_count"] = c.execute("SELECT COUNT(*) n FROM pm_logs WHERE schedule_id=?", (d["id"],)).fetchone()["n"]
@@ -3901,7 +3904,7 @@ def create_portal_link():
     )
     c.commit()
     row = c.execute(
-        "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name FROM portal_links pl "
+        "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name, e.model AS equipment_model, e.serial_number AS equipment_serial FROM portal_links pl "
         "JOIN customers cu ON cu.id=pl.customer_id LEFT JOIN equipment e ON e.id=pl.equipment_id WHERE pl.id=?",
         (cur.lastrowid,)).fetchone()
     c.close()
@@ -3958,7 +3961,7 @@ def update_portal_link(lid):
         c.execute(f"UPDATE portal_links SET {', '.join(fields)} WHERE id=?", params)
         c.commit()
     row = c.execute(
-        "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name FROM portal_links pl "
+        "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name, e.model AS equipment_model, e.serial_number AS equipment_serial FROM portal_links pl "
         "JOIN customers cu ON cu.id=pl.customer_id LEFT JOIN equipment e ON e.id=pl.equipment_id WHERE pl.id=?",
         (lid,)).fetchone()
     c.close()

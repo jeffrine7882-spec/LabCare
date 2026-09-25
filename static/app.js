@@ -608,12 +608,13 @@ async function refreshComplaints() {
 function complaintCard(c) {
   const passed = isCust() ? "" : `<span class="mono">${esc(c.code)}</span>`;
   const scope = Array.from(new Set([c.location_name, c.department_name].filter(Boolean))).join(" · ");
+  const sn = c.equipment_serial ? ` · S/N: ${esc(c.equipment_serial)}` : "";
   return `
     <div class="item" onclick="navigate('complaintDetail',{id:${c.id}})">
       <div class="item-top">
         <div class="item-main">
           <div class="item-title">${esc(c.subject)}</div>
-          <div class="item-sub">${isCust() ? "" : "<b>" + esc(c.customer_name || "") + "</b> · "}${esc(c.equipment_name || "General")}</div>
+          <div class="item-sub">${isCust() ? "" : "<b>" + esc(c.customer_name || "") + "</b> · "}${esc(c.equipment_name || "General")}${sn}</div>
           ${scope ? `<div class="item-sub">📍 ${esc(scope)}</div>` : ""}
         </div>
       </div>
@@ -658,7 +659,7 @@ function complaintDetailHtml(c) {
         </div>
         <h2 style="font-size:17px;line-height:1.35">${esc(c.subject)}</h2>
         <div class="item-sub" style="margin-top:6px">
-          ${esc(c.customer_name || "")} · ${esc(c.equipment_name || "General equipment")}
+          ${esc(c.customer_name || "")} · ${esc(c.equipment_name || "General equipment")}${c.equipment_serial ? " · S/N: " + esc(c.equipment_serial) : ""}
         </div>
       </div>
     </div>
@@ -667,6 +668,8 @@ function complaintDetailHtml(c) {
     <div class="card">
       <div class="kv"><span class="k">Category</span><span class="v">${esc(c.category || "General")}</span></div>
       <div class="kv"><span class="k">Location/Department</span><span class="v">${esc(locDept || "—")}</span></div>
+      ${c.equipment_name ? `<div class="kv"><span class="k">Equipment</span><span class="v">${esc(c.equipment_name)}</span></div>` : ""}
+      ${c.equipment_serial ? `<div class="kv"><span class="k">Serial number</span><span class="v mono">${esc(c.equipment_serial)}</span></div>` : ""}
       <div class="kv"><span class="k">Opened by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
       ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v phone-actions"><a class="wa-link" href="${waChatHref(c.reporter_phone)}" target="_blank" rel="noopener">💬 WhatsApp ${esc(c.reporter_phone)}</a><a class="tel-link" href="${telHref(c.reporter_phone)}">📞</a></span></div>` : ""}
       <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
@@ -984,12 +987,17 @@ async function refreshBreakdowns() {
 
 function breakdownCard(b) {
   const passed = isCust() ? "" : `<span class="mono">${esc(b.code)}</span>`;
+  const sn = b.equipment_serial ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(b.equipment_serial)}</span>` : "";
+  const scope = isCust() ? "" : (b.customer_name ? "<b>" + esc(b.customer_name) + "</b> · " : "");
   return `
     <div class="item" onclick="navigate('breakdownDetail',{id:${b.id}})">
       <div class="item-top">
         <div class="item-main">
-          <div class="item-title">${esc(b.equipment_name || "Equipment")}</div>
-          <div class="item-sub">${esc(truncate(b.fault_description, 90))}</div>
+          <div class="item-title" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span>${esc(b.equipment_name || "Equipment")}</span>
+            ${sn}
+          </div>
+          <div class="item-sub">${scope}${esc(truncate(b.fault_description, 90))}</div>
         </div>
       </div>
       <div class="item-meta">
@@ -1029,6 +1037,7 @@ function breakdownDetailHtml(b) {
           ${badge("priority", b.priority)}
         </div>
         <h2 style="font-size:17px;line-height:1.35">${esc(b.equipment_name || "Equipment")}</h2>
+        ${b.equipment_serial ? `<div style="margin-top:4px"><span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(b.equipment_serial)}</span></div>` : ""}
         <div class="item-sub" style="margin-top:6px">${esc(b.customer_name || "")}</div>
       </div>
     </div>
@@ -1038,6 +1047,8 @@ function breakdownDetailHtml(b) {
 
     <div class="section-title">Details</div>
     <div class="card">
+      <div class="kv"><span class="k">Location/Department</span><span class="v">${esc(b.location_name || b.department_name || "—")}</span></div>
+      ${b.equipment_serial ? `<div class="kv"><span class="k">Serial number</span><span class="v mono">${esc(b.equipment_serial)}</span></div>` : ""}
       ${b.complaint_id ? `<div class="kv"><span class="k">Source complaint</span><span class="v" style="color:var(--brand);text-decoration:underline" onclick="navigate('complaintDetail',{id:${b.complaint_id}})">${esc("View")}</span></div>` : ""}
       <div class="kv"><span class="k">Opened by</span><span class="v">${esc(b.reported_by_name || "—")}</span></div>
       ${b.reporter_name ? `<div class="kv"><span class="k">Reporter</span><span class="v">${esc(b.reporter_name)}</span></div>` : ""}
@@ -1147,20 +1158,27 @@ async function refreshEquipment() {
   }
 }
 
-// Group equipment by Location/Department — each asset identified by its
-// own serial number within its location/department.
+// Group equipment by Organization and Location/Department — equipment name can be shared,
+// separated and distinguished by details (e.g. serial number, model).
 function renderEquipmentGrouped(list) {
   const groups = new Map();
   for (const e of list) {
+    const cust = e.customer_name || "Organization";
     const loc = e.location_name || e.department_name || "No location/department";
-    const key = loc;
-    if (!groups.has(key)) groups.set(key, { loc, items: [] });
+    const key = (e.customer_id || cust) + "||" + loc;
+    if (!groups.has(key)) groups.set(key, { cust, loc, items: [] });
     groups.get(key).items.push(e);
   }
   let html = "";
   for (const g of groups.values()) {
+    const title = isCust()
+      ? `📍 ${esc(g.loc)}`
+      : `🏢 ${esc(g.cust)} › 📍 ${esc(g.loc)}`;
     html += `
-      <div class="section-title" style="margin-top:14px">📍 ${esc(g.loc)} <span style="color:var(--ink-soft);font-weight:400">(${g.items.length})</span></div>
+      <div class="section-title" style="margin-top:14px;display:flex;align-items:center;gap:6px">
+        <span>${title}</span>
+        <span class="badge" style="background:var(--bg);color:var(--ink-soft);margin-left:auto">${g.items.length} ${g.items.length === 1 ? "asset" : "assets"}</span>
+      </div>
       <div class="list">${g.items.map(equipmentCard).join("")}</div>`;
   }
   return html;
@@ -1173,12 +1191,22 @@ function equipmentCard(e) {
   const scope = isCust()
     ? ""
     : `${esc(e.customer_name || "")} · ${esc(e.location_name || e.department_name || "—")}`;
+  const snBadge = e.serial_number
+    ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(e.serial_number)}</span>`
+    : `<span class="badge" style="font-size:11.5px;background:var(--bg);color:var(--ink-soft)">No S/N</span>`;
+  const details = [
+    e.model ? `Model: ${esc(e.model)}` : null,
+    e.serial_number ? `S/N: ${esc(e.serial_number)}` : null,
+  ].filter(Boolean).join(" · ");
   return `
     <div class="item" onclick="navigate('equipmentDetail',{id:${e.id}})">
       <div class="item-top">
         <div class="item-main">
-          <div class="item-title">${esc(e.name)}</div>
-          <div class="item-sub mono">S/N ${esc(e.serial_number || "not assigned")} · ${esc(e.model || "No model")}</div>
+          <div class="item-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-weight:600">${esc(e.name)}</span>
+            ${snBadge}
+          </div>
+          <div class="item-sub mono">${esc(details || "No details specified")}</div>
           ${scope ? `<div class="item-sub">${scope}</div>` : ""}
         </div>
       </div>
@@ -1203,8 +1231,11 @@ async function viewEquipmentDetail(v) {
       <div class="detail-head">
         <button class="back-link" onclick="goBack()">‹ Back</button>
         <div class="card" style="margin-top:8px">
-          <h2 style="font-size:18px">${esc(e.name)}</h2>
-          <div class="item-sub">${esc(e.model || "—")}${e.serial_number ? " · S/N " + esc(e.serial_number) : ""}</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <h2 style="font-size:18px;margin:0">${esc(e.name)}</h2>
+            ${e.serial_number ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:12px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(e.serial_number)}</span>` : `<span class="badge" style="font-size:12px;background:var(--bg);color:var(--ink-soft)">No S/N</span>`}
+          </div>
+          <div class="item-sub mono" style="margin-top:4px">${esc(e.model ? "Model: " + e.model : "No model specified")}</div>
           <div class="item-meta" style="margin-top:8px">
             ${e.category ? `<span class="badge" style="background:var(--bg);color:var(--ink-soft)">${esc(e.category)}</span>` : ""}
             ${e.status === "retired" ? '<span class="badge b-closed">Retired</span>' : '<span class="badge b-resolved">Active</span>'}
@@ -1215,6 +1246,8 @@ async function viewEquipmentDetail(v) {
       <div class="card">
         <div class="kv"><span class="k">Customer</span><span class="v">${esc(e.customer_name || "—")}</span></div>
         <div class="kv"><span class="k">Location/Department</span><span class="v">${esc(e.location_name || e.department_name || "—")}</span></div>
+        <div class="kv"><span class="k">Serial number</span><span class="v mono">${esc(e.serial_number || "—")}</span></div>
+        <div class="kv"><span class="k">Model</span><span class="v">${esc(e.model || "—")}</span></div>
         ${e.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(e.responsible_admin_name)}</span></div>` : ""}
         <div class="kv"><span class="k">Installed</span><span class="v">${fmtDateShort(e.installed_date)}</span></div>
         <div class="kv"><span class="k">Warranty until</span><span class="v">${fmtDateShort(e.warranty_expiry)}</span></div>
@@ -1296,10 +1329,13 @@ async function viewCustomerDetail(v) {
     const list = await API.get("/api/customers");
     state.customers = list;
     const cu = list.find((x) => x.id === id);
-    const eq = await API.get("/api/equipment?customer_id=" + id);
-    const cmp = await API.get("/api/complaints?customer_id=" + id);
-    const brk = await API.get("/api/breakdowns?customer_id=" + id);
     if (!cu) throw new Error("Customer not found");
+    const [eq, cmp, brk, locs] = await Promise.all([
+      API.get("/api/equipment?customer_id=" + id),
+      API.get("/api/complaints?customer_id=" + id),
+      API.get("/api/breakdowns?customer_id=" + id),
+      API.get("/api/locations?customer_id=" + id),
+    ]);
     v.innerHTML = `
       <div class="detail-head">
         <button class="back-link" onclick="goBack()">‹ Back</button>
@@ -1320,6 +1356,20 @@ async function viewCustomerDetail(v) {
         <div class="kv"><span class="k">Phone</span><span class="v">${esc(cu.phone || "—")}</span></div>
         <div class="kv"><span class="k">Address</span><span class="v">${esc(cu.address || "—")}</span></div>
       </div>
+      <div class="section-title">Locations/Departments (${locs.length})</div>
+      ${locs.length ? `<div class="list">${locs.map((l) => `
+        <div class="item" onclick="${isTech() ? `openLocationEditor(true, ${l.id})` : ""}">
+          <div class="item-top">
+            <div class="c-avatar">📍</div>
+            <div class="item-main">
+              <div class="item-title">${esc(l.name)}</div>
+              <div class="item-sub">${esc([l.city, l.address].filter(Boolean).join(" · ") || "No address specified")}</div>
+            </div>
+          </div>
+          <div class="item-meta">
+            <span class="badge" style="background:var(--bg);color:var(--ink-soft)">${l.equipment_count} equipment</span>
+          </div>
+        </div>`).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">No locations/departments registered.</p></div>`}
       <div class="section-title">Equipment (${eq.length})</div>
       ${eq.length ? `<div class="list">${eq.map(equipmentCard).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">No equipment registered.</p></div>`}
       <div class="section-title">Recent complaints (${cmp.length})</div>
@@ -1341,25 +1391,48 @@ async function viewLocations(v) {
   await refreshLocations();
 }
 
+// Group locations/departments by Organization/Customer — location/department name can be
+// shared across different organizations/customers, separated by which organization they belong to.
+function renderLocationsGrouped(list) {
+  const groups = new Map();
+  for (const l of list) {
+    const cust = l.customer_name || "Organization";
+    const key = String(l.customer_id || cust);
+    if (!groups.has(key)) groups.set(key, { cust, items: [] });
+    groups.get(key).items.push(l);
+  }
+  let html = "";
+  for (const g of groups.values()) {
+    html += `
+      <div class="section-title" style="margin-top:16px;display:flex;align-items:center;gap:6px">
+        <span>🏢</span>
+        <span style="font-weight:700">${esc(g.cust)}</span>
+        <span class="badge" style="background:var(--bg);color:var(--ink-soft);margin-left:auto">${g.items.length} ${g.items.length === 1 ? "location/department" : "locations/departments"}</span>
+      </div>
+      <div class="list">${g.items.map((l) => `
+        <div class="item" onclick="${isTech() ? `openLocationEditor(true, ${l.id})` : ""}">
+          <div class="item-top">
+            <div class="c-avatar">📍</div>
+            <div class="item-main">
+              <div class="item-title">${esc(l.name)}</div>
+              <div class="item-sub">${esc([l.city, l.address].filter(Boolean).join(" · ") || "No address specified")}</div>
+            </div>
+          </div>
+          <div class="item-meta">
+            <span class="badge" style="background:var(--bg);color:var(--ink-soft)">${l.equipment_count} equipment</span>
+          </div>
+        </div>`).join("")}</div>`;
+  }
+  return html;
+}
+
 async function refreshLocations() {
   const box = $("#locList");
   try {
     const list = await API.get("/api/locations");
     state.locations = list;
     box.innerHTML = list.length
-      ? `<div class="list">${list.map((l) => `
-        <div class="item" onclick="${isTech() ? `openLocationEditor(true, ${l.id})` : ""}">
-          <div class="item-top">
-            <div class="c-avatar">📍</div>
-            <div class="item-main">
-              <div class="item-title">${esc(l.name)}</div>
-              <div class="item-sub">${esc(l.customer_name || "")}${l.city ? " · " + esc(l.city) : ""}</div>
-            </div>
-          </div>
-          <div class="item-meta">
-            <span class="badge" style="background:var(--bg);color:var(--ink-soft)">${l.equipment_count} equipment</span>
-          </div>
-        </div>`).join("")}</div>`
+      ? renderLocationsGrouped(list)
       : emptyState("📍", "No locations/departments", "Add your first location/department.", "Add location/department");
   } catch (e) {
     box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
@@ -1753,6 +1826,7 @@ async function openComplaintEditor(edit) {
   } else if (isCust()) {
     try { equipment = await API.get("/api/equipment"); } catch (e) {}
   }
+  state.equipment = equipment;
   const c = edit ? state.complaintDetail : null;
   const defCust = c && c.customer_id ? c.customer_id : (customers.length ? customers[0].id : "");
   const respAdmins = isTech() && isUnboundStaff() && defCust ? await adminsForCustomer(defCust) : [];
@@ -1780,9 +1854,8 @@ async function openComplaintEditor(edit) {
         ${deptOpts(state.departments || [], c && c.department_id, c && c.location_id)}
       </select>` : ""}
       <label class="field"><span>Related equipment</span>
-        <select id="fEquipment">
-          <option value="">— None / general —</option>
-          ${equipment.map((x) => `<option value="${x.id}" ${c && c.equipment_id === x.id ? "selected" : ""}>${esc(x.name)} (${esc(x.serial_number || "n/a")})</option>`).join("")}
+        <select id="fEquipment" onchange="onEquipmentPickComplaint()">
+          ${eqOpts(equipment, c && c.equipment_id, isTech() ? defCust : null, "— None / general —")}
         </select></label>
       <label class="field"><span>Category</span>
         <select id="fCategory">
@@ -1861,6 +1934,7 @@ async function openBreakdownEditor(edit, prefill) {
   } else if (isCust()) {
     try { equipment = await API.get("/api/equipment"); } catch (e) {}
   }
+  state.equipment = equipment;
   const b = edit && !prefill ? state.breakdownDetail : null;
   const p = prefill || {};
   const defCust = (b ? b.customer_id : p.customer_id) || (isTech() && customers.length ? customers[0].id : "");
@@ -1870,9 +1944,8 @@ async function openBreakdownEditor(edit, prefill) {
     <div class="sheet-head"><h3>${edit && !prefill ? "Edit breakdown" : "Report breakdown"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
       <label class="field"><span>Affected equipment</span>
-        <select id="bEquipment">
-          <option value="">— Select —</option>
-          ${equipment.map((x) => `<option value="${x.id}" ${(b ? b.equipment_id === x.id : p.equipment_id === x.id) ? "selected" : ""}>${esc(x.name)} (${esc(x.serial_number || "n/a")})</option>`).join("")}
+        <select id="bEquipment" onchange="onEquipmentPickBreakdown()">
+          ${eqOpts(equipment, (b ? b.equipment_id : p.equipment_id), isTech() ? defCust : null, "— Select —")}
         </select></label>
       ${isTech() ? `
       <label class="field"><span>Customer *</span>
@@ -1994,7 +2067,7 @@ async function openEquipmentEditor(edit) {
       <div class="section-label">Equipment details</div>
       <label class="field"><span>Equipment name *</span><input id="eqName" value="${esc(e ? e.name : "")}" placeholder="e.g. HPLC System"></label>
       <label class="field"><span>Model</span><input id="eqModel" value="${esc(e ? e.model : "")}" placeholder="e.g. Agilent 1260"></label>
-      <label class="field"><span>Serial number</span><input id="eqSerial" value="${esc(e ? e.serial_number : "")}" placeholder="S/N"></label>
+      <label class="field"><span>Serial number</span><input id="eqSerial" value="${esc(e ? e.serial_number : "")}" placeholder="e.g. SN-00123 (identifies this asset)"></label>
       <label class="field"><span>Category</span>
         <select id="eqCategory" onchange="eqCategoryPick()">
           <option value="">— Select —</option>
@@ -2063,14 +2136,28 @@ async function onRespCustomerPick(customerSelId, respSelId) {
 
 function locOpts(locations, selectedId, customerId) {
   const list = customerId ? locations.filter((l) => String(l.customer_id) === String(customerId)) : locations;
-  return `<option value="">— Select location/department —</option>` + list.map((l) =>
-    `<option value="${l.id}" ${String(selectedId) === String(l.id) ? "selected" : ""}>${esc(l.name)}</option>`).join("");
+  return `<option value="">— Select location/department —</option>` + list.map((l) => {
+    const custPrefix = (!customerId && l.customer_name) ? `${esc(l.customer_name)} — ` : "";
+    return `<option value="${l.id}" ${String(selectedId) === String(l.id) ? "selected" : ""}>${custPrefix}${esc(l.name)}</option>`;
+  }).join("");
 }
 
 function deptOpts(departments, selectedId, locationId) {
   const list = locationId ? departments.filter((d) => String(d.location_id) === String(locationId)) : departments;
   return `<option value="">— Select department —</option>` + list.map((d) =>
     `<option value="${d.id}" ${String(selectedId) === String(d.id) ? "selected" : ""}>${esc(d.name)}</option>`).join("");
+}
+
+function eqOpts(equipment, selectedId, customerId, placeholder = "— Select —") {
+  const list = customerId ? equipment.filter((x) => String(x.customer_id) === String(customerId)) : equipment;
+  return (placeholder ? `<option value="">${placeholder}</option>` : "") + list.map((x) => {
+    const custPrefix = (!customerId && x.customer_name) ? `${esc(x.customer_name)} — ` : "";
+    const sn = x.serial_number ? `S/N: ${x.serial_number}` : "No S/N";
+    const model = x.model ? ` · ${x.model}` : "";
+    const loc = x.location_name || x.department_name ? ` (📍 ${x.location_name || x.department_name})` : "";
+    const label = `${custPrefix}${esc(x.name)} [${esc(sn)}${esc(model)}]${esc(loc)}`;
+    return `<option value="${x.id}" ${String(selectedId) === String(x.id) ? "selected" : ""}>${label}</option>`;
+  }).join("");
 }
 
 function onCustPick(custSelId) {
@@ -2093,6 +2180,32 @@ function onLocPick(locSelId) {
   }
 }
 
+function onEquipmentPickComplaint() {
+  const eqId = $("#fEquipment")?.value;
+  if (!eqId) return;
+  const eq = (state.equipment || []).find((x) => String(x.id) === String(eqId));
+  if (eq) {
+    if (eq.location_id && $("#fLocation")) {
+      $("#fLocation").value = String(eq.location_id);
+      onLocPickComplaint();
+    }
+    if (eq.category && $("#fCategory")) {
+      const match = Array.from($("#fCategory").options).find((o) => o.value.toLowerCase() === eq.category.toLowerCase());
+      if (match) $("#fCategory").value = match.value;
+    }
+  }
+}
+
+function onEquipmentPickBreakdown() {
+  const eqId = $("#bEquipment")?.value;
+  if (!eqId) return;
+  const eq = (state.equipment || []).find((x) => String(x.id) === String(eqId));
+  if (eq && eq.location_id && $("#bLocation")) {
+    $("#bLocation").value = String(eq.location_id);
+    onLocPickBreakdown();
+  }
+}
+
 function onCustPickComplaint() {
   const cust = $("#fCustomer").value;
   $("#fLocation").innerHTML = locOpts(state.locations || [], null, cust);
@@ -2100,6 +2213,10 @@ function onCustPickComplaint() {
   if ($("#fDepartment")) {
     $("#fDepartment").innerHTML = deptOpts(state.departments || [], null, null);
     $("#fDepartment").value = "";
+  }
+  if ($("#fEquipment")) {
+    $("#fEquipment").innerHTML = eqOpts(state.equipment || [], null, cust, "— None / general —");
+    $("#fEquipment").value = "";
   }
   if ($("#fRespAdmin")) onRespCustomerPick("fCustomer", "fRespAdmin");
 }
@@ -2121,6 +2238,10 @@ function onCustPickBreakdown() {
     $("#bDepartment").innerHTML = deptOpts(state.departments || [], null, null);
     $("#bDepartment").value = "";
   }
+  if ($("#bEquipment")) {
+    $("#bEquipment").innerHTML = eqOpts(state.equipment || [], null, cust, "— Select —");
+    $("#bEquipment").value = "";
+  }
   if ($("#bRespAdmin")) onRespCustomerPick("bCustomer", "bRespAdmin");
 }
 
@@ -2130,6 +2251,14 @@ function onLocPickBreakdown() {
   if ($("#bDepartment")) {
     $("#bDepartment").innerHTML = deptOpts(state.departments || [], depts[0]?.id || null, loc);
     $("#bDepartment").value = depts[0]?.id ? String(depts[0].id) : (loc || "");
+  }
+}
+
+function onCustPickPM() {
+  const cust = $("#pmCustomer")?.value;
+  if ($("#pmEquipment")) {
+    $("#pmEquipment").innerHTML = eqOpts(state.equipment || [], null, cust, "— None / general —");
+    $("#pmEquipment").value = "";
   }
 }
 
@@ -2450,7 +2579,7 @@ function pmCard(p) {
       <div class="item-top">
         <div class="item-main">
           <div class="item-title">${esc(p.title)}</div>
-          <div class="item-sub">${esc(p.equipment_name || "—")}${isCust() ? "" : " · " + esc(p.customer_name || "")}</div>
+          <div class="item-sub">${esc(p.equipment_name || "—")}${p.equipment_serial ? " (S/N: " + esc(p.equipment_serial) + ")" : ""}${isCust() ? "" : " · " + esc(p.customer_name || "")}</div>
         </div>
       </div>
       <div class="item-meta">
@@ -2477,7 +2606,7 @@ async function viewPMDetail(v) {
         <div class="card" style="margin-top:8px">
           <div class="item-meta" style="margin:0 0 8px"><span class="badge ${due.cls}">${esc(due.label)}</span> ${p.active ? '<span class="badge b-resolved">Active</span>' : '<span class="badge b-closed">Paused</span>'}</div>
           <h2 style="font-size:17px">${esc(p.title)}</h2>
-          <div class="item-sub" style="margin-top:6px">${esc(p.equipment_name || "—")} · ${esc(p.customer_name || "")}</div>
+          <div class="item-sub" style="margin-top:6px">${esc(p.equipment_name || "—")}${p.equipment_serial ? " · S/N: " + esc(p.equipment_serial) : ""} · ${esc(p.customer_name || "")}</div>
         </div>
       </div>
       <div class="section-title">Schedule</div>
@@ -2517,8 +2646,12 @@ async function openPMEditor(edit) {
         API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/engineers"),
       ]);
     } catch (e) {}
+  } else if (isCust()) {
+    try { equipment = await API.get("/api/equipment"); } catch (e) {}
   }
+  state.equipment = equipment;
   const p = edit ? state.pm?.find((x) => x.id === state.viewParams.id) : null;
+  const defCust = (p && p.customer_id) || (isTech() && customers.length ? customers[0].id : null);
   const defaultNext = mytDatePlus(90);
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit schedule" : "New PM schedule"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
@@ -2526,13 +2659,12 @@ async function openPMEditor(edit) {
       <label class="field"><span>Title *</span><input id="pmTitle" value="${esc(p ? p.title : "")}" placeholder="e.g. Centrifuge annual service"></label>
       <label class="field"><span>Description</span><textarea id="pmDesc">${esc(p ? p.description : "")}</textarea></label>
       ${isTech() ? `<label class="field"><span>Customer *</span>
-        <select id="pmCustomer">
-          ${customers.map((x) => `<option value="${x.id}" ${p && p.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        <select id="pmCustomer" onchange="onCustPickPM()">
+          ${customers.map((x) => `<option value="${x.id}" ${String(defCust) === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>` : ""}
       <label class="field"><span>Equipment</span>
         <select id="pmEquipment">
-          <option value="">— None / general —</option>
-          ${equipment.map((x) => `<option value="${x.id}" ${p && p.equipment_id === x.id ? "selected" : ""}>${esc(x.name)} (${esc(x.serial_number || "n/a")})</option>`).join("")}
+          ${eqOpts(equipment, p && p.equipment_id, defCust, "— None / general —")}
         </select></label>
       <label class="field"><span>Interval (days) *</span><input id="pmInterval" type="number" min="1" value="${p ? p.interval_days : 90}"></label>
       <label class="field"><span>Next due date</span><input id="pmNext" type="date" value="${p && p.next_due_at ? p.next_due_at.slice(0, 10) : defaultNext}"></label>
@@ -2635,7 +2767,7 @@ async function refreshPortals() {
           <div class="item-top">
             <div class="item-main">
               <div class="item-title">${esc(p.label || "QR link")}</div>
-              <div class="item-sub">${esc(p.customer_name || "")}${p.equipment_name ? " · " + esc(p.equipment_name) : ""}</div>
+              <div class="item-sub">${esc(p.customer_name || "")}${p.equipment_name ? " · " + esc(p.equipment_name) : ""}${p.equipment_serial ? " (S/N: " + esc(p.equipment_serial) + ")" : ""}</div>
               <div class="item-sub mono" style="margin-top:4px">${esc(p.token)}</div>
             </div>
             ${p.active ? '<span class="badge b-resolved">Active</span>' : '<span class="badge b-closed">Paused</span>'}
@@ -2654,7 +2786,10 @@ async function refreshPortals() {
 
 function eqOpt(x, selectedId) {
   const sel = selectedId === x.id ? "selected" : "";
-  return `<option value="${x.id}" ${sel}>${esc(x.name)} (${esc(x.customer_name || "")})</option>`;
+  const sn = x.serial_number ? `S/N: ${x.serial_number}` : "No S/N";
+  const model = x.model ? ` · ${x.model}` : "";
+  const loc = x.location_name || x.department_name ? ` (📍 ${x.location_name || x.department_name})` : "";
+  return `<option value="${x.id}" ${sel}>${esc(x.name)} [${esc(sn)}${esc(model)}]${esc(loc)}</option>`;
 }
 
 // Filter the QR editor's equipment list to the selected customer.
@@ -3528,7 +3663,8 @@ Object.assign(window, {
   openLocationEditor, saveLocation, deleteLocation,
   openDepartmentEditor, saveDepartment, deleteDepartment,
   viewCategories, openCategoryEditor, saveCategory, deleteCategory, eqCategoryPick,
-  onCustPick, onLocPick, locOpts, deptOpts,
+  onCustPick, onLocPick, locOpts, deptOpts, eqOpts,
+  onEquipmentPickComplaint, onEquipmentPickBreakdown, onCustPickPM,
   onCustPickComplaint, onLocPickComplaint,
   onCustPickBreakdown, onLocPickBreakdown,
   onUserCustPick, onUserLocPick,
