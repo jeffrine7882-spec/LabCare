@@ -72,7 +72,7 @@ const API = {
       throw new Error(lastErr ? "Cannot reach the server. Check your internet connection." : "Backend not connected.");
     }
     // 502/503/504 = the frontend is up but the API backend behind it is not
-    // (e.g. an unset/wrong netlify.toml /api proxy target).
+    // (e.g. an unset/wrong /api rewrite target in the InsForge hosting config).
     if (!res.ok || res.status >= 500) {
       if (res.status === 502 || res.status === 503 || res.status === 504) {
         throw new Error("Backend not connected (error " + res.status + "). The API server is unreachable — check that the /api proxy points to a running backend.");
@@ -83,7 +83,7 @@ const API = {
     if (ct.includes("application/json")) {
       try { data = await res.json(); } catch (e) { /* keep {} */ }
     } else {
-      // Netlify error page or proxy HTML — don't dump it into the toast
+      // Hosting error page or proxy HTML — don't dump it into the toast
       data = { error: "Unexpected response from server (" + res.status + ")." };
     }
     if (!res.ok) {
@@ -3593,10 +3593,10 @@ async function boot() {
     syncPushAlerts();  // re-register any existing desktop-alert subscription
   }
 
-  // Detect a Netlify-style split deployment where the frontend is live but the
-  // /api proxy target is missing or down — show a clear banner instead of a
-  // mysterious "cannot sign in". Only probe when not signed in.
-  if (!state.user && location.hostname.includes("netlify.app")) {
+  // Detect a split deployment where the frontend is live but the /api rewrite
+  // target is missing or down — show a clear banner instead of a mysterious
+  // "cannot sign in". Only probe when not signed in.
+  if (!state.user) {
     try {
       const r = await fetch("/api/ping", { cache: "no-store" });
       if (!r.ok) showBackendBanner();
@@ -3611,7 +3611,7 @@ function showBackendBanner() {
   if (!ls || ls.querySelector(".backend-warn")) return;
   const bar = document.createElement("div");
   bar.className = "backend-warn";
-  bar.innerHTML = `<b>⚠️ Backend not connected.</b> This site is serving the frontend only — the API server is unreachable (login will fail). Check that <code>netlify.toml</code>'s <code>/api/*</code> proxy points to a running HTTPS backend.`;
+  bar.innerHTML = `<b>⚠️ Backend not connected.</b> This site is serving the frontend only — the API server is unreachable (login will fail). Check that the hosting <code>/api/*</code> rewrite points to a running HTTPS backend.`;
   ls.prepend(bar);
 }
 

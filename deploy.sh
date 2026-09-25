@@ -63,10 +63,10 @@ write_env() {
   local dsn
   dsn="$("${CLI[@]}" db connection-string 2>/dev/null | tr -d '\r\n ')"
   [ -n "$dsn" ] || die "could not fetch the database connection string"
-  # Preserve secret keys that don't come from the CLI (VAPID/FCM) across
+  # Preserve secret keys that don't come from the CLI (VAPID) across
   # redeploys — only the DSN is dynamic here.
   local keep="" line
-  for key in LABCARE_VAPID_PRIVATE LABCARE_VAPID_PUBLIC LABCARE_FCM_PROJECT_ID LABCARE_FCM_SERVICE_JSON LABCARE_FCM_KEY_B64; do
+  for key in LABCARE_VAPID_PRIVATE LABCARE_VAPID_PUBLIC; do
     if [ -f "$ENV_FILE" ]; then
       line="$(grep -E "^${key}=" "$ENV_FILE" | tail -n1 || true)"
       [ -n "$line" ] && keep="${keep}${line}"$'\n'

@@ -81,28 +81,6 @@ waitress-serve --listen=0.0.0.0:8000 wsgi:application
 gunicorn -b 0.0.0.0:8000 wsgi:application
 ```
 
-### Reverse proxy + HTTPS (nginx / Let's Encrypt)
-
-See [`deploy/DEPLOY.md`](deploy/DEPLOY.md) — includes an nginx site config
-(`deploy/nginx-labcare.conf`) and a systemd unit (`deploy/labcare.service`)
-for a full production setup. Summary: run the app with systemd on
-`127.0.0.1:8000`, put nginx in front, and run `certbot --nginx -d your.host`
-for a free auto-renewing TLS certificate. Set `LABCARE_SECURE_COOKIES=1`
-(recommended behind HTTPS) so session cookies are marked `Secure`.
-
-### Deploying on Netlify (frontend) + backend VPS
-
-The chosen production target is `https://labcareassist.netlify.app`:
-
-- **Netlify** hosts the static frontend (`static/` is the publish dir; see
-  [`netlify.toml`](netlify.toml) which proxies all `/api/*` calls to your
-  backend).
-- **Your server** runs the Flask + Waitress backend (Docker image in
-  [`deploy/Dockerfile`](deploy/Dockerfile), or the systemd unit) behind nginx
-  with `certbot` TLS.
-
-Full step-by-step: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
-
 ### Environment variables
 
 | Variable               | Default                       | Purpose                                   |
@@ -175,13 +153,6 @@ organisations** and **Admin → Team & users**.
   preference. The VAPID keypair lives in [`server/vapid.json`](server/vapid.json)
   (override with `LABCARE_VAPID_PRIVATE`; the public key for clients is derived
   from it). `pywebpush` sends one push per recipient whenever `notify()` runs.
-- **Native mobile alerts (phone rings)**: an [Expo app](mobile/README.md) signs
-  into LabCare and receives every bell notification via **Firebase Cloud
-  Messaging**, so the phone rings even with the browser closed or the phone
-  locked. Backend side (`app_devices` table + `server/apppush.py` + the
-  `/api/app/*` endpoints) is implemented; enabling it only needs Firebase
-  project credentials (`LABCARE_FCM_SERVICE_JSON` + `LABCARE_FCM_PROJECT_ID`).
-  See [`mobile/README.md`](mobile/README.md) for the one-time setup.
 
 ## Data
 
