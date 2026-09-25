@@ -145,15 +145,15 @@ const waNumber = (s) => {
 };
 const waChatHref = (s) => { const n = waNumber(s); return n ? "https://wa.me/" + n : ""; };
 
-const ROLE_LABELS = { admin: "Admin", technician: "Technician", customer: "Customer" };
-const roleChip = (role) => `<span class="chip chip-${role === "admin" ? "admin" : role === "technician" ? "tech" : "cust"}">${ROLE_LABELS[role] || role}</span>`;
+const ROLE_LABELS = { admin: "Admin", engineer: "Engineer", application: "Application", customer: "Customer" };
+const roleChip = (role) => `<span class="chip chip-${role === "admin" ? "admin" : (role === "engineer" || role === "application") ? "tech" : "cust"}">${ROLE_LABELS[role] || role}</span>`;
 // a user's human-readable role (distinguishes Master admin from Tenant admin)
 const roleLabel = (u) => {
   if (!u) return "";
   if (u.role === "admin") return (u.email || "").toLowerCase() === "admin@labcare.com" ? "Master admin" : "Tenant admin";
   return ROLE_LABELS[u.role] || u.role;
 };
-// coloured chip that separates Master admin, Tenant admin, Technician and Customer
+// coloured chip that separates Master admin, Tenant admin, Engineer and Customer
 const roleBadge = (u) => {
   if (!u || !u.role) return "";
   if (u.role === "admin") {
@@ -329,11 +329,11 @@ function goBack() {
 }
 
 const isAdmin = () => state.user && state.user.role === "admin";
-const isTech = () => state.user && (state.user.role === "technician" || state.user.role === "admin");
+const isTech = () => state.user && (state.user.role === "engineer" || state.user.role === "application" || state.user.role === "admin");
 const isCust = () => state.user && state.user.role === "customer";
 const isMaster = () => state.user && state.user.role === "admin" && !state.user.customer_id && (state.user.email || "").toLowerCase() === "admin@labcare.com";
-// staff who are not bound to a customer (master admin or a provider technician)
-const isUnboundStaff = () => state.user && (state.user.role === "admin" || state.user.role === "technician") && !state.user.customer_id;
+// staff who are not bound to a customer (master admin or a provider engineer)
+const isUnboundStaff = () => state.user && (state.user.role === "admin" || state.user.role === "engineer" || state.user.role === "application") && !state.user.customer_id;
 // cache of tenant admins per customer for the "Responsible tenant admin" picker
 const _adminsCache = {};
 
@@ -827,7 +827,7 @@ function openAcceptSheet(id) {
       <label class="field" style="margin-top:12px"><span>Status after accepting</span>
         <select id="acceptStatus">${opts}</select></label>
       <label class="field"><span>Reply to the sender (optional — shown in the portal)</span>
-        <textarea id="acceptReply" placeholder="e.g. We have received your report and a technician will contact you today."></textarea></label>
+        <textarea id="acceptReply" placeholder="e.g. We have received your report and an engineer will contact you today."></textarea></label>
     </div>
     <div class="sheet-foot">
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
@@ -866,7 +866,7 @@ function openBreakdownAcceptSheet(id) {
       <label class="field" style="margin-top:12px"><span>Status after accepting</span>
         <select id="acceptStatus">${opts}</select></label>
       <label class="field"><span>Reply to the sender (optional — shown in the portal)</span>
-        <textarea id="acceptReply" placeholder="e.g. We have received your report and a technician will contact you today."></textarea></label>
+        <textarea id="acceptReply" placeholder="e.g. We have received your report and an engineer will contact you today."></textarea></label>
     </div>
     <div class="sheet-foot">
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
@@ -920,15 +920,15 @@ async function deleteTicket(entity, id) {
 
 async function openAssignSheet(entity, id) {
   let techs = [];
-  try { techs = await API.get("/api/technicians"); } catch (e) {}
+  try { techs = await API.get("/api/engineers"); } catch (e) {}
   openSheet(`
-    <div class="sheet-head"><h3>Assign to technician</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-head"><h3>Assign to engineer</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body" style="padding-bottom:24px">
       ${techs.map((t) => `
         <button class="menu-item" onclick="assignTech('${entity}',${id},${t.id})">
           <span class="c-avatar">${esc(initials(t.name))}</span> ${esc(t.name)}
           <span class="mi-arrow">›</span>
-        </button>`).join("") || "<p>No technicians found.</p>"}
+        </button>`).join("") || "<p>No engineers found.</p>"}
     </div>`);
 }
 
@@ -1618,7 +1618,7 @@ async function viewOnboarding(v) {
         <p>${pending ? `<b>${pending}</b> awaiting approval` : "Nothing waiting — you're all caught up"}</p>
       </div>
       ${apps.length ? `<div class="list list-grid">${apps.map(onboardingCard).join("")}</div>`
-        : emptyState("📥", "No join requests", "When someone requests a customer or technician account, it will appear here.", "")}`;
+        : emptyState("📥", "No join requests", "When someone requests a customer or engineer account, it will appear here.", "")}`;
   } catch (e) {
     v.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
   }
@@ -1644,7 +1644,7 @@ function onboardingCard(a) {
         <div class="item-main">
           <div class="item-title">${esc(a.name)} ${roleChip(a.role)}</div>
           <div class="item-sub">${esc(a.email)}${a.phone ? " · " + esc(a.phone) : ""}</div>
-          <div class="item-sub">${a.role === "customer" ? "Scope: " + scope : "LabCare technician"}</div>
+          <div class="item-sub">${a.role === "customer" ? "Scope: " + scope : "LabCare engineer"}</div>
         </div>
         <span class="badge ${badgeCls}">${badgeLabel}</span>
       </div>
@@ -1685,7 +1685,7 @@ function viewProfile(v) {
     ${isTenantAdmin ? `
     <div class="section-title">Customer organisations I care for</div>
     <div class="card">
-      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 10px">Pick which customer organisations you manage. You can add technicians and view tickets, equipment and reports for every organisation on your list.</p>
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 10px">Pick which customer organisations you manage. You can add engineers and view tickets, equipment and reports for every organisation on your list.</p>
       <div id="careListHost"></div>
     </div>` : ""}
     <div class="action-panel" style="margin-top:16px">
@@ -1817,7 +1817,7 @@ async function openComplaintEditor(edit) {
   if (isTech()) {
     try {
       [customers, equipment, techs, state.locations, state.departments] = await Promise.all([
-        API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/technicians"),
+        API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/engineers"),
         API.get("/api/locations"), API.get("/api/departments"),
       ]);
     } catch (e) {}
@@ -1925,7 +1925,7 @@ async function openBreakdownEditor(edit, prefill) {
   if (isTech()) {
     try {
       [customers, equipment, techs, complaints, state.locations, state.departments] = await Promise.all([
-        API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/technicians"), API.get("/api/complaints"),
+        API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/engineers"), API.get("/api/complaints"),
         API.get("/api/locations"), API.get("/api/departments"),
       ]);
     } catch (e) {}
@@ -2294,10 +2294,10 @@ async function openUserEditor(edit, id) {
   } catch (e) {}
   const u = edit ? state.users?.find((x) => x.id === id) : null;
   const master = isMaster();
-  const startRole = u ? u.role : "technician";
+  const startRole = u ? u.role : "engineer";
   const startCust = startRole === "customer";
   // who sees which fields: customers always get the full pickers; the master may
-  // bind technicians to a customer or leave them LabCare-wide, and may create
+  // bind engineers to a customer or leave them LabCare-wide, and may create
   // tenant admins linked to a customer or entirely unlinked (they create their
   // own organisations after first login); non-master tenant admins always pick
   // which of their care-list customers the new account belongs to.
@@ -2319,7 +2319,7 @@ async function openUserEditor(edit, id) {
       <label class="field"><span>Phone</span><input id="uPhone" value="${esc(u ? u.phone : "")}"></label>
       <label class="field"><span>Role</span>
         <select id="uRole" onchange="toggleCustomerSelect()">
-          ${(master ? [["admin", "Tenant admin"], ["technician", "Technician"], ["customer", "Customer"]] : [["technician", "Technician"], ["customer", "Customer"]])
+          ${(master ? [["admin", "Tenant admin"], ["engineer", "Engineer"], ["application", "Application"], ["customer", "Customer"]] : [["engineer", "Engineer"], ["application", "Application"], ["customer", "Customer"]])
             .map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("")}
         </select></label>
       <div id="uCustomerFields" style="${showCustFields ? "" : "display:none"}">
@@ -2416,7 +2416,7 @@ async function saveUser(id) {
     body.department_id = null;
     if ($("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else {
-    // tenant staff: technicians/customer users go under the customer they picked
+    // tenant staff: engineers/customer users go under the customer they picked
     // (defaults to their primary customer)
     body.customer_id = $("#uCustomer") ? $("#uCustomer").value || (state.user && state.user.customer_id) || null : null;
     body.location_id = null;
@@ -2565,7 +2565,7 @@ async function openPMEditor(edit) {
   if (isTech()) {
     try {
       [customers, equipment, techs] = await Promise.all([
-        API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/technicians"),
+        API.get("/api/customers"), API.get("/api/equipment"), API.get("/api/engineers"),
       ]);
     } catch (e) {}
   }

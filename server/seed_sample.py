@@ -1,7 +1,7 @@
 """LabCare — sample data seeder for the live (InsForge Postgres) app.
 
 Inserts a realistic demo picture: two customer organisations (tenant admins,
-technicians, customer users, locations, departments, equipment), a spread of
+engineers, customer users, locations, departments, equipment), a spread of
 complaints & breakdowns in various states, comments, preventive-maintenance
 schedules and QR portal links. Uses the app's database layer so timestamps are
 Malaysia time and the same helpers/checks apply.
@@ -73,9 +73,9 @@ def seed_sample():
                          bio_id, phone="012-555 0110")
     mer_admin = add_user("Meridian Admin", "admin.meridian@labcare.com", "admin",
                          mer_id, phone="012-555 0111")
-    aidil = add_user("Aidil Rahman", "aidil@labcare.com", "technician", None,
+    aidil = add_user("Aidil Rahman", "aidil@labcare.com", "engineer", None,
                      phone="012-555 0101")
-    meiling = add_user("Mei Ling Tan", "meiling@labcare.com", "technician", None,
+    meiling = add_user("Mei Ling Tan", "meiling@labcare.com", "engineer", None,
                        phone="012-555 0102")
 
     # ---- locations & departments -----------------------------------------
@@ -277,7 +277,7 @@ def seed_sample():
     c.close()
     print("Sample data seeded:")
     print(f"  customers: {len(cust_ids)}  locations: 3  departments: 4  equipment: 6")
-    print(f"  users: master + 2 tenant admins + 2 technicians + 2 customer users")
+    print(f"  users: master + 2 tenant admins + 2 engineers + 2 customer users")
     print(f"  complaints: 4 (open/in_progress/resolved/closed)  breakdowns: 3")
     print(f"  comments: 3  PM schedules: 3  portal links: 2  notifications: 7 (incl. master bell)")
     print(f"  All passwords: {PASSWORD}")

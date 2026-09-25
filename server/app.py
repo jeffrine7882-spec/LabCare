@@ -108,7 +108,7 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sta
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-ROLE_LABELS = {"admin": "Admin", "technician": "Technician", "customer": "Customer"}
+ROLE_LABELS = {"admin": "Admin", "engineer": "Engineer", "application": "Application", "customer": "Customer"}
 
 STATUS_LABELS = {
     "open": "Open", "in_progress": "In Progress", "resolved": "Resolved", "closed": "Closed",
@@ -191,10 +191,10 @@ def _admin_scope_ids(c, admin_id, user_row=None):
 
 
 def scoped_customer_id(u):
-    """The PRIMARY customer an admin/technician is bound to, else None.
+    """The PRIMARY customer an admin/engineer is bound to, else None.
 
-    Master admin and provider technicians have customer_id NULL and are unscoped."""
-    if u.get("role") in ("admin", "technician"):
+    Master admin and provider engineers have customer_id NULL and are unscoped."""
+    if u.get("role") in ("admin", "engineer", "application"):
         return u.get("customer_id") or None
     return None
 
@@ -203,8 +203,8 @@ def tenant_scope(u, c):
     """The customer ids a tenant-scoped staff member may access, or None.
 
     * Tenant admin: their PRIMARY customer plus any added to their care list.
-    * Tenant technician: their single customer.
-    * Master admin / provider technician (no customer): None = unscoped (all)."""
+    * Tenant engineer: their single customer.
+    * Master admin / provider engineer (no customer): None = unscoped (all)."""
     if not u:
         return None
     if u.get("role") == "admin":
@@ -212,7 +212,7 @@ def tenant_scope(u, c):
             return None
         # tenant admin — empty list when they have no organisations yet
         return _admin_scope_ids(c, u["id"], u)
-    if u.get("role") == "technician":
+    if u.get("role")  in ("engineer", "application"):
         return [u["customer_id"]] if u.get("customer_id") else None
     return None
 
@@ -227,15 +227,15 @@ def customer_scope_filter(c, u, col="customer_id"):
     """Return (sql_where, params) limiting a query to the actor's customers.
 
     * Customer users -> their one organisation.
-    * Tenant technician -> its one organisation.
+    * Tenant engineer -> its one organisation.
     * Tenant admin -> every organisation in their care list.
-    * Master / unbound technician -> no restriction ("", []).
+    * Master / unbound engineer -> no restriction ("", []).
     """
     role = u.get("role")
     if role == "customer":
         cid = u.get("customer_id")
         return (f"{col} = ?", [cid]) if cid else ("", [])
-    if role == "technician":
+    if role  in ("engineer", "application"):
         cid = u.get("customer_id")
         return (f"{col} = ?", [cid]) if cid else ("", [])
     # admin
@@ -290,20 +290,20 @@ def assignee_allowed(u, assignee_id, c):
 
     Master/admin-without-customer may assign anyone. Tenant-scoped staff may only
     assign their own team (tenant staff across their care-list customers) or the
-    provider's (unbound) technicians — never users from other customers and never
+    provider's (unbound) engineers — never users from other customers and never
     the master admin."""
     if not assignee_id:
         return True
     scope = tenant_scope(u, c)
     if scope is None:
-        return True            # master / provider technician actor
+        return True            # master / provider engineer actor
     if not scope:
         return False           # tenant admin with no organisations yet
     row = c.execute("SELECT role, customer_id FROM users WHERE id=?", (assignee_id,)).fetchone()
-    if not row or row["role"] not in ("technician", "admin"):
+    if not row or row["role"] not in ("engineer", "application", "admin"):
         return False
     if row["customer_id"] is None:
-        return row["role"] == "technician"
+        return row["role"]  in ("engineer", "application")
     return row["customer_id"] in scope
 
 
@@ -367,7 +367,7 @@ def _customer_tenant_admin_ids(c, customer_id):
 def resolve_responsible_admin(c, u, customer_id, provided):
     """Resolve and validate the responsible tenant admin for a new/updated record.
 
-    * Tenant admins default to themselves; tenant technicians defer to their
+    * Tenant admins default to themselves; tenant engineers defer to their
       customer's tenant admin.
     * The master / provider staff: auto-fill the customer's tenant admin when it
       is unambiguous; when a customer has several tenant admins one MUST be
@@ -460,7 +460,7 @@ def get_body():
 
 
 def is_tech_user(u):
-    return u["role"] in ("technician", "admin")
+    return u["role"] in ("engineer", "application", "admin")
 
 
 def _name_of(c, table, row_id):
@@ -569,15 +569,15 @@ def _stakeholder_ids(kind, rec, include_team=False):
         c = conn()
         cust = rec.get("customer_id")
         for r in c.execute(
-                "SELECT id, email, customer_id, role FROM users WHERE role IN ('technician','admin') AND active=1").fetchall():
+                "SELECT id, email, customer_id, role FROM users WHERE role IN ('engineer','application','admin') AND active=1").fetchall():
             if cust is None or r["customer_id"] == cust:
                 ids.add(r["id"])
                 continue
             if r["customer_id"] is None:
-                # provider technicians hear everything; among customer-less
+                # provider engineers hear everything; among customer-less
                 # admins only the MASTER does — unbound tenant admins rely
                 # solely on their care list (checked below).
-                if r["role"] == "technician" or (r["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL:
+                if r["role"]  in ("engineer", "application") or (r["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL:
                     ids.add(r["id"])
                     continue
             # tenant admins also hear tickets for customers they care for
@@ -847,7 +847,7 @@ def lookup_options():
 
 @app.post("/api/signup")
 def signup():
-    """Anyone can request a customer/technician account; it stays pending until an admin approves."""
+    """Anyone can request a customer/engineer account; it stays pending until an admin approves."""
     b = get_body()
     name = (b.get("name") or "").strip()
     email = (b.get("email") or "").strip().lower()
@@ -857,7 +857,7 @@ def signup():
         return jsonify({"error": "Name, email and password are required"}), 400
     if len(pw) < 6:
         return jsonify({"error": "Password must be at least 6 characters"}), 400
-    if role not in ("technician", "customer"):
+    if role not in ("engineer", "application", "customer"):
         return jsonify({"error": "Invalid role"}), 400
     c = conn()
     if c.execute("SELECT id FROM users WHERE lower(email)=?", (email,)).fetchone():
@@ -954,13 +954,13 @@ def review_onboarding(aid):
 # --------------------------------------------------------------------------
 @app.get("/api/customers")
 def list_customers():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
     if u["role"] == "customer":
         where, params = " WHERE id=?", [u.get("customer_id")]
-    elif u["role"] == "technician" and u.get("customer_id"):
+    elif u["role"]  in ("engineer", "application") and u.get("customer_id"):
         where, params = " WHERE id=?", [u["customer_id"]]
     elif u["role"] == "admin" and not is_master_admin(u):
         scope = tenant_scope(u, c)
@@ -1094,7 +1094,7 @@ def _dept_payload(c, r):
 
 @app.get("/api/locations")
 def list_locations():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -1120,7 +1120,7 @@ def list_locations():
 
 @app.post("/api/locations")
 def create_location():
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -1144,7 +1144,7 @@ def create_location():
 
 @app.put("/api/locations/<int:lid>")
 def update_location(lid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -1203,7 +1203,7 @@ def delete_location(lid):
 
 @app.get("/api/departments")
 def list_departments():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -1231,7 +1231,7 @@ def list_departments():
 
 @app.post("/api/departments")
 def create_department():
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -1261,7 +1261,7 @@ def create_department():
 
 @app.put("/api/departments/<int:did>")
 def update_department(did):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -1322,7 +1322,7 @@ def delete_department(did):
 # --------------------------------------------------------------------------
 @app.get("/api/categories")
 def list_categories():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -1352,14 +1352,14 @@ def list_categories():
 @app.post("/api/categories")
 def create_category():
     # Categories are global (not per customer), so only unbound provider staff
-    # (the master admin or LabCare's own technicians) may add them. Tenant-scoped
+    # (the master admin or LabCare's own engineers) may add them. Tenant-scoped
     # staff may not create global categories.
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     if u["role"] == "admin" and not is_master_admin(u):
         return jsonify({"error": "Only the master administrator can manage categories"}), 403
-    if u["role"] == "technician" and u.get("customer_id"):
+    if u["role"]  in ("engineer", "application") and u.get("customer_id"):
         return jsonify({"error": "Only the master administrator can manage categories"}), 403
     b = get_body()
     name = (b.get("name") or "").strip()
@@ -1428,7 +1428,7 @@ def delete_category(catid):
 # --------------------------------------------------------------------------
 @app.get("/api/equipment")
 def list_equipment():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -1470,7 +1470,7 @@ def list_equipment():
 
 @app.post("/api/equipment")
 def create_equipment():
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -1517,7 +1517,7 @@ def create_equipment():
 
 @app.put("/api/equipment/<int:eid>")
 def update_equipment(eid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -1572,7 +1572,7 @@ def update_equipment(eid):
 
 @app.delete("/api/equipment/<int:eid>")
 def delete_equipment(eid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     c = conn()
@@ -1602,7 +1602,7 @@ def delete_equipment(eid):
 # --------------------------------------------------------------------------
 @app.get("/api/complaints")
 def list_complaints():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -1640,7 +1640,7 @@ def list_complaints():
 
 @app.post("/api/complaints")
 def create_complaint():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     b = get_body()
@@ -1719,7 +1719,7 @@ def _customer_allowed(u, customer_id, location_id=None, department_id=None, c=No
 
     * Master admin (admin, no customer): always allowed.
     * Tenant admin: any customer in their care list (primary + linked).
-    * Tenant technician: their single customer.
+    * Tenant engineer: their single customer.
     * Customer users: their own customer + location + department.
     """
     own = c is None
@@ -1739,9 +1739,9 @@ def _in_customer_allowed(u, customer_id, location_id, department_id, c):
         if is_master_admin(u):
             return True
         return customer_id in (scope or [])
-    if u.get("role") == "technician":
+    if u.get("role")  in ("engineer", "application"):
         if scope is None:
-            return True  # provider technician, unscoped
+            return True  # provider engineer, unscoped
         return customer_id in scope
     # customer-role user: scope to customer/location/department
     if u.get("customer_id") and customer_id != u.get("customer_id"):
@@ -1755,7 +1755,7 @@ def _in_customer_allowed(u, customer_id, location_id, department_id, c):
 
 @app.get("/api/complaints/<int:cid>")
 def get_complaint(cid):
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -1777,13 +1777,13 @@ def get_complaint(cid):
 
 @app.post("/api/complaints/<int:cid>/accept")
 def accept_complaint(cid):
-    """A technician/admin accepts a complaint on the sender's behalf.
+    """An engineer/admin accepts a complaint on the sender's behalf.
 
     Records WHO accepted (always visible on the ticket and in the portal), sets
     an optional reply for the sender, and makes the acceptor the ticket's
     assignee. Notifies the sender via the portal and the team via in-app
     notifications."""
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -1840,12 +1840,12 @@ def accept_complaint(cid):
 
 @app.post("/api/breakdowns/<int:bid>/accept")
 def accept_breakdown(bid):
-    """A technician/admin accepts a breakdown on the sender's behalf.
+    """An engineer/admin accepts a breakdown on the sender's behalf.
 
     Mirrors complaint acceptance: records WHO accepted and an optional reply for
     the reporter, and makes the acceptor the ticket's assignee. Notifies the
     sender via the portal and the team via in-app notifications."""
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -1900,7 +1900,7 @@ def accept_breakdown(bid):
 
 @app.patch("/api/complaints/<int:cid>")
 def update_complaint(cid):
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     b = get_body()
@@ -1985,11 +1985,11 @@ def update_complaint(cid):
         return err_r, code_r
     old_assignee = row["assigned_to"]
     old_status = row["status"]
-    # Auto-assign: a technician/admin who starts working an unassigned ticket
+    # Auto-assign: an engineer/admin who starts working an unassigned ticket
     # (e.g. moves it out of "open") becomes its assignee — the assignee always
     # names the person who actually responded.
     if ("status" in b and "assigned_to" not in b
-            and u["role"] in ("admin", "technician") and not row["assigned_to"]):
+            and u["role"] in ("admin", "engineer", "application") and not row["assigned_to"]):
         fields.append("assigned_to=?")
         params.append(u["id"])
         old_assignee = None
@@ -2067,7 +2067,7 @@ def delete_complaint(cid):
 # --------------------------------------------------------------------------
 @app.get("/api/breakdowns")
 def list_breakdowns():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -2105,7 +2105,7 @@ def list_breakdowns():
 
 @app.post("/api/breakdowns")
 def create_breakdown():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     b = get_body()
@@ -2178,7 +2178,7 @@ def create_breakdown():
 
 @app.get("/api/breakdowns/<int:bid>")
 def get_breakdown(bid):
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -2200,7 +2200,7 @@ def get_breakdown(bid):
 
 @app.patch("/api/breakdowns/<int:bid>")
 def update_breakdown(bid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -2261,10 +2261,10 @@ def update_breakdown(bid):
             params.append(None)
     old_assignee = row["assigned_to"]
     old_status = row["status"]
-    # Auto-assign: the technician/admin who starts working an unassigned
+    # Auto-assign: the engineer/admin who starts working an unassigned
     # breakdown (e.g. changes its status) becomes its assignee.
     if ("status" in b and "assigned_to" not in b
-            and u["role"] in ("admin", "technician") and not row["assigned_to"]):
+            and u["role"] in ("admin", "engineer", "application") and not row["assigned_to"]):
         fields.append("assigned_to=?")
         params.append(u["id"])
         old_assignee = None
@@ -2335,7 +2335,7 @@ def delete_breakdown(bid):
 # --------------------------------------------------------------------------
 @app.post("/api/comments")
 def add_comment():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     b = get_body()
@@ -2354,12 +2354,12 @@ def add_comment():
     if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
         c.close()
         return jsonify({"error": "Not authorised"}), 403
-    # Auto-assign: the first technician/admin who RESPONDS to an unassigned
+    # Auto-assign: the first engineer/admin who RESPONDS to an unassigned
     # ticket becomes its assignee (only techs/admins who own the work should
     # answer, so the assignee field always names the actual responder).
     ticket = c.execute(f"SELECT * FROM {entity}s WHERE id=?", (eid,)).fetchone()
     auto_assigned = False
-    if ticket and u["role"] in ("admin", "technician") and not ticket["assigned_to"]:
+    if ticket and u["role"] in ("admin", "engineer", "application") and not ticket["assigned_to"]:
         c.execute(f"UPDATE {entity}s SET assigned_to=?, updated_at=? WHERE id=?",
                   (u["id"], now(), eid))
         auto_assigned = True
@@ -2421,7 +2421,7 @@ def list_users():
     for r in rows:
         if tenant_filter:
             # tenant admins only see their care-list customers' users, plus the
-            # provider's unbound technicians they may assign work to (never other admins).
+            # provider's unbound engineers they may assign work to (never other admins).
             if r["role"] == "admin":
                 continue
             if r["customer_id"] is not None and r["customer_id"] not in scope:
@@ -2441,26 +2441,26 @@ def list_users():
     return jsonify(out)
 
 
-@app.get("/api/technicians")
-def list_technicians():
-    u, err, code = require_role("admin", "technician", "customer")
+@app.get("/api/engineers")
+def list_engineers():
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
-    # assignee picker: only the player's own tenant staff + provider technicians.
-    # The master admin is never listed as an assignable technician.
-    q = "SELECT id,name,email,role FROM users WHERE role IN ('technician','admin') AND active=1"
+    # assignee picker: only the player's own tenant staff + provider engineers.
+    # The master admin is never listed as an assignable engineer.
+    q = "SELECT id,name,email,role FROM users WHERE role IN ('engineer','application','admin') AND active=1"
     params = []
     scope = tenant_scope(u, c)
     if u["role"] == "admin" and not is_master_admin(u):
-        # tenant admin: own tenant staff + provider technicians only — even with
+        # tenant admin: own tenant staff + provider engineers only — even with
         # an empty care list (IN (NULL) matches nothing, provider techs still show)
         marks = ", ".join("?" for _ in scope) or "NULL"
-        q += f" AND (customer_id IN ({marks}) OR (customer_id IS NULL AND role='technician'))"
+        q += f" AND (customer_id IN ({marks}) OR (customer_id IS NULL AND role IN ('engineer','application')))"
         params += list(scope)
     elif scope:
         marks = ", ".join("?" for _ in scope)
-        q += f" AND (customer_id IN ({marks}) OR (customer_id IS NULL AND role='technician'))"
+        q += f" AND (customer_id IN ({marks}) OR (customer_id IS NULL AND role IN ('engineer','application')))"
         params += list(scope)
     q += " ORDER BY name"
     rows = c.execute(q, params).fetchall()
@@ -2476,7 +2476,7 @@ def list_tenant_admins():
     * global=1         -> LabCare-wide (unbound) administrators only
     * (neither)        -> scoped to the actor's customer; master gets all admins
     """
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -2524,8 +2524,8 @@ def create_user():
     b = get_body()
     if not (b.get("name") or "").strip() or not (b.get("email") or "").strip() or not (b.get("password") or ""):
         return jsonify({"error": "Name, email and password are required"}), 400
-    role = b.get("role", "technician")
-    if role not in ("admin", "technician", "customer"):
+    role = b.get("role", "engineer")
+    if role not in ("admin", "engineer", "application", "customer"):
         return jsonify({"error": "Invalid role"}), 400
 
     is_tenant = is_tenant_admin(u)
@@ -2542,16 +2542,16 @@ def create_user():
         customer_id = b.get("customer_id")
         location_id = b.get("location_id")
         department_id = b.get("department_id")
-    elif role == "technician":
-        # tenant staff create technicians bound to a customer in their care list;
-        # the master may optionally bind a technician to a customer (tenant technician).
+    elif role  in ("engineer", "application"):
+        # tenant staff create engineers bound to a customer in their care list;
+        # the master may optionally bind an engineer to a customer (tenant engineer).
         if scope is not None:
             customer_id = b.get("customer_id") or (scope[0] if scope else None)
             if customer_id not in scope:
                 if c: c.close()
                 return jsonify({"error": "You can only create accounts for an organisation you care for"}), 403
         else:
-            customer_id = (u.get("customer_id") if u.get("role") == "technician" else
+            customer_id = (u.get("customer_id") if u.get("role")  in ("engineer", "application") else
                            (b.get("customer_id") or None))
         location_id = department_id = None
     else:  # admin — only the master may create one, and it is always a tenant admin.
@@ -2638,8 +2638,8 @@ def update_user(uid):
         if "customer_id" in b and b["customer_id"] not in scope:
             c.close()
             return jsonify({"error": "You can only link accounts to an organisation you care for"}), 403
-    elif u["role"] == "technician" and u.get("customer_id"):
-        # tenant technicians: same restrictions, single customer
+    elif u["role"]  in ("engineer", "application") and u.get("customer_id"):
+        # tenant engineers: same restrictions, single customer
         if existing["role"] == "admin":
             c.close()
             return jsonify({"error": "Only the master administrator can manage admin accounts"}), 403
@@ -2651,13 +2651,13 @@ def update_user(uid):
             return jsonify({"error": "Only the master administrator can create admin accounts"}), 403
 
     # Resolve the customer scope that would result from this update, so we can
-    # validate any location/department pairing even when role stays 'customer'/'technician'.
+    # validate any location/department pairing even when role stays 'customer'/'engineer'.
     new_customer_id = existing["customer_id"]
     if "customer_id" in b:
         new_customer_id = b["customer_id"]
     elif "role" in b:
-        if b["role"] == "technician":
-            new_customer_id = u.get("customer_id") if u.get("role") == "technician" else None
+        if b["role"]  in ("engineer", "application"):
+            new_customer_id = u.get("customer_id") if u.get("role")  in ("engineer", "application") else None
         elif b["role"] == "admin":
             new_customer_id = None
     # Admins other than the Master are tenant admins; customer-less (unbound,
@@ -2677,7 +2677,7 @@ def update_user(uid):
         c.close()
         return err_r, code_r
 
-    if "role" in b and b["role"] not in ("admin", "technician", "customer"):
+    if "role" in b and b["role"] not in ("admin", "engineer", "application", "customer"):
         c.close()
         return jsonify({"error": "Invalid role"}), 400
     if "email" in b:
@@ -2808,13 +2808,13 @@ def delete_user(uid):
 
 @app.get("/api/dashboard")
 def dashboard():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
 
     # For customer users, restrict every aggregate to their own
-    # customer + location + department. Tenant-bound staff (technicians/admins)
+    # customer + location + department. Tenant-bound staff (engineers/admins)
     # are scoped to their care-list customer(s).
     cust_scopes = []
     if u["role"] == "customer":
@@ -3007,7 +3007,7 @@ def dashboard():
 # --------------------------------------------------------------------------
 @app.get("/api/notifications")
 def list_notifications():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -3042,7 +3042,7 @@ def list_notifications():
 def notifications_ping():
     """Lightweight poll: unread count, a change stamp, and the latest unread
     notification so the client can play an audible alert for new tickets."""
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -3061,7 +3061,7 @@ def notifications_ping():
 
 @app.post("/api/notifications/read")
 def mark_notifications_read():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     b = get_body()
@@ -3080,7 +3080,7 @@ def mark_notifications_read():
 # --------------------------------------------------------------------------
 @app.get("/api/push/vapid-key")
 def push_vapid_key():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     return jsonify({"public_key": push_mod.vapid_public_key()})
@@ -3088,7 +3088,7 @@ def push_vapid_key():
 
 @app.get("/api/push/status")
 def push_status():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -3104,7 +3104,7 @@ def push_status():
 
 @app.post("/api/push/subscribe")
 def push_subscribe():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     b = get_body()
@@ -3117,7 +3117,7 @@ def push_subscribe():
 
 @app.post("/api/push/unsubscribe")
 def push_unsubscribe():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     b = get_body() or {}
@@ -3130,7 +3130,7 @@ def push_unsubscribe():
 # --------------------------------------------------------------------------
 @app.get("/api/app/devices")
 def app_devices():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -3143,7 +3143,7 @@ def app_devices():
 
 @app.post("/api/app/register")
 def app_register():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     b = get_body()
@@ -3156,7 +3156,7 @@ def app_register():
 
 @app.post("/api/app/unregister")
 def app_unregister():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     b = get_body() or {}
@@ -3193,7 +3193,7 @@ def _attachments_meta(c, entity, entity_id):
 
 @app.post("/api/attachments")
 def upload_attachment():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     entity = request.form.get("entity_type")
@@ -3285,7 +3285,7 @@ def upload_attachment():
 
 @app.get("/api/attachments")
 def list_attachments():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     entity = request.args.get("entity_type")
@@ -3308,7 +3308,7 @@ def list_attachments():
 @app.get("/api/audit")
 def list_audit():
     """Per-ticket history log: who did what and when."""
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     entity = request.args.get("entity_type")
@@ -3332,7 +3332,7 @@ def list_audit():
 
 @app.get("/api/attachments/<int:aid>/file")
 def attachment_file(aid):
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -3354,7 +3354,7 @@ def attachment_file(aid):
 
 @app.delete("/api/attachments/<int:aid>")
 def delete_attachment(aid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     c = conn()
@@ -3378,7 +3378,7 @@ def delete_attachment(aid):
 # --------------------------------------------------------------------------
 @app.get("/api/export.csv")
 def export_csv():
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     entity = request.args.get("type", "complaints")
@@ -3434,7 +3434,7 @@ def _load_ticket_photos(entity_type, entity_id):
 
 @app.get("/api/complaints/<int:cid>/report.pdf")
 def complaint_report_pdf(cid):
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -3461,7 +3461,7 @@ def complaint_report_pdf(cid):
 
 @app.get("/api/reports/trend.pdf")
 def trend_report_pdf():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -3551,7 +3551,7 @@ def _pm_payload(c, row):
 
 @app.get("/api/pms")
 def list_pms():
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -3595,7 +3595,7 @@ def list_pms():
 
 @app.post("/api/pms")
 def create_pm():
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -3631,7 +3631,7 @@ def create_pm():
 
 @app.patch("/api/pms/<int:pid>")
 def update_pm(pid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -3676,7 +3676,7 @@ def update_pm(pid):
 
 @app.delete("/api/pms/<int:pid>")
 def delete_pm(pid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     c = conn()
@@ -3696,7 +3696,7 @@ def delete_pm(pid):
 
 @app.post("/api/pms/<int:pid>/complete")
 def complete_pm(pid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -3736,7 +3736,7 @@ def complete_pm(pid):
 
 @app.get("/api/pms/<int:pid>/logs")
 def pm_logs(pid):
-    u, err, code = require_role("admin", "technician", "customer")
+    u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
@@ -3780,7 +3780,7 @@ def _public_base():
 
 @app.get("/api/portal-links")
 def list_portal_links():
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     c = conn()
@@ -3801,7 +3801,7 @@ def list_portal_links():
 
 @app.post("/api/portal-links")
 def create_portal_link():
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -3827,7 +3827,7 @@ def create_portal_link():
 
 @app.get("/api/portal-links/<int:lid>/qr")
 def portal_link_qr(lid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     c = conn()
@@ -3847,7 +3847,7 @@ def portal_link_qr(lid):
 
 @app.patch("/api/portal-links/<int:lid>")
 def update_portal_link(lid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     b = get_body()
@@ -3884,7 +3884,7 @@ def update_portal_link(lid):
 
 @app.delete("/api/portal-links/<int:lid>")
 def delete_portal_link(lid):
-    u, err, code = require_role("admin", "technician")
+    u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
     c = conn()
