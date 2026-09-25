@@ -14,6 +14,7 @@ labcare/
 │   ├── report.py       # ReportLab PDF generation
 │   ├── mailer.py       # email outbox (SMTP or local outbox.log)
 │   ├── seed.py         # first-run seed (Master System Admin only)
+│   ├── seed_minimal.py # reset the database to the minimal demo dataset
 │   ├── run.py          # production entry point (Waitress)
 │   └── wsgi.py         # WSGI entry point for external servers
 ├── static/
@@ -43,6 +44,11 @@ working against plain SQLite for local development.
 - **Fresh data policy:** the database starts empty and is seeded with only the
   **Master System Admin** account. Customers, users, equipment and tickets are
   created in-app.
+- **Minimal demo dataset:** `server/seed_minimal.py` wipes every table and
+  recreates a single organisation (one tenant admin, one technician, one
+  customer user, one piece of equipment, one complaint, one breakdown and one
+  portal link) — run it with the InsForge connection string:
+  `LABCARE_DATABASE_URL="$(npx -y @insforge/cli db connection-string)" python3 server/seed_minimal.py`.
 - **Redeploy:** `./deploy.sh` (backend), `./deploy.sh frontend` (frontend),
   `./deploy.sh all` (both), `./deploy.sh push` (git). The script recovers
   automatically from a fresh sandbox (installs flyctl, re-fetches the Postgres
