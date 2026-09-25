@@ -64,9 +64,9 @@ jobs:
           : > /tmp/preclean.err
           psql "$DSN" -v ON_ERROR_STOP=1 2>>/tmp/preclean.err <<SQL
           DELETE FROM sessions      WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@rolesprobe.example');
-          DELETE FROM comments      WHERE entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe');
-          DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe');
-          DELETE FROM audit_logs    WHERE (entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe'))
+          DELETE FROM comments      WHERE entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE fault_description='roles probe');
+          DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE fault_description='roles probe');
+          DELETE FROM audit_logs    WHERE (entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE fault_description='roles probe'))
                                      OR (entity_type='customer'  AND entity_id IN (SELECT id FROM customers WHERE name='Roles Probe Clinic'));
           DELETE FROM breakdowns    WHERE fault_description='roles probe';
           DELETE FROM users         WHERE email LIKE '%@rolesprobe.example';
