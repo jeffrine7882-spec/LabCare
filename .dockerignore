@@ -12,3 +12,8 @@ server/__pycache__
 **.pyc
 .venv
 .env*
+netlify.toml
+railway.toml
+deploy
+samples
+mobile

@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "LabCare",
+    "slug": "labcare",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "labcare",
+    "icon": "./assets/icon.png",
+    "splash": { "backgroundColor": "#0f766e" },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.insforge.labcare"
+    },
+    "android": {
+      "package": "com.insforge.labcare",
+      "googleServicesFile": "./google-services.json"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#0f766e",
+          "icon": "./assets/notif-icon.png",
+          "sounds": ["./assets/alert.wav"]
+        }
+      ]
+    ],
+    "extra": {
+      "apiBase": "https://labcare.insforge.site"
+    }
+  }
+}

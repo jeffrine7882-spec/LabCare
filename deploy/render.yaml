@@ -1,0 +1,35 @@
+# Render backend (Blueprints can read this, or use `render.yaml`)
+# Zero-config alternative to a self-managed VPS: Render + Render Disk.
+#
+#   Build:    pip install -r requirements.txt
+#   Start:    cd server && python3 run.py
+#   Disk:     mount at /data (Render "Disk" service) so SQLite persists
+#   Env vars: see below — LABCARE_DB must live on the mounted disk
+services:
+  - type: web
+    name: labcare-backend
+    env: python
+    region: singapore            # closest to your George Town, MY users
+    # `starter` is deliberate: Render's free tier has NO persistent disk, so
+    # SQLite would be wiped on every spin-down/redeploy. starter (~$7/mo) is
+    # the cheapest instance that can attach the persistent disk below.
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd server && python3 run.py
+    healthCheckPath: /api/ping
+    envVars:
+      - key: LABCARE_DB
+        value: /data/labcare.db
+      - key: LABCARE_HISTORY_LOG
+        value: /data/ticket_history.log
+      - key: LABCARE_SECURE_COOKIES
+        value: "1"
+      # Public URL encoded into QR codes (portal scan-to-report). MUST be the
+      # public HTTPS frontend URL visitors open, e.g. https://labcareassist.netlify.app
+      - key: LABCARE_PORTAL_URL
+        value: https://labcareassist.netlify.app
+      # Note: PORT is injected automatically by Render — do NOT set it here.
+    disk:
+      name: labcare-disk
+      mountPath: /data
+      sizeGB: 5
