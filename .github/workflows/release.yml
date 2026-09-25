@@ -108,6 +108,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # older published binaries must not leak into the new publish (rename
+      # collisions, stale versions) — wipe binaries, keep only README/history
+      - name: Clean previously published binaries
+        run: |
+          rm -f Release/android/*.apk Release/windows/*.exe 2>/dev/null || true
+
       - uses: actions/download-artifact@v4
         with:
           name: labcare-apk
