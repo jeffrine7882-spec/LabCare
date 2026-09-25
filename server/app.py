@@ -889,6 +889,12 @@ def signup():
                     (new_cust_name, name, email, b.get("phone", ""), "", "", now()),
                 )
                 customer_id = cur_cust.lastrowid
+            if location_id and not new_loc_name:
+                ref_loc = c.execute("SELECT name FROM locations WHERE id=?", (location_id,)).fetchone()
+                if ref_loc:
+                    new_loc_name = ref_loc["name"]
+                    location_id = None
+                    department_id = None
         elif not customer_id:
             c.close()
             return jsonify({"error": "Select your organisation or create a new one"}), 400

@@ -339,6 +339,38 @@ class SharedAssetAndLocationTest(unittest.TestCase):
         self.assertEqual(app_item3["customer_name"], "Apex Research")
         self.assertEqual(app_item3["location_name"], "Main Lab")
 
+        # 8. New organization chooses from EXISTING list of location/department names
+        res4 = self.client.post("/api/signup", json={
+            "name": "Dr. Fiona",
+            "email": "fiona@zenithdx.test",
+            "password": "password123",
+            "role": "customer",
+            "new_customer_name": "Zenith Diagnostics",
+            "new_location_name": "Proteomics Facility",  # chosen from existing list
+        })
+        self.assertEqual(res4.status_code, 201)
+        zenith_cust = next(c for c in self.client.get("/api/lookup/customers").get_json() if c["name"] == "Zenith Diagnostics")
+        zenith_locs = self.client.get(f"/api/locations?customer_id={zenith_cust['id']}").get_json()
+        self.assertEqual(len(zenith_locs), 1)
+        self.assertEqual(zenith_locs[0]["name"], "Proteomics Facility")
+        self.assertNotEqual(zenith_locs[0]["id"], loc_id)  # Separate location record for new org!
+
+        # 9. New organization chooses existing location_id directly
+        res5 = self.client.post("/api/signup", json={
+            "name": "Dr. George",
+            "email": "george@solisbio.test",
+            "password": "password123",
+            "role": "customer",
+            "new_customer_name": "Solis Bio",
+            "location_id": loc_id,  # references existing location to copy name
+        })
+        self.assertEqual(res5.status_code, 201)
+        solis_cust = next(c for c in self.client.get("/api/lookup/customers").get_json() if c["name"] == "Solis Bio")
+        solis_locs = self.client.get(f"/api/locations?customer_id={solis_cust['id']}").get_json()
+        self.assertEqual(len(solis_locs), 1)
+        self.assertEqual(solis_locs[0]["name"], "Proteomics Facility")
+        self.assertNotEqual(solis_locs[0]["id"], loc_id)
+
     @classmethod
     def tearDownClass(cls):
         if os.path.exists(test_db):

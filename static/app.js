@@ -3549,9 +3549,24 @@ function onJoinCust() {
   if (!isNewCust && $("#jnNewCustomer")) $("#jnNewCustomer").value = "";
 
   if (isNewCust) {
-    $("#jnLocation").innerHTML = `<option value="__new__" selected>＋ Create new location/department…</option>`;
-    $("#jnLocation").value = "__new__";
-    if ($("#jnNewLocationWrap")) $("#jnNewLocationWrap").classList.remove("hidden");
+    // When creating a new organisation, user can choose from existing location/department names in the system or create a new one
+    const allNames = [
+      ...(state.signup?.locations || []).map((l) => l.name),
+      ...(state.signup?.departments || []).map((d) => d.name),
+    ]
+      .map((n) => (n || "").trim())
+      .filter(Boolean);
+    const distinctNames = Array.from(new Set(allNames)).sort((a, b) => a.localeCompare(b));
+
+    let opts = `<option value="">— Select location/department —</option>`;
+    if (distinctNames.length) {
+      opts += distinctNames.map((name) => `<option value="name:${esc(name)}">${esc(name)}</option>`).join("");
+    }
+    opts += `<option value="__new__">＋ Create new location/department…</option>`;
+    $("#jnLocation").innerHTML = opts;
+    $("#jnLocation").value = "";
+    if ($("#jnNewLocationWrap")) $("#jnNewLocationWrap").classList.add("hidden");
+    if ($("#jnNewLocation")) $("#jnNewLocation").value = "";
     if ($("#jnDepartment")) $("#jnDepartment").innerHTML = `<option value="">— Select department —</option>`;
     return;
   }
@@ -3576,7 +3591,10 @@ function onJoinLoc() {
     $("#jnNewLocationWrap").classList.toggle("hidden", !isNew);
     if (isNew && $("#jnNewLocation")) $("#jnNewLocation").focus();
   }
-  if (!isNew && loc) {
+  if (!isNew && $("#jnNewLocation")) {
+    $("#jnNewLocation").value = "";
+  }
+  if (!isNew && loc && !loc.startsWith("name:")) {
     const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(loc));
     const dId = depts[0]?.id || loc;
     if ($("#jnDepartment")) {
@@ -3645,6 +3663,8 @@ $("#joinForm").addEventListener("submit", async (e) => {
         return;
       }
       body.new_location_name = newLocName;
+    } else if (locVal.startsWith("name:")) {
+      body.new_location_name = locVal.slice(5).trim();
     } else if (locVal) {
       body.location_id = locVal;
       const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(body.location_id));
