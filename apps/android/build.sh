@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the LabCare Android alerts app into a release APK without Gradle.
 # Requires: JDK 11+, and the Android build-tools + platform android-33 in
-# ~/android-sdk (see README.md). Output: dist/LabCare-Alerts-v1.2.apk
+# ~/android-sdk (see README.md). Output: dist/LabCare-Alerts-v1.3.apk
 set -euo pipefail
 
 # Make sure keytool/javac are on PATH regardless of the JDK install layout.
@@ -66,9 +66,9 @@ fi
 echo "==> sign"
 "$BT/apksigner" sign --ks "$KEYSTORE" --ks-key-alias labcare \
     --ks-pass pass:labcare1 --key-pass pass:labcare1 \
-    --out "$OUT/LabCare-Alerts-v1.2.apk" app.aligned.apk
+    --out "$OUT/LabCare-Alerts-v1.3.apk" app.aligned.apk
 
-"$BT/apksigner" verify --print-certs "$OUT/LabCare-Alerts-v1.2.apk" | head -3
+"$BT/apksigner" verify --print-certs "$OUT/LabCare-Alerts-v1.3.apk" | head -3
 
 echo
-echo "DONE: $OUT/LabCare-Alerts-v1.2.apk"
+echo "DONE: $OUT/LabCare-Alerts-v1.3.apk"
