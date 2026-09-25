@@ -4249,19 +4249,48 @@ def portal_events(token):
 
 
 # --------------------------------------------------------------------------
+# Version check
+# --------------------------------------------------------------------------
+APP_VERSION = "45"
+
+@app.get("/api/version")
+def api_version():
+    return jsonify({"version": APP_VERSION, "ok": True})
+
+
+@app.after_request
+def set_no_cache_headers(response):
+    if request.path == "/" or request.path.endswith(".html") or request.path.endswith(".js"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
+# --------------------------------------------------------------------------
 # Static (mobile web app)
 # --------------------------------------------------------------------------
 @app.get("/")
 def index():
-    return send_from_directory(STATIC_DIR, "index.html")
+    resp = send_from_directory(STATIC_DIR, "index.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.get("/<path:path>")
 def static_files(path):
     full = os.path.join(STATIC_DIR, path)
     if os.path.isfile(full):
-        return send_from_directory(STATIC_DIR, path)
-    return send_from_directory(STATIC_DIR, "index.html")
+        resp = send_from_directory(STATIC_DIR, path)
+    else:
+        resp = send_from_directory(STATIC_DIR, "index.html")
+    if path == "index.html" or path.endswith(".html") or path.endswith(".js"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
 
 
 # --------------------------------------------------------------------------

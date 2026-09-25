@@ -3766,7 +3766,21 @@ Object.assign(window, {
   togglePushAlerts, syncPushAlerts, pushStateLabel,
 });
 
+const BUILD_VERSION = "45";
+
 async function boot() {
+  // Bust stale WebView or browser caches automatically if a newer version was deployed
+  try {
+    const ver = await API.get("/api/version");
+    if (ver && ver.version && ver.version !== BUILD_VERSION) {
+      if (!sessionStorage.getItem("reloaded_for_version_" + ver.version)) {
+        sessionStorage.setItem("reloaded_for_version_" + ver.version, "1");
+        location.href = location.pathname + "?_t=" + Date.now();
+        return;
+      }
+    }
+  } catch (e) { /* ignore */ }
+
   // Try to restore a session. Even without a stored token, the HttpOnly auth
   // cookie may still be valid, so always ask the server who we are.
   try {

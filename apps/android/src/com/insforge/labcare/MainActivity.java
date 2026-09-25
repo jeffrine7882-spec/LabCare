@@ -292,7 +292,9 @@ public class MainActivity extends Activity {
         s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false);
         s.setSupportMultipleWindows(false);
+        s.setCacheMode(WebSettings.LOAD_NO_CACHE);
         CookieManager.getInstance().setAcceptCookie(true);
+        w.clearCache(true);
 
         w.setWebViewClient(new WebViewClient() {
             @Override
@@ -681,6 +683,12 @@ public class MainActivity extends Activity {
         b.setTextColor(screen.equals(target) ? Color.WHITE : Color.rgb(15, 118, 110));
         b.setBackgroundColor(screen.equals(target) ? Color.rgb(15, 118, 110) : Color.TRANSPARENT);
         b.setOnClickListener(v -> {
+            if ("site".equals(target) && "site".equals(screen) && web != null) {
+                web.clearCache(true);
+                web.reload();
+                toast("Refreshing LabCare…");
+                return;
+            }
             screen = target;
             render();
         });
