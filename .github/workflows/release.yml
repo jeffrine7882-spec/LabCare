@@ -73,9 +73,14 @@ jobs:
         run: |
           set -euo pipefail
           aapt="$ANDROID_SDK/build-tools/android-13/aapt"
-          full="$(/bin/true && "$aapt" dump badging apps/android/dist/LabCare-Alerts-v1.2.apk)"
-          echo "::notice::$(echo "$full" | grep -E "package:|uses-sdk:|versionName|targetSdk" | sed 's/%/%25/g; s/\r/%0D/g')"
-          echo "$full" | grep -qE "targetSdkVersion='?(3[4-9]|[4-9][0-9])" || { echo "::error::targetSdkVersion below 34 or uses-sdk missing"; echo "::error::$(echo "$full" | grep -i sdk | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"; exit 1; }
+          "$aapt" dump badging apps/android/dist/LabCare-Alerts-v1.2.apk | head -5
+          tree="$("$aapt" dump xmltree apps/android/dist/LabCare-Alerts-v1.2.apk AndroidManifest.xml)"
+          echo "::notice::$(echo "$tree" | sed -n '/uses-sdk/,+3p' | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
+          target_hex="$(echo "$tree" | sed -n 's/.*targetSdkVersion[^=]*=..(type [.0-9a-f]*)0x\([0-9a-f]*\).*/\1/p' | head -1)"
+          target_dec=$((16#${target_hex:-0}))
+          echo "targetSdkVersion: hex=0x$target_hex dec=$target_dec"
+          [ "$target_dec" -ge 34 ] || { echo "::error::targetSdkVersion=$target_dec (<34) or uses-sdk not compiled in"; exit 1; }
+          echo "::notice::APK targets SDK $target_dec — installable on Android 14/15/16"
 
       - uses: actions/upload-artifact@v4
         with:
