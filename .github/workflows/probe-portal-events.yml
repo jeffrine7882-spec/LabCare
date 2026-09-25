@@ -63,7 +63,7 @@ jobs:
       - name: Probe the events surface over HTTPS
         id: probe
         env:
-          PROD: https://yj675q8e.ap-southeast.insforge.app
+          PROD: https://labcare-api-ee5bd3a7-8f78-4005-87ea-6c57ff5728aa.fly.dev
         run: |
           set -euo pipefail
           login_code="$(curl -sS --noproxy '*' -o /tmp/login.json -w '%{http_code}' \
