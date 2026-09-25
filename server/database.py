@@ -408,6 +408,17 @@ def _sqlite_migrate(c):
             "INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
             (row["id"], row["customer_id"], now()))
 
+    # Ensure location and department are the same: every location has a matching department
+    for loc in c.execute("SELECT id, customer_id, name, created_at FROM locations").fetchall():
+        depts = c.execute("SELECT id FROM departments WHERE location_id=?", (loc["id"],)).fetchall()
+        if not depts:
+            c.execute("INSERT INTO departments (customer_id, location_id, name, created_at) VALUES (?,?,?,?)",
+                      (loc["customer_id"], loc["id"], loc["name"], loc["created_at"]))
+        else:
+            for d in depts:
+                c.execute("UPDATE departments SET name=?, customer_id=? WHERE id=?",
+                          (loc["name"], loc["customer_id"], d["id"]))
+
     _sqlite_migrate_roles(c)
 
 
@@ -983,6 +994,19 @@ def _pg_migrate(c):
             "INSERT INTO admin_customer_links (admin_id,customer_id,created_at) "
             "VALUES (?,?,?) ON CONFLICT DO NOTHING",
             (r["id"], r["customer_id"], now()))
+    # Ensure location and department are the same: every location has a matching department
+    c.execute("""
+        INSERT INTO departments (customer_id, location_id, name, created_at)
+        SELECT l.customer_id, l.id, l.name, l.created_at
+        FROM locations l
+        WHERE NOT EXISTS (SELECT 1 FROM departments d WHERE d.location_id = l.id)
+    """)
+    c.execute("""
+        UPDATE departments d
+        SET name = l.name, customer_id = l.customer_id
+        FROM locations l
+        WHERE d.location_id = l.id AND (d.name != l.name OR d.customer_id != l.customer_id)
+    """)
 
 
 def _pg_init_db():

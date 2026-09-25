@@ -98,12 +98,10 @@
             <label class="field"><span>Organisation *</span>
               <select id="jnCustomer" onchange="onJoinCust()"><option value="">— Select your organisation —</option></select>
             </label>
-            <label class="field"><span>Location *</span>
-              <select id="jnLocation" onchange="onJoinLoc()"><option value="">— Select location —</option></select>
+            <label class="field"><span>Location/Department *</span>
+              <select id="jnLocation" onchange="onJoinLoc()"><option value="">— Select location/department —</option></select>
             </label>
-            <label class="field"><span>Department *</span>
-              <select id="jnDepartment"><option value="">— Select department —</option></select>
-            </label>
+            <select id="jnDepartment" style="display:none"><option value="">— Select department —</option></select>
           </div>
           <label class="field"><span>Password *</span><input id="jnPassword" type="password" placeholder="Min 6 characters" required></label>
           <div id="joinError" class="form-error hidden"></div>
@@ -125,6 +123,6 @@
   <!-- Modal host -->
   <div id="modalHost" class="modal-host hidden"></div>
 
-  <script src="/app.js?v=38"></script>
+  <script src="/app.js?v=39"></script>
 </body>
 </html>
