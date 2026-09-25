@@ -21,6 +21,7 @@ import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -55,6 +56,11 @@ public class MainActivity extends Activity {
     /** Which screen is shown: site | home | alerts | sound */
     private String screen = "site";
     private ValueCallback<Uri[]> fileCallback;
+    /** True when the device has no usable WebView — fall back to the browser. */
+    private boolean webDead = false;
+    /** True when the last site load failed — show the fallback view. */
+    private boolean webErrored = false;
+    private String webErrorMsg = null;
 
     private static final int PICK_FILE = 300;
 
@@ -219,9 +225,61 @@ public class MainActivity extends Activity {
      * already signed in.
      */
     private View siteView() {
-        if (web == null) web = createSiteWebView();
+        if (web == null) {
+            try {
+                web = createSiteWebView();
+            } catch (Throwable t) {
+                webDead = true;   // no WebView provider on this device
+            }
+        }
+        if (webDead || web == null) {
+            return siteFallbackView(
+                    "This phone cannot display the site inside the app (no Android System WebView).");
+        }
+        if (webErrored) {
+            return siteFallbackView(webErrorMsg);
+        }
         syncSiteSession();
         return web;
+    }
+
+    /** Never strand the user: always offer a one-tap path to the real site. */
+    private View siteFallbackView(String msg) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(28), dp(48), dp(28), dp(24));
+
+        TextView head = label("The site didn't open in the app");
+        box.addView(head);
+        TextView m = muted(msg == null
+                ? "The LabCare site failed to load. Check your internet connection."
+                : msg);
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        mlp.setMargins(0, dp(8), 0, dp(8));
+        m.setLayoutParams(mlp);
+        box.addView(m);
+
+        Button browser = button("Open the site in my browser", true,
+                v -> openExternal(Uri.parse(Api.BASE + "/")));
+        box.addView(browser);
+
+        if (!webDead && web != null) {
+            Button retry = button("Retry in the app", true, v -> {
+                webErrored = false;
+                webErrorMsg = null;
+                web.loadUrl(Api.BASE + "/");
+                render();
+            });
+            retry.setBackgroundColor(Color.rgb(220, 232, 230));
+            retry.setTextColor(Color.rgb(15, 118, 110));
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            rlp.setMargins(0, dp(10), 0, 0);
+            retry.setLayoutParams(rlp);
+            box.addView(retry);
+        }
+        return box;
     }
 
     private WebView createSiteWebView() {
@@ -239,6 +297,8 @@ public class MainActivity extends Activity {
         w.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                webErrored = false;
+                webErrorMsg = null;
                 injectToken();
             }
 
@@ -247,6 +307,18 @@ public class MainActivity extends Activity {
                 injectToken();
                 captureTokenFromPage();
                 view.evaluateJavascript(BLOB_DOWNLOAD_SHIM, null);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request,
+                                        WebResourceError error) {
+                if (request == null || !request.isForMainFrame()) return;
+                webErrored = true;
+                CharSequence d = error != null ? error.getDescription() : null;
+                webErrorMsg = (d == null || d.length() == 0)
+                        ? "The LabCare site failed to load. Check your internet connection."
+                        : "The LabCare site failed to load (" + d + ").";
+                render();
             }
 
             @Override
@@ -299,11 +371,13 @@ public class MainActivity extends Activity {
 
         w.addJavascriptInterface(new SiteBridge(), "LabCareDroid");
 
+        // Load the site IMMEDIATELY and unconditionally — never gate the load
+        // on a cookie callback. Session sync (cookie + localStorage) is
+        // re-applied on every page event, so the user always reaches the site.
         CookieManager cm = CookieManager.getInstance();
-        syncSiteSession();
-        cm.setCookie(Api.BASE + "/", cookieValue(), ok -> w.post(() ->
-                w.loadUrl(Api.BASE + "/")));
+        cm.setCookie(Api.BASE + "/", cookieValue());
         cm.flush();
+        w.loadUrl(Api.BASE + "/");
         return w;
     }
 
