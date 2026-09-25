@@ -15,7 +15,7 @@ name: Build release binaries (APK + EXE)
 
 on:
   push:
-    branches: [main, arena/01a0d8b3-labcare]
+    branches: [main, arena/01a0d8b3-labcare, arena/01a0d923-labcare]
   workflow_dispatch:
 
 permissions:
@@ -215,19 +215,22 @@ jobs:
           apk="Release/android/LabCare-Alerts-v1.3.apk"
           test -s "$apk"
           ver="v1.3"
-          notes="LabCare Alerts ${ver} — Android APK (self-signed, not on the Play Store).
+          notes="LabCare Alerts ${ver} — updated Android APK (self-signed, not on the Play Store).
 
+          - This publish is the updated v1.3: the Site tab opens the LabCare site immediately. The first v1.3 build waited on a cookie callback and could leave you on the sound screen. If the page cannot load, use \"Open the site in my browser\" or Retry.
           - Requires Android 8.0+ (API 26); installs on Android 14/15/16 (targetSdk 34).
-          - Download \`${apk##*/}\` below (also in \`Release/android/\` of this repo), copy it to your phone, tap it and allow \"install unknown apps\".
-          - Sign in with your LabCare account — the app opens the LabCare site itself (Site tab) and rings + vibrates for every bell alert (keep \"Phone alerts\" on).
-          - Each CI build uses a fresh signing key: uninstall any older build before installing.
+          - Download \`${apk##*/}\` below (same file as \`Release/android/\` on this tag). Copy it to your phone, tap it, and allow \"install unknown apps\".
+          - Uninstall any earlier LabCare Alerts install first — each CI build uses a fresh signing key.
+          - Sign in with your LabCare account and keep \"Phone alerts\" on so the phone rings and vibrates for every bell alert.
 
           Installer guide: [Release/README.md](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${ver}/Release/README.md)"
+          # `gh release upload --clobber` replaces the APK asset but leaves the
+          # tag on the first publish, so the tag tree and source archive keep
+          # the pre-fix APK. Delete and recreate so v1.3 points at this commit.
           if gh release view "$ver" >/dev/null 2>&1; then
-            gh release upload "$ver" "$apk" --clobber
-            gh release edit "$ver" --notes "$notes"
-          else
-            gh release create "$ver" "$apk" --target "$(git rev-parse HEAD)" \
-              --title "LabCare Alerts ${ver} (Android APK)" --notes "$notes"
+            gh release delete "$ver" --yes --cleanup-tag
           fi
-          echo "::notice::GitHub Release ${ver} published with $(basename "$apk")"
+          git push origin ":refs/tags/${ver}" || true
+          gh release create "$ver" "$apk" --target "$(git rev-parse HEAD)" \
+            --title "LabCare Alerts ${ver} (Android APK)" --notes "$notes"
+          echo "::notice::GitHub Release ${ver} published with $(basename "$apk") at $(git rev-parse --short HEAD)"
