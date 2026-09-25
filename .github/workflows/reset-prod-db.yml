@@ -48,7 +48,11 @@ jobs:
           test -s .insforge/project.json
 
       - name: Ensure psql is available
-        run: command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client; }
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            echo "psql missing — installing postgresql-client"
+            sudo apt-get update && sudo apt-get install -y postgresql-client
+          fi
           psql --version
 
       - name: Fetch the Postgres DSN (value never echoed)
