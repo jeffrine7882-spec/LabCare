@@ -1,0 +1,63 @@
+# =============================================================================
+# ONE-SHOT: reset the PRODUCTION InsForge Postgres to a fresh, seeded-equivalent
+# state — every table emptied, only the Master System Admin kept.
+#
+# SAFETY GATE: runs only when the pushed commit message contains
+# "[reset-prod-db]". Any other push skips it. Delete this file after use.
+#
+# Uses the repository secret INSFORGE_API_KEY (API-key auth, no OAuth), exactly
+# like the Deploy workflow. Why a workflow: the coding sandbox cannot reach
+# InsForge (egress firewall); GitHub runners can.
+# =============================================================================
+
+name: Reset production database (one-shot)
+
+on:
+  push:
+    branches: [arena/01a0d728-labcare]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reset-prod-db
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    # Hard gate: smoke out accidental runs. Only a commit that explicitly asks
+    # for the reset with the marker phrase will execute this job.
+    if: contains(github.event.head_commit.message, '[reset-prod-db]') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Link the InsForge project (API-key auth, no OAuth)
+        env:
+          INSFORGE_API_KEY: ${{ secrets.INSFORGE_API_KEY }}
+        run: |
+          npx --yes @insforge/cli link \
+            --api-base-url https://yj675q8e.ap-southeast.insforge.app \
+            --api-key "$INSFORGE_API_KEY" --guard off --json
+          test -s .insforge/project.json
+
+      - name: Wipe all app data (users kept separately below)
+        run: |
+          set -euo pipefail
+          npx --yes @insforge/cli db query "TRUNCATE TABLE onboarding_apps, categories, equipment, locations, departments, complaints, breakdowns, comments, audit_logs, sessions, attachments, notifications, notification_pings, pm_schedules, pm_logs, portal_links, push_subscriptions, app_devices, admin_customer_links, customers RESTART IDENTITY CASCADE"
+
+      - name: Delete every user except the Master System Admin
+        run: |
+          npx --yes @insforge/cli db query "DELETE FROM users WHERE lower(email) <> 'admin@labcare.com'"
+          npx --yes @insforge/cli db query "SELECT setval(pg_get_serial_sequence('users','id'), (SELECT MAX(id) FROM users))"
+
+      - name: Verify — only the Master System Admin remains
+        run: |
+          npx --yes @insforge/cli db query "SELECT id, name, email, role, customer_id FROM users"
+          npx --yes @insforge/cli db query "SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM customers) AS customers, (SELECT count(*) FROM equipment) AS equipment, (SELECT count(*) FROM complaints) AS complaints, (SELECT count(*) FROM breakdowns) AS breakdowns, (SELECT count(*) FROM sessions) AS sessions"
