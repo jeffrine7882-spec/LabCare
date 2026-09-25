@@ -14,9 +14,9 @@ import struct
 import sys
 import zipfile
 
-CHUNK_AXML_HEADER = 0x00080003
-CHUNK_STRING_POOL = 0x001C0001
-CHUNK_START_ELEMENT = 0x00100102
+CHUNK_AXML_HEADER = 0x00080003  # type=RES_XML_TYPE(0x0003) | headerSize(8)<<16
+CHUNK_STRING_POOL = 0x0001      # RES_STRING_POOL_TYPE
+CHUNK_START_ELEMENT = 0x0102    # RES_XML_START_ELEMENT_TYPE
 
 TYPE_STRING = 0x03
 TYPE_INT_DEC = 0x10
@@ -91,6 +91,7 @@ def parse_manifest(data):
 def main():
     apk = sys.argv[1]
     min_want = target_want = None
+    dump = False
     args = sys.argv[2:]
     while args:
         a = args.pop(0)
@@ -98,6 +99,8 @@ def main():
             min_want = int(args.pop(0))
         elif a == "--target-sdk":
             target_want = int(args.pop(0))
+        elif a == "--dump":
+            dump = True
 
     with zipfile.ZipFile(apk) as z:
         data = z.read("AndroidManifest.xml")
@@ -109,10 +112,15 @@ def main():
         return 2
 
     uses_sdk = None
+    seen = []
     for elem, attrs in elements:
+        seen.append(f"{elem}{{{', '.join(f'{k}={v}' for k, v in list(attrs.items())[:6])}}}")
         if elem == "uses-sdk":
             uses_sdk = attrs
-            break
+    if dump:
+        for line in seen:
+            print(line)
+        print(f"({len(elements)} elements)")
 
     if uses_sdk is None:
         print("FATAL: manifest has no uses-sdk element", file=sys.stderr)
