@@ -171,17 +171,21 @@ def scoped_customer_id(u):
 def tenant_scope(u, c):
     """The customer ids a tenant-scoped staff member may access, or None.
 
-    * Tenant admin: ONLY their own organisation (their primary customer).
-    * Tenant technician: their single customer.
-    * Master admin / provider technician (no customer): None = unscoped (all)."""
+    * Master admin / provider technician (no customer): None = unscoped (all).
+    * Tenant admin / tenant technician: [their own organisation].
+    * An admin account that has not created its own organisation yet: [] — no
+      access at all until they create one."""
     if not u:
         return None
-    if u.get("role") == "admin":
-        if not u.get("customer_id"):
+    role = u.get("role")
+    if role == "admin":
+        if is_master_admin(u):
             return None
-        return [u["customer_id"]]
-    if u.get("role") == "technician":
-        return [u["customer_id"]] if u.get("customer_id") else None
+        cid = u.get("customer_id")
+        return [cid] if cid else []
+    if role == "technician":
+        cid = u.get("customer_id")
+        return [cid] if cid else None
     return None
 
 
@@ -210,8 +214,11 @@ def customer_scope_filter(c, u, col="customer_id"):
     if is_master_admin(u):
         return "", []
     scope = tenant_scope(u, c)
-    if not scope:
+    if scope is None:
         return "", []
+    if not scope:
+        # an admin without an organisation yet sees nothing
+        return "1=0", []
     return in_scope(col, scope)
 
 
@@ -242,7 +249,7 @@ def tenant_guard(u, customer_id, c=None):
         c = conn()
     try:
         scope = tenant_scope(u, c)
-        if scope and customer_id not in scope:
+        if scope is not None and customer_id not in scope:
             return jsonify({"error": "Not authorised — this record belongs to another organisation"}), 403
         return None, None
     finally:
@@ -260,8 +267,10 @@ def assignee_allowed(u, assignee_id, c):
     if not assignee_id:
         return True
     scope = tenant_scope(u, c)
-    if not scope:
+    if scope is None:
         return True
+    if not scope:
+        return False          # no organisation yet — nobody to assign to
     row = c.execute("SELECT role, customer_id FROM users WHERE id=?", (assignee_id,)).fetchone()
     if not row or row["role"] not in ("technician", "admin"):
         return False
@@ -814,13 +823,19 @@ def list_customers():
 
 @app.post("/api/customers")
 def create_customer():
-    """Create a customer organisation — the master administrator only.
+    """Create a customer organisation.
 
-    A tenant admin manages exactly one organisation (their own) and cannot
-    create further ones."""
-    u, err, code = require_master()
+    * The master administrator may create any organisation.
+    * A tenant admin creates THEIR OWN organisation (once): the new
+      organisation becomes theirs — their account is linked to it straight
+      away, so they can add equipment, team members and tickets in it.
+      A tenant admin who already has an organisation cannot create another."""
+    u, err, code = require_role("admin")
     if err:
         return err, code
+    if not is_master_admin(u) and u.get("customer_id"):
+        return jsonify({
+            "error": "You already have your own organisation — a tenant admin manages one organisation"}), 403
     b = get_body()
     if not (b.get("name") or "").strip():
         return jsonify({"error": "Customer name is required"}), 400
@@ -831,6 +846,9 @@ def create_customer():
          b.get("address", ""), b.get("city", ""), now()),
     )
     new_id = cur.lastrowid
+    if not is_master_admin(u):
+        # the admin who created it becomes its tenant admin
+        c.execute("UPDATE users SET customer_id=? WHERE id=?", (new_id, u["id"]))
     c.commit()
     row = c.execute("SELECT * FROM customers WHERE id=?", (new_id,)).fetchone()
     c.close()
@@ -1138,6 +1156,9 @@ def list_categories():
         return err, code
     c = conn()
     scope = tenant_scope(u, c)
+    if scope is not None and not scope:
+        c.close()
+        return jsonify([])
     if scope:
         # tenant staff see only the categories used by their own organisation's equipment
         marks = ", ".join("?" for _ in scope)
@@ -1482,7 +1503,7 @@ def create_complaint():
             c.close()
             return err_t, code_t
         scope = tenant_scope(u, c)
-        if scope:
+        if scope is not None:
             if customer_id not in scope:
                 c.close()
                 return jsonify({"error": "You can only raise complaints for your own organisation"}), 403
@@ -1726,7 +1747,7 @@ def update_complaint(cid):
     # tenant staff cannot move a ticket outside their own organisation, use
     # another customer's equipment, or assign it to anyone outside their team
     scope = tenant_scope(u, c)
-    if scope:
+    if scope is not None:
         if "customer_id" in b and b["customer_id"] not in scope:
             c.close()
             return jsonify({"error": "You cannot move this complaint to another organisation"}), 403
@@ -1946,7 +1967,7 @@ def create_breakdown():
             c.close()
             return err_t, code_t
         scope = tenant_scope(u, c)
-        if scope:
+        if scope is not None:
             if customer_id not in scope:
                 c.close()
                 return jsonify({"error": "You can only raise breakdowns for your own organisation"}), 403
@@ -2024,7 +2045,7 @@ def update_breakdown(bid):
         c.close()
         return jsonify({"error": "Not authorised"}), 403
     scope = tenant_scope(u, c)
-    if scope:
+    if scope is not None:
         if "customer_id" in b and b["customer_id"] not in scope:
             c.close()
             return jsonify({"error": "You cannot move this breakdown to another organisation"}), 403
@@ -2230,12 +2251,18 @@ def list_users():
     scope = tenant_scope(u, c) if tenant_filter else None
     for r in rows:
         if tenant_filter:
-            # tenant admins only see their own organisation's users, plus the
-            # provider's unbound technicians they may assign work to (never other admins).
-            if r["role"] == "admin":
-                continue
-            if r["customer_id"] is not None and r["customer_id"] not in scope:
-                continue
+            if scope is not None and not scope:
+                # no organisation yet — the admin only sees their own account
+                if r["id"] != u["id"]:
+                    continue
+            else:
+                # tenant admins only see their own organisation's users, plus the
+                # provider's unbound technicians they may assign work to (never
+                # other admins).
+                if r["role"] == "admin":
+                    continue
+                if r["customer_id"] is not None and r["customer_id"] not in scope:
+                    continue
         d = public_user(r)
         d["customer_name"] = None
         d["location_name"] = None
@@ -2262,6 +2289,9 @@ def list_technicians():
     q = "SELECT id,name,email,role FROM users WHERE role IN ('technician','admin') AND active=1"
     params = []
     scope = tenant_scope(u, c)
+    if scope is not None and not scope:
+        c.close()
+        return jsonify([])
     if scope:
         marks = ", ".join("?" for _ in scope)
         q += f" AND (customer_id IN ({marks}) OR (customer_id IS NULL AND role='technician'))"
@@ -2309,6 +2339,9 @@ def list_tenant_admins():
         scope = tenant_scope(u, c)
         if u["role"] == "customer":
             scope = [u.get("customer_id")] if u.get("customer_id") else []
+        if scope is not None and not scope:
+            c.close()
+            return jsonify([])
         if scope:
             marks = ", ".join("?" for _ in scope)
             q = ("SELECT id, name, email, role, customer_id FROM users "
@@ -2334,13 +2367,14 @@ def create_user():
     if role not in ("admin", "technician", "customer"):
         return jsonify({"error": "Invalid role"}), 400
 
-    is_tenant = is_tenant_admin(u)
     scope = None
     c = None
-    if is_tenant:
+    if not is_master_admin(u):
+        # every non-master admin is organisation-scoped; [] = they have not
+        # created their own organisation yet
         c = conn()
         scope = tenant_scope(u, c)
-        if role == "admin":
+        if u.get("role") == "admin" and role == "admin":
             c.close()
             return jsonify({"error": "Only the master administrator can create admin accounts"}), 403
 
@@ -2360,12 +2394,11 @@ def create_user():
             customer_id = (u.get("customer_id") if u.get("role") == "technician" else
                            (b.get("customer_id") or None))
         location_id = department_id = None
-    else:  # admin — only the master may create one, and it MUST be a tenant admin
+    else:  # admin — only the master may create one; the organisation is optional
+        # (an admin created without one signs in and creates their own
+        # organisation, which then becomes theirs)
         customer_id = b.get("customer_id") or None
         location_id = department_id = None
-        if not customer_id:
-            if c: c.close()
-            return jsonify({"error": "A tenant admin must be linked to an organisation"}), 400
 
     if scope is not None and customer_id not in scope:
         if c: c.close()
@@ -2463,13 +2496,9 @@ def update_user(uid):
             new_customer_id = u.get("customer_id") if u.get("role") == "technician" else None
         elif b["role"] == "admin":
             new_customer_id = None
-    # Every admin except the Master must be a tenant admin (linked to a customer).
-    # Prevent editing anyone into a second, unbound admin.
-    if (b.get("role") == "admin" or (not b.get("role") and existing["role"] == "admin" and "customer_id" in b)) \
-            and (existing["email"] or "").strip().lower() != MASTER_ADMIN_EMAIL:
-        if not new_customer_id:
-            c.close()
-            return jsonify({"error": "An admin must be linked to an organisation (only the Master System Admin is customer-less)"}), 400
+    # An admin account may be organisation-less: it has no access at all until
+    # it creates its own organisation (the Master remains the only unscoped
+    # account).
     if new_customer_id:
         new_loc = b.get("location_id", existing["location_id"])
         new_dept = b.get("department_id", existing["department_id"])
@@ -2590,6 +2619,19 @@ def dashboard():
             cust_scopes.append(("department_id", u["department_id"]))
     else:
         scope = tenant_scope(u, c)
+        if scope is not None and not scope:
+            # an admin without an organisation yet has an empty dashboard
+            c.close()
+            return jsonify({
+                "counts": {"open_complaints": 0, "resolved_complaints": 0,
+                           "critical_complaints": 0, "open_breakdowns": 0,
+                           "resolved_breakdowns": 0, "total_equipment": 0,
+                           "total_customers": 0, "pm_due": 0, "pm_total": 0},
+                "complaints_by_status": [], "breakdowns_by_status": [],
+                "complaints_by_priority": [], "monthly_complaints": [],
+                "monthly_breakdowns": [], "top_equipment": [],
+                "recent_complaints": [], "recent_breakdowns": [],
+            })
         if scope:
             cust_scopes.append(("customer_id", scope))
     total_cust = 1 if (u["role"] == "customer") else (
@@ -3100,6 +3142,9 @@ def export_csv():
     c = conn()
     out = ""
     scope = tenant_scope(u, c)
+    if scope is not None and not scope:
+        c.close()
+        return jsonify({"error": "Your account has no organisation yet"}), 403
     where_sql, where_params = "", []
     if scope:
         marks = ", ".join("?" for _ in scope)
@@ -3183,6 +3228,9 @@ def trend_report_pdf():
         cust_scope = [u["customer_id"]] if u.get("customer_id") else None
     else:
         cust_scope = tenant_scope(u, c)
+    if cust_scope is not None and not cust_scope:
+        c.close()
+        return jsonify({"error": "Your account has no organisation yet"}), 403
 
     def scope(sql, params=None, col="customer_id"):
         params = list(params or [])
@@ -3277,6 +3325,9 @@ def list_pms():
             params.append(u["customer_id"])
     else:
         scope = tenant_scope(u, c)
+        if scope is not None and not scope:
+            c.close()
+            return jsonify([])
         if scope:
             marks = ", ".join("?" for _ in scope)
             where.append(f"p.customer_id IN ({marks})")
@@ -3500,6 +3551,9 @@ def list_portal_links():
     c = conn()
     where, params = "", []
     scope = tenant_scope(u, c)
+    if scope is not None and not scope:
+        c.close()
+        return jsonify([])
     if scope:
         marks = ", ".join("?" for _ in scope)
         where = f" WHERE pl.customer_id IN ({marks})"

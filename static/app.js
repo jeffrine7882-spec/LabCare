@@ -332,6 +332,9 @@ const isAdmin = () => state.user && state.user.role === "admin";
 const isTech = () => state.user && (state.user.role === "technician" || state.user.role === "admin");
 const isCust = () => state.user && state.user.role === "customer";
 const isMaster = () => state.user && state.user.role === "admin" && !state.user.customer_id && (state.user.email || "").toLowerCase() === "admin@labcare.com";
+// an admin who may create an organisation: the master, or a tenant admin who
+// does not have one yet (their new organisation becomes their own)
+const canCreateOrg = () => isMaster() || (isAdmin() && !state.user.customer_id);
 // staff who are not bound to a customer (master admin or a provider technician)
 const isUnboundStaff = () => state.user && (state.user.role === "admin" || state.user.role === "technician") && !state.user.customer_id;
 // cache of tenant admins per customer for the "Responsible tenant admin" picker
@@ -1239,7 +1242,7 @@ async function viewOrg(v, tab) {
     ? [["customers", "🏢 Customers"], ["locations", "📍 Locations"], ["departments", "🏥 Departments"]]
     : [["customers", "🏢 My organisation"]];
   const addBtn = t === "customers"
-    ? (isMaster() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
+    ? (canCreateOrg() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
     : t === "locations"
       ? (isTech() ? `<button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location</button>` : "")
       : (isTech() ? `<button class="btn btn-primary" onclick="openDepartmentEditor(false)">＋ Add department</button>` : "");
@@ -1292,7 +1295,16 @@ async function refreshCustomers() {
         </div>`).join("")}</div>`
       : (isMaster()
           ? emptyState("🏢", "No customers yet", "Add your first customer to start tracking.", "Add customer")
-          : `<div class="empty"><h3>No organisation</h3><p>Your account is not linked to an organisation yet.</p></div>`);
+          : (isAdmin() && !state.user.customer_id
+              ? `<div class="empty">
+                   <div class="e-ico">🏢</div>
+                   <h3>You don't have an organisation yet</h3>
+                   <p>Create your organisation to start adding equipment, team members and tickets.</p>
+                   <div class="action-panel" style="justify-content:center;margin-top:12px">
+                     <button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Create my organisation</button>
+                   </div>
+                 </div>`
+              : `<div class="empty"><h3>No organisation</h3><p>Your account is not linked to an organisation yet.</p></div>`));
   } catch (e) {
     box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
   }
@@ -2208,7 +2220,20 @@ async function saveCustomer(id) {
   showLoading();
   try {
     if (id) await API.put("/api/customers/" + id, body);
-    else await API.post("/api/customers", body);
+    else {
+      await API.post("/api/customers", body);
+      // a tenant admin creating an organisation becomes its admin — the new
+      // scope has to be picked up before anything else is rendered
+      if (isAdmin() && !isMaster() && !state.user.customer_id) {
+        state.user = await API.get("/api/me");
+        state.customers = null;
+        toast("Organisation created — you are now its tenant admin", "success");
+        hideLoading();
+        state.orgTab = "customers";
+        navigate("org");
+        return;
+      }
+    }
     toast(id ? "Customer updated" : "Customer added", "success");
     state.customers = null;
     if (state.view === "customerDetail" && id) await viewCustomerDetail($("#view"));
@@ -2289,7 +2314,7 @@ function toggleCustomerSelect() {
     $("#uCustomerFields").style.display = (isCustRole || isTenantAdminRole) ? "" : "none";
     const lbl = $("#uCustomerLabel");
     if (lbl) lbl.textContent = isTenantAdminRole
-      ? "Linked customer (required)"
+      ? "Linked organisation (optional — the admin can create their own)"
       : "Linked customer (optional — leave empty for LabCare-wide)";
   } else {
     // tenant staff can only create for their own organisation
@@ -2333,10 +2358,8 @@ async function saveUser(id) {
     if (!body.customer_id) { toast("Linked customer is required for customer accounts", "error"); return; }
     if (isMaster() && $("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else if (isMaster()) {
-    // a tenant admin REQUIRES a customer; techs/customers may be global or bound
-    if (body.role === "admin" && !$("#uCustomer").value) {
-      toast("A tenant admin must be linked to an organisation", "error"); return;
-    }
+    // an admin may be created without an organisation — they create their own
+    // after signing in; techs/customers may be global or bound
     body.customer_id = $("#uCustomer").value || null;
     body.location_id = null;
     body.department_id = null;

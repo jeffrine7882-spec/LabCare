@@ -277,6 +277,66 @@ check("tenant admin can query own org's admins",
 check("tenant admin cannot delete another org's location",
       j("DELETE", f"/api/locations/{olid}", None, tok2).status_code == 403)
 
+# 16. a tenant admin created WITHOUT an organisation creates their own
+r = j("POST", "/api/users", {"name": "New Tenant Admin", "email": "newadmin@smoke.test",
+                             "password": "Demo123!", "role": "admin"}, tok)
+check("master creates a tenant admin with no organisation", r.status_code == 201, r.get_json())
+r = j("POST", "/api/login", {"email": "newadmin@smoke.test", "password": "Demo123!"})
+ntok = r.get_json().get("token") if r.status_code == 200 else None
+nme = r.get_json().get("user") if r.status_code == 200 else {}
+check("org-less admin can sign in", bool(ntok))
+check("org-less admin really has no organisation", not nme.get("customer_id"), nme.get("customer_id"))
+
+check("org-less admin sees no customers", j("GET", "/api/customers", None, ntok).get_json() == [])
+check("org-less admin sees no complaints", j("GET", "/api/complaints", None, ntok).get_json() == [])
+check("org-less admin sees no breakdowns", j("GET", "/api/breakdowns", None, ntok).get_json() == [])
+check("org-less admin sees no equipment", j("GET", "/api/equipment", None, ntok).get_json() == [])
+check("org-less admin sees no locations", j("GET", "/api/locations", None, ntok).get_json() == [])
+check("org-less admin sees no technicians", j("GET", "/api/technicians", None, ntok).get_json() == [])
+check("org-less admin sees no tenant admins", j("GET", "/api/tenant-admins", None, ntok).get_json() == [])
+check("org-less admin sees no portal links", j("GET", "/api/portal-links", None, ntok).get_json() == [])
+check("org-less admin sees no PM schedules", j("GET", "/api/pms", None, ntok).get_json() == [])
+check("org-less admin sees no categories", j("GET", "/api/categories", None, ntok).get_json() == [])
+check("org-less admin's team list is only their own account",
+      len(j("GET", "/api/users", None, ntok).get_json()) == 1)
+_dash = j("GET", "/api/dashboard", None, ntok).get_json()
+check("org-less admin's dashboard is empty",
+      _dash["counts"]["total_customers"] == 0 and _dash["counts"]["total_equipment"] == 0
+      and _dash["counts"]["open_complaints"] == 0, _dash.get("counts"))
+check("org-less admin cannot read another org's ticket",
+      j("GET", f"/api/complaints/{ocpid}", None, ntok).status_code == 403)
+check("org-less admin cannot add equipment to another org",
+      j("POST", "/api/equipment", {"customer_id": cid, "name": "Nope"}, ntok).status_code == 403)
+check("org-less admin cannot create a user for another org",
+      j("POST", "/api/users", {"name": "x", "email": "x@smoke.test", "password": "Demo123!",
+                               "role": "technician", "customer_id": cid}, ntok).status_code == 403)
+check("org-less admin cannot export another org's data",
+      j("GET", "/api/export.csv?type=complaints", None, ntok).status_code == 403)
+
+r = j("POST", "/api/customers", {"name": "New Admin Labs"}, ntok)
+ncid = r.get_json().get("id") if r.status_code == 201 else None
+check("org-less admin creates their own organisation", r.status_code == 201, ncid)
+check("the organisation they created is now theirs",
+      j("GET", "/api/me", None, ntok).get_json().get("customer_id") == ncid)
+check("they cannot create a second organisation",
+      j("POST", "/api/customers", {"name": "Second one"}, ntok).status_code == 403)
+check("they can add equipment to their own organisation",
+      j("POST", "/api/equipment", {"customer_id": ncid, "name": "Own pump"}, ntok).status_code == 201)
+check("they can file a ticket in their own organisation",
+      j("POST", "/api/complaints", {"customer_id": ncid, "subject": "Own issue"}, ntok).status_code == 201)
+check("they can add a technician to their own organisation",
+      j("POST", "/api/users", {"name": "Own Tech", "email": "owntech@smoke.test",
+                               "password": "Demo123!", "role": "technician",
+                               "customer_id": ncid}, ntok).status_code == 201)
+check("they see only their own organisation",
+      [x["id"] for x in j("GET", "/api/customers", None, ntok).get_json()] == [ncid])
+check("they still cannot read another org's ticket",
+      j("GET", f"/api/complaints/{ocpid}", None, ntok).status_code == 403)
+check("master can still create an admin linked to an organisation",
+      j("POST", "/api/users", {"name": "Linked Admin", "email": "linked@smoke.test",
+                               "password": "Demo123!", "role": "admin",
+                               "customer_id": ncid}, tok).status_code == 201)
+
 print("\n%d passed, %d failed" % (len(PASS), len(FAIL)))
 if FAIL:
     print("FAILED:", FAIL)

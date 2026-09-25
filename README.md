@@ -111,9 +111,14 @@ Password for the account below is **`Demo123!`**.
 | Master System Admin | admin@labcare.com |
 
 The InsForge database starts **fresh**: only the Master System Admin exists.
-Create customer organisations, then their tenant admins, technicians, users,
-locations, departments, equipment and tickets in-app under **Admin → Customer
-organisations** and **Admin → Team & users**.
+The usual flow is:
+
+1. the Master creates a **tenant admin** account under **Admin → Team & users**
+   (no organisation link needed);
+2. that tenant admin signs in and **creates their own organisation** under
+   **Organizations → Customers** — it becomes theirs automatically;
+3. they then add their locations, departments, equipment, team members and
+   tickets inside it.
 
 ## Key behaviour
 
@@ -122,16 +127,21 @@ organisations** and **Admin → Team & users**.
   - **Master System Admin** — a single, identity-bound account
     (`admin@labcare.com`) that sees and manages everything: customers,
     categories, onboarding/join requests and all users. Only this account can
-    create or edit admin accounts, and only it can create new customer
-    organisations. It can never be disabled, demoted or linked to a customer.
-    Every other admin is a tenant admin.
+    create or edit admin accounts and delete organisations; it may also create
+    organisations directly and link a tenant admin to one. It can never be
+    disabled, demoted or linked to a customer.
   - **Tenant admin** (`admin` linked to one `customer_id`) manages only their
-    own customer — its complaints, breakdowns, equipment, locations,
-    departments, PM schedules and team members. Their scope is exactly that one
-    organisation: they **cannot** create further customer organisations, cannot
-    create or edit any admin account, cannot see or edit other organisations'
-    data, and can only assign work to their own team or LabCare's provider
-    technicians.
+    own organisation — its complaints, breakdowns, equipment, locations,
+    departments, PM schedules, portal links and team members. Their scope is
+    exactly that one organisation: they **cannot** create a second
+    organisation, cannot create or edit any admin account, cannot see or edit
+    other organisations' data, and can only assign work to their own team or
+    LabCare's provider technicians.
+  - **Tenant admin without an organisation** — an admin account the master
+    created without linking it. It has **no access to any data at all** until
+    it creates its own organisation (Dashboard is empty, every list is empty,
+    writes are refused). Creating an organisation links the account to it and
+    makes it that organisation's tenant admin.
   - **Technician**: provider technicians (`customer_id NULL`) work across all
     customers; tenant technicians (`customer_id` set) are restricted to their
     customer.

@@ -3,8 +3,8 @@
 Wipes every table, then creates exactly:
 
   * 1 Master System Admin            admin@labcare.com
-  * 1 customer organisation          BioReference Labs
   * 1 tenant admin                   admin.bioref@labcare.com
+  * 1 customer organisation          BioReference Labs  (created BY that admin)
   * 1 technician                     tech.bioref@labcare.com
   * 1 customer user                  user.bioref@labcare.com
   * 1 piece of equipment             Centrifuge — Eppendorf 5810R (BRF-CEN-001)
@@ -148,31 +148,40 @@ def seed():
     cl = app.test_client()
     master_tok, _ = login(cl, MASTER_EMAIL)
 
-    org = create(cl, master_tok, "/api/customers", {"name": ORG_NAME, **ORG_CONTACT},
-                 f"customer organisation '{ORG_NAME}'")
-    cid = org["id"]
-
+    # The master creates the tenant admin WITHOUT an organisation: the admin
+    # creates their own organisation, which then becomes theirs.
     create(cl, master_tok, "/api/users", {
         "name": TENANT_ADMIN["name"], "email": TENANT_ADMIN["email"],
-        "password": PASSWORD, "role": "admin", "customer_id": cid,
-    }, f"tenant admin {TENANT_ADMIN['email']}")
+        "password": PASSWORD, "role": "admin",
+    }, f"tenant admin {TENANT_ADMIN['email']} (no organisation yet)")
 
-    create(cl, master_tok, "/api/users", {
+    tenant_tok, tenant_me = login(cl, TENANT_ADMIN["email"])
+    if tenant_me.get("customer_id"):
+        raise SystemExit("expected the new tenant admin to have no organisation yet")
+
+    org = create(cl, tenant_tok, "/api/customers", {"name": ORG_NAME, **ORG_CONTACT},
+                 f"organisation '{ORG_NAME}' (created by the tenant admin)")
+    cid = org["id"]
+    _, tenant_me = login(cl, TENANT_ADMIN["email"])
+    if tenant_me.get("customer_id") != cid:
+        raise SystemExit("the tenant admin was not linked to the organisation they created")
+
+    # ...and staffs it: a technician and a customer user for their own organisation.
+    create(cl, tenant_tok, "/api/users", {
         "name": TECHNICIAN["name"], "email": TECHNICIAN["email"],
         "password": PASSWORD, "role": "technician", "customer_id": cid,
     }, f"technician {TECHNICIAN['email']}")
 
-    create(cl, master_tok, "/api/users", {
+    create(cl, tenant_tok, "/api/users", {
         "name": CUSTOMER_USER["name"], "email": CUSTOMER_USER["email"],
         "password": PASSWORD, "role": "customer", "customer_id": cid,
     }, f"customer user {CUSTOMER_USER['email']}")
 
-    equipment = create(cl, master_tok, "/api/equipment",
+    equipment = create(cl, tenant_tok, "/api/equipment",
                        {"customer_id": cid, **EQUIPMENT}, f"equipment {EQUIPMENT['serial_number']}")
     eid = equipment["id"]
 
     # The tenant admin files the tickets — the same path a real tenant admin uses.
-    tenant_tok, _ = login(cl, TENANT_ADMIN["email"])
     complaint = create(cl, tenant_tok, "/api/complaints",
                        {"customer_id": cid, "equipment_id": eid, **COMPLAINT}, "complaint ticket")
     breakdown = create(cl, tenant_tok, "/api/breakdowns",
