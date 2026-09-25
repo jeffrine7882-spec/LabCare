@@ -55,6 +55,22 @@ jobs:
       - name: Seed sentinels (cleanup must run even on failure)
         run: echo "CID=0" >> "$GITHUB_ENV"
 
+      - name: Pre-clean any residue from a previous abort
+        env:
+          DSN: ${{ steps.dsn.outputs.dsn }}
+        run: |
+          set -euo pipefail
+          psql "$DSN" -v ON_ERROR_STOP=1 <<SQL
+          DELETE FROM sessions      WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@rolesprobe.example');
+          DELETE FROM comments      WHERE entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe');
+          DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe');
+          DELETE FROM audit_logs    WHERE (entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe'))
+                                     OR (entity_type='customer'  AND entity_id IN (SELECT id FROM customers WHERE name='Roles Probe Clinic'));
+          DELETE FROM breakdowns    WHERE subject='roles probe';
+          DELETE FROM users         WHERE email LIKE '%@rolesprobe.example';
+          DELETE FROM customers     WHERE name='Roles Probe Clinic';
+          SQL
+
       - name: Probe roles over HTTPS
         env:
           PROD: https://labcare-api-ee5bd3a7-8f78-4005-87ea-6c57ff5728aa.fly.dev
