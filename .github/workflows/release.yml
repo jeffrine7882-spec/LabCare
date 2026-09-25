@@ -234,3 +234,55 @@ jobs:
           gh release create "$ver" "$apk" --target "$(git rev-parse HEAD)" \
             --title "LabCare Alerts ${ver} (Android APK)" --notes "$notes"
           echo "::notice::GitHub Release ${ver} published with $(basename "$apk") at $(git rev-parse --short HEAD)"
+
+  # One-shot: attach the already-built updated v1.3 APK (the sandbox cannot
+  # reach uploads.github.com). Triggered only by a [publish-apk] commit.
+  publish-existing-apk:
+    if: contains(github.event.head_commit.message, '[publish-apk]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm this is the updated site-loading APK
+        run: |
+          set -euo pipefail
+          python3 - << 'PY'
+          import hashlib, pathlib, zipfile
+          p = pathlib.Path("Release/android/LabCare-Alerts-v1.3.apk")
+          data = p.read_bytes()
+          digest = hashlib.sha256(data).hexdigest()
+          print("sha256", digest)
+          expected = "8907a67ad8959eb54c594a995022f2d76ab20176ff9de551dd7ba0c846172c26"
+          if digest != expected:
+              raise SystemExit("refusing to publish an unexpected APK: " + digest)
+          dex = zipfile.ZipFile(p).read("classes.dex")
+          if b"Open the site in my browser" not in dex:
+              raise SystemExit("APK is missing the site-loading fix")
+          print("updated v1.3 APK confirmed")
+          PY
+
+      - name: Publish GitHub Release v1.3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          apk="Release/android/LabCare-Alerts-v1.3.apk"
+          test -s "$apk"
+          ver="v1.3"
+          notes="LabCare Alerts ${ver} — updated Android APK (self-signed, not on the Play Store).
+
+          - This publish is the updated v1.3: the Site tab opens the LabCare site immediately. The first v1.3 build waited on a cookie callback and could leave you on the sound screen. If the page cannot load, use \"Open the site in my browser\" or Retry.
+          - Requires Android 8.0+ (API 26); installs on Android 14/15/16 (targetSdk 34).
+          - Download \`${apk##*/}\` below (same file as \`Release/android/\` on this tag). Copy it to your phone, tap it, and allow \"install unknown apps\".
+          - Uninstall any earlier LabCare Alerts install first — each CI build uses a fresh signing key.
+          - Sign in with your LabCare account and keep \"Phone alerts\" on so the phone rings and vibrates for every bell alert.
+
+          Installer guide: [Release/README.md](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${ver}/Release/README.md)"
+          if gh release view "$ver" >/dev/null 2>&1; then
+            gh release delete "$ver" --yes --cleanup-tag
+          fi
+          git push origin ":refs/tags/${ver}" || true
+          gh release create "$ver" "$apk" --target "$(git rev-parse HEAD)" \
+            --title "LabCare Alerts ${ver} (Android APK)" --notes "$notes"
+          echo "::notice::Published ${ver} $(basename "$apk") at $(git rev-parse --short HEAD)"
