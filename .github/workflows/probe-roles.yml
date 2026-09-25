@@ -60,7 +60,9 @@ jobs:
           DSN: ${{ steps.dsn.outputs.dsn }}
         run: |
           set -euo pipefail
-          psql "$DSN" -v ON_ERROR_STOP=1 <<SQL
+          trap 'rc=$?; if [ $rc -ne 0 ]; then err=$(cat /tmp/preclean.err 2>/dev/null | tail -5 | sed "s/%/%25/g; s/\r/%0D/g; s/\n/%0A/g"); echo "::error title=preclean failed (rc $rc)::$err"; fi' ERR
+          : > /tmp/preclean.err
+          psql "$DSN" -v ON_ERROR_STOP=1 2>>/tmp/preclean.err <<SQL
           DELETE FROM sessions      WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@rolesprobe.example');
           DELETE FROM comments      WHERE entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe');
           DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id IN (SELECT id FROM breakdowns WHERE subject='roles probe');
@@ -136,24 +138,26 @@ jobs:
           DSN: ${{ steps.dsn.outputs.dsn }}
         run: |
           set -euo pipefail
-          chk="$(psql "$DSN" -tAc "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='users_role_check'")"
+          echo "cleanup: CID=$CID BID=${BID:-<unset>}"
+          trap 'rc=$?; if [ $rc -ne 0 ]; then err=$(cat /tmp/psql.err 2>/dev/null | tail -5 | sed "s/%/%25/g; s/\r/%0D/g; s/\n/%0A/g"); echo "::error title=cleanup failed (rc $rc, CID=$CID BID=${BID:-unset})::$err"; fi' ERR
+          : > /tmp/psql.err
+          chk="$(psql "$DSN" -tAc "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='users_role_check'" 2>>/tmp/psql.err)"
           echo "::notice title=users role CHECK::$chk"
           echo "$chk" | grep -q "'engineer'" && echo "$chk" | grep -q "'application'" \
             || { echo "::error::users CHECK was not widened: $chk"; exit 1; }
           echo "::notice::Postgres role CHECK migrated"
-          psql "$DSN" -v ON_ERROR_STOP=1 <<SQL
-          -- sessions first: sessions.user_id FKs users, so users must go last
-          DELETE FROM sessions      WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@rolesprobe.example');
-          DELETE FROM comments      WHERE entity_type='breakdown' AND entity_id=$BID;
-          DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id=$BID;
-          DELETE FROM audit_logs    WHERE (entity_type='breakdown' AND entity_id=$BID)
-                                     OR (entity_type='user'      AND detail LIKE '%rolesprobe%')
-                                     OR (entity_type='customer'  AND entity_id=$CID);
-          DELETE FROM breakdowns    WHERE id=$BID;
-          DELETE FROM users         WHERE email LIKE '%@rolesprobe.example';
-          DELETE FROM customers     WHERE id=$CID;
-          DELETE FROM sessions      WHERE user_id=1;
-          SQL
+          run_sql() { psql "$DSN" -v ON_ERROR_STOP=1 -c "$1" 2>>/tmp/psql.err; }
+          run_sql "DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@rolesprobe.example')"
+          if [ -n "${BID:-}" ] && [ "$BID" != "0" ]; then
+            run_sql "DELETE FROM comments      WHERE entity_type='breakdown' AND entity_id=$BID"
+            run_sql "DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id=$BID"
+            run_sql "DELETE FROM audit_logs    WHERE entity_type='breakdown' AND entity_id=$BID"
+            run_sql "DELETE FROM breakdowns    WHERE id=$BID"
+          fi
+          run_sql "DELETE FROM audit_logs WHERE entity_type='customer' AND entity_id IN (SELECT id FROM customers WHERE name='Roles Probe Clinic')"
+          run_sql "DELETE FROM users     WHERE email LIKE '%@rolesprobe.example'"
+          run_sql "DELETE FROM customers WHERE name='Roles Probe Clinic'"
+          run_sql "DELETE FROM sessions  WHERE user_id=(SELECT id FROM users WHERE lower(email)='admin@labcare.com')"
           echo "::notice::probe rows removed"
 
       - name: Verify — production back to master-only
