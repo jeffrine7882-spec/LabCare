@@ -72,20 +72,9 @@ jobs:
       - name: Assert device-compat (targetSdk must be 24+ for Android 14+)
         run: |
           set -euo pipefail
-          aapt="$ANDROID_SDK/build-tools/android-13/aapt"
-          "$aapt" dump badging apps/android/dist/LabCare-Alerts-v1.2.apk | head -5
-          tree="$("$aapt" dump xmltree apps/android/dist/LabCare-Alerts-v1.2.apk AndroidManifest.xml)"
-          head_uses="$(echo "$tree" | grep -A6 'E: uses-sdk')"
-          echo "::notice::$(echo "$head_uses" | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
-          # aapt prints either "0x22" or plain "26" after the type marker; take
-          # the trailing number after the last ')' and normalise to decimal
-          grab() { echo "$tree" | grep "$1(" | head -1 | sed "s/.*)[[:space:]]*//; s/[^0-9].*//"; }
-          target_dec="$(grab targetSdkVersion)"
-          min_dec="$(grab minSdkVersion)"
-          [ -n "$target_dec" ] && [ -n "$min_dec" ]
-          echo "::notice::uses-sdk: minSdkVersion=$min_dec targetSdkVersion=$target_dec"
-          [ "$target_dec" -ge 34 ] || { echo "::error::targetSdkVersion=$target_dec (<34)"; exit 1; }
-          echo "::notice::APK targets SDK $target_dec (min $min_dec) — installable on Android 14/15/16"
+          python3 scripts/verify_apk_sdk.py apps/android/dist/LabCare-Alerts-v1.2.apk \
+            --min-sdk 26 --target-sdk 34
+          echo "::notice::APK uses-sdk verified (min 26 / target 34) — installable on Android 14/15/16"
 
       - uses: actions/upload-artifact@v4
         with:
