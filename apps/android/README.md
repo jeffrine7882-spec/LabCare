@@ -1,7 +1,11 @@
 # LabCare Alerts — Android APK
 
 ## Install
-1. Copy **`LabCare-Alerts-v1.0.apk`** (in `dist/`) to your Android phone —
+Requirements: **Android 8.0+**, installable on the latest Android 14/15/16
+(targets SDK 34). Self-signed, not on the Play Store.
+
+
+1. Copy **`LabCare-Alerts-v1.2.apk`** (in `dist/`) to your Android phone —
    e.g. over USB, cloud drive, or direct download.
 2. Tap it in Files. Android will ask you to allow "install unknown apps"
    for that app — allow it. (The APK is self-signed, not from the Play Store.)
@@ -29,7 +33,7 @@ The APK **also** needs the LabCare server to stay reachable (it's HTTPS, always-
 ## Build (optional)
 Requires JDK 11 and `~/android-sdk` with build-tools 33.0.2 + platform 33:
 ```
-./build.sh        # → dist/LabCare-Alerts-v1.0.apk (signed)
+./build.sh        # → dist/LabCare-Alerts-v1.2.apk (signed)
 ```
 
 In-app emergency access: the app has no "demo" account built in; use any

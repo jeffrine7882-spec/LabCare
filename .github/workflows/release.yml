@@ -66,13 +66,21 @@ jobs:
           set -euo pipefail
           mkdir -p apps/android/assets   # aapt2 -A requires the dir to exist
           bash apps/android/build.sh
-          test -s apps/android/dist/LabCare-Alerts-v1.1.apk
-          echo "::notice::APK built: apps/android/dist/LabCare-Alerts-v1.1.apk ($(du -h apps/android/dist/LabCare-Alerts-v1.1.apk | cut -f1))"
+          test -s apps/android/dist/LabCare-Alerts-v1.2.apk
+          echo "::notice::APK built: apps/android/dist/LabCare-Alerts-v1.2.apk ($(du -h apps/android/dist/LabCare-Alerts-v1.2.apk | cut -f1))"
+
+      - name: Assert device-compat (targetSdk must be 24+ for Android 14+)
+        run: |
+          set -euo pipefail
+          badging="$("$ANDROID_SDK/build-tools/android-13/aapt" dump badging apps/android/dist/LabCare-Alerts-v1.2.apk)"
+          echo "$badging" | grep -E "package|targetSdkVersion"
+          echo "$badging" | grep -q "targetSdkVersion='34'" || { echo "::error::targetSdkVersion is not 34"; exit 1; }
+          echo "::notice::aapt dump badging: targetSdkVersion=34 (installable through Android 16)"
 
       - uses: actions/upload-artifact@v4
         with:
           name: labcare-apk
-          path: apps/android/dist/LabCare-Alerts-v1.1.apk
+          path: apps/android/dist/LabCare-Alerts-v1.2.apk
           if-no-files-found: error
 
   windows-exe:
@@ -127,7 +135,7 @@ jobs:
       - name: Normalize filenames
         run: |
           set -euo pipefail
-          test -s Release/android/LabCare-Alerts-v1.1.apk
+          test -s Release/android/LabCare-Alerts-v1.2.apk
           exe="$(find Release/windows -maxdepth 1 -name '*.exe' -type f | head -1)"
           [ -n "$exe" ] || { echo "::error::no exe artifact downloaded"; exit 1; }
           [ "$exe" = "Release/windows/LabCare-Alerts-Setup-1.1.0.exe" ] || mv "$exe" "Release/windows/LabCare-Alerts-Setup-1.1.0.exe"
@@ -141,7 +149,10 @@ jobs:
           Built by GitHub Actions run [#${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
           from commit $(git rev-parse --short HEAD) on $(date -u +%Y-%m-%d) UTC.
 
-          ## Android — android/LabCare-Alerts-v1.1.apk
+          ## Android — android/LabCare-Alerts-v1.2.apk
+          Requires Android 8.0+ (API 26) and installs on the latest Android
+          14/15/16 devices (targets SDK 34, includes the FGS data-sync
+          permission). Self-signed — not on the Play Store.
           1. Copy the APK to the phone (USB / cloud drive / direct download).
           2. Tap it; allow "install unknown apps" when Android asks. The APK is
              self-signed, not from the Play Store — that is expected.
