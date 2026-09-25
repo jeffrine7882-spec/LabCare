@@ -4060,6 +4060,51 @@ def portal_history(token):
     return jsonify(out[:20])
 
 
+@app.get("/api/portal/<token>/events")
+def portal_events(token):
+    """Staff-activity feed for an open portal page: poll with ?since_id=<n>
+    to get new in-app responses (comment / accepted / status / resolution /
+    assigned) on the portal scope's tickets since the last seen audit id.
+
+    Only staff actions are returned — 'created', 'updated' and 'attachment'
+    entries are excluded, so a reporter never alarms for their own
+    submission. Scoped like the portal itself: its equipment, else customer.
+    """
+    c = conn()
+    row = c.execute(
+        "SELECT * FROM portal_links WHERE token=? AND active=1", (token,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Invalid or expired link"}), 404
+    try:
+        since_id = int(request.args.get("since_id", "0") or 0)
+    except ValueError:
+        since_id = 0
+    scope_col = "t.equipment_id" if row["equipment_id"] else "t.customer_id"
+    scope_val = row["equipment_id"] if row["equipment_id"] else row["customer_id"]
+    actions = ("comment", "accepted", "status", "resolution", "assigned")
+    marks = ", ".join("?" for _ in actions)
+    q = ("SELECT au.id, au.entity_type AS kind, au.action, COALESCE(au.user_name, '') AS actor, "
+         "au.detail, au.created_at AS at, t.code "
+         "FROM audit_logs au JOIN {table} t ON au.entity_type=? AND au.entity_id=t.id "
+         f"WHERE au.user_id IS NOT NULL AND au.id > ? AND {scope_col}=? "
+         f"AND au.action IN ({marks}) ORDER BY au.id LIMIT 30")
+    events = [
+        dict(r) for r in c.execute(
+            q.format(table="complaints"),
+            ("complaint", since_id, scope_val, *actions)).fetchall()
+    ] + [
+        dict(r) for r in c.execute(
+            q.format(table="breakdowns"),
+            ("breakdown", since_id, scope_val, *actions)).fetchall()
+    ]
+    events.sort(key=lambda e: e["id"])
+    events = events[:30]
+    latest = c.execute("SELECT MAX(id) AS m FROM audit_logs").fetchone()["m"] or 0
+    c.close()
+    return jsonify({"events": events, "latest_id": latest})
+
+
 # --------------------------------------------------------------------------
 # Static (mobile web app)
 # --------------------------------------------------------------------------
