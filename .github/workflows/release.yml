@@ -51,12 +51,22 @@ jobs:
             bt="$(ls "$SDKREF/build-tools" | sort -V | tail -1)"
           fi
           [ -n "$bt" ] || { echo "::error::no Android build-tools available"; exit 1; }
+          # IMPORTANT: must be a STABLE numeric platform. Compiling against a
+          # codename/DEV platform silently strips numeric minSdk/targetSdk
+          # values from the manifest (Android release-codename quirk), which
+          # makes Android 14+ refuse the very install we ship here.
           plat=""
-          [ -d "$SDKREF/platforms/android-33" ] && plat="android-33" || true
+          for want in android-33 android-34 android-35 android-36; do
+            [ -d "$SDKREF/platforms/$want" ] && plat="$want" && break
+          done
           if [ -z "$plat" ]; then
-            plat="$(ls "$SDKREF/platforms" 2>/dev/null | sort -V | tail -1 || true)"
+            echo "no stable platform found; installing android-35"
+            "$SDKREF/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35"
+            plat="android-35"
           fi
-          [ -n "$plat" ] || { echo "::error::no Android platform available"; exit 1; }
+          if [ "$plat" = "${plat##*[0-9]}" ] || [[ "$plat" == *beta* ]] || [[ "$plat" == *-beta* ]]; then
+            echo "::error::platform $plat is not stable"; exit 1
+          fi
           ln -sfn "$SDKREF/build-tools/$bt" "$ANDROID_SDK/build-tools/android-13"
           ln -sfn "$SDKREF/platforms/$plat" "$ANDROID_SDK/platform/android-13"
           echo "::notice::Android SDK ready (build-tools $bt, platform $plat)"
@@ -72,9 +82,12 @@ jobs:
       - name: Assert device-compat (targetSdk must be 24+ for Android 14+)
         run: |
           set -euo pipefail
-          python3 scripts/verify_apk_sdk.py apps/android/dist/LabCare-Alerts-v1.2.apk \
-            --min-sdk 26 --target-sdk 34
-          echo "::notice::APK uses-sdk verified (min 26 / target 34) — installable on Android 14/15/16"
+          out="$(python3 scripts/verify_apk_sdk.py apps/android/dist/LabCare-Alerts-v1.2.apk \
+            --min-sdk 26 --target-sdk 34 2>&1)" || {
+              echo "::error title=uses-sdk check failed::$(echo "$out" | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
+              exit 1
+          }
+          echo "::notice::$(echo "$out" | head -1) — installable on Android 14/15/16"
 
       - uses: actions/upload-artifact@v4
         with:
