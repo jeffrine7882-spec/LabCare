@@ -103,16 +103,6 @@ CREATE TABLE IF NOT EXISTS customers (
     created_at TEXT NOT NULL
 );
 
--- Which customers a tenant admin cares for. A tenant admin's PRIMARY customer is
--- stored on users.customer_id; extra customers are linked here. Together they
--- form the admin's full scope (their "care list").
-CREATE TABLE IF NOT EXISTS admin_customer_links (
-    admin_id INTEGER NOT NULL,
-    customer_id INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (admin_id, customer_id)
-);
-
 CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     customer_id INTEGER NOT NULL,
@@ -391,11 +381,7 @@ def _sqlite_migrate(c):
         if "closed_by" not in cols:
             c.execute(f"ALTER TABLE {table} ADD COLUMN closed_by INTEGER")
 
-    for row in c.execute(
-            "SELECT id, customer_id FROM users WHERE role='admin' AND customer_id IS NOT NULL").fetchall():
-        c.execute(
-            "INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
-            (row["id"], row["customer_id"], now()))
+
 
 
 # ---------------------------------------------------------------------------
@@ -551,13 +537,6 @@ CREATE TABLE IF NOT EXISTS customers (
     address TEXT DEFAULT '',
     city TEXT DEFAULT '',
     created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS admin_customer_links (
-    admin_id BIGINT NOT NULL,
-    customer_id BIGINT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (admin_id, customer_id)
 );
 
 CREATE TABLE IF NOT EXISTS locations (
@@ -837,9 +816,9 @@ class _PGCursor:
     """Cursor shim: same shape the app expects from sqlite3 (dict rows + lastrowid)."""
 
     # Tables without an `id` column (sessions: token PK; notification_pings:
-    # user_id PK; admin_customer_links: composite PK). RETURNING id is skipped
-    # for these, because lastrowid is never read from them either.
-    _NO_ID_TABLES = {"sessions", "notification_pings", "admin_customer_links"}
+    # user_id PK). RETURNING id is skipped for these, because lastrowid is
+    # never read from them either.
+    _NO_ID_TABLES = {"sessions", "notification_pings"}
 
     def __init__(self, pg_conn):
         self._cur = pg_conn.cursor(row_factory=dict_row)
@@ -914,12 +893,6 @@ class _PGConn:
 def _pg_migrate(c):
     for stmt in _PG_ALTERS:
         c.execute(stmt)
-    for r in c.execute(
-            "SELECT id, customer_id FROM users WHERE role='admin' AND customer_id IS NOT NULL").fetchall():
-        c.execute(
-            "INSERT INTO admin_customer_links (admin_id,customer_id,created_at) "
-            "VALUES (?,?,?) ON CONFLICT DO NOTHING",
-            (r["id"], r["customer_id"], now()))
 
 
 def _pg_init_db():

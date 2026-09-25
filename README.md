@@ -116,13 +116,16 @@ organisations** and **Admin → Team & users**.
   - **Master System Admin** — a single, identity-bound account
     (`admin@labcare.com`) that sees and manages everything: customers,
     categories, onboarding/join requests and all users. Only this account can
-    create or edit admin accounts and customers, and it can never be disabled,
-    demoted or linked to a customer. Every other admin is a tenant admin.
+    create or edit admin accounts, and only it can create new customer
+    organisations. It can never be disabled, demoted or linked to a customer.
+    Every other admin is a tenant admin.
   - **Tenant admin** (`admin` linked to one `customer_id`) manages only their
-    own customer — its locations, departments, equipment, tickets, PM schedules
-    and users. They **cannot** create or edit any admin account, cannot create
-    customers, cannot see other organisations' data, and can only assign work
-    to their own team or LabCare's provider technicians.
+    own customer — its complaints, breakdowns, equipment, locations,
+    departments, PM schedules and team members. Their scope is exactly that one
+    organisation: they **cannot** create further customer organisations, cannot
+    create or edit any admin account, cannot see or edit other organisations'
+    data, and can only assign work to their own team or LabCare's provider
+    technicians.
   - **Technician**: provider technicians (`customer_id NULL`) work across all
     customers; tenant technicians (`customer_id` set) are restricted to their
     customer.
@@ -132,13 +135,13 @@ organisations** and **Admin → Team & users**.
     and approve self-sign-ups; tenant admins can only create technicians and
     customer users for their own customer.
 - **Responsible tenant admin**: every user, piece of equipment, complaint and
-  breakdown carries an explicit `responsible_admin_id` — the tenant admin who
-  "cares for" that record. The master (and provider staff) see a *Responsible
-  tenant admin* picker on each form and the choice is validated server-side
-  (must be an active admin of the record's organisation). When a customer has
-  exactly one tenant admin it is filled in automatically; with several, one must
-  be chosen explicitly; tenant admins/technicians are always assigned
-  automatically (themselves or their customer's admin).
+  breakdown carries an explicit `responsible_admin_id` — the tenant admin
+  responsible for that record. The master (and provider staff) see a
+  *Responsible tenant admin* picker on each form and the choice is validated
+  server-side (must be an active admin of the record's organisation). When a
+  customer has exactly one tenant admin it is filled in automatically; with
+  several, one must be chosen explicitly; tenant admins/technicians are always
+  assigned automatically (themselves or their organisation's admin).
 - **Ticket numbering**: complaints `CMP-0001…`, breakdowns `BRK-0001…`.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.
