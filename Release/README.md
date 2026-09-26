@@ -1,9 +1,9 @@
 # LabSynch — native installers
 
-Built by GitHub Actions run [#57](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36219769780)
-from commit 4112acb on 2026-09-26 UTC.
+Built by GitHub Actions run [#75](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36235890695)
+from commit 075d789 on 2026-09-26 UTC.
 
-## Android — android/LabCare-Alerts-v1.3.apk
+## Android — android/LabSynch-Alerts-v1.3.apk
 Requires Android 8.0+ (API 26) and installs on the latest Android
 14/15/16 devices (targets SDK 34, includes the FGS data-sync
 permission). Self-signed — not on the Play Store.
@@ -19,7 +19,7 @@ permission). Self-signed — not on the Play Store.
 Note: each CI build uses a fresh signing key, so uninstall any older CI
 build before installing a new one.
 
-## Windows — windows/LabCare-Alerts-Setup-1.2.0.exe
+## Windows — windows/LabSynch-Alerts-Setup-1.2.0.exe
 1. Run the installer. SmartScreen will warn about an "unrecognized app"
    (self-signed) — choose **More info → Run anyway**.
 2. It installs under %LOCALAPPDATA%\LabSynch Alerts, adds Start-menu +
@@ -35,7 +35,7 @@ build before installing a new one.
    you get a page with **Retry** and **Open the site in my browser**,
    never a blank window.
 
-This is 1.2.0. In 1.1.0 the installer left out the alert-bubble files
+This is 1.2.0 with new LS logo (interlocked 3D). In 1.1.0 the installer left out the alert-bubble files
 and never showed its window, so the EXE opened a blank page with no
 way through to the LabSynch site. Uninstall 1.1.0 first (Settings →
 Apps → LabSynch Alerts), then install this build.
