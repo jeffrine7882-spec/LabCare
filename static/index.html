@@ -50,7 +50,7 @@
   </div>
 
   <!-- Login screen -->
-  <div id="loginScreen" class="login-screen hidden">
+  <div id="loginScreen" class="login-screen">
     <div class="login-wrap">
       <aside class="login-brand">
         <div class="login-logo">🔬</div>
@@ -67,6 +67,11 @@
       <div class="login-logo card-logo">🔬</div>
       <h1 class="login-title card-title">LabCare</h1>
       <p class="login-sub card-sub">Customer Complaints &amp; Equipment Breakdowns</p>
+      <div id="startupStatus" role="status" aria-live="polite" style="margin-bottom:12px">
+        Loading LabCare… If this message stays here, <a href="">reload the page</a>.
+      </div>
+      <button type="button" id="startupRetry" class="btn btn-ghost btn-block hidden" style="margin-bottom:12px">Retry connection</button>
+      <noscript><p>LabCare needs JavaScript. Please enable it in your browser, then reload this page.</p></noscript>
       <form id="loginForm" autocomplete="off">
         <label class="field">
           <span>Email</span>
@@ -77,10 +82,10 @@
           <input type="password" id="loginPassword" placeholder="••••••••" required>
         </label>
         <div id="loginError" class="form-error hidden"></div>
-        <button type="submit" class="btn btn-primary btn-block" id="loginBtn">Sign in</button>
+        <button type="submit" class="btn btn-primary btn-block" id="loginBtn" disabled>Sign in</button>
       </form>
       <div id="joinNote"></div>
-      <button class="btn btn-ghost btn-block" id="showJoinBtn" style="margin-top:10px">Request an account</button>
+      <button class="btn btn-ghost btn-block" id="showJoinBtn" disabled style="margin-top:10px">Request an account</button>
 
       <!-- Join request form (hidden until toggled) -->
       <div id="joinPanel" class="hidden" style="margin-top:14px;text-align:left">
@@ -136,6 +141,6 @@
   <!-- Modal host -->
   <div id="modalHost" class="modal-host hidden"></div>
 
-  <script src="/app.js?v=49"></script>
+  <script src="/app.js?v=49.1"></script>
 </body>
 </html>

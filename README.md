@@ -48,6 +48,24 @@ working against plain SQLite for local development.
   automatically from a fresh sandbox (installs flyctl, re-fetches the Postgres
   connection string, rewrites `.env.production`).
 
+### Frontend-only recovery deployment
+
+For a static UI fix during a backend outage, run **Actions → Deploy to InsForge →
+Run workflow → target: frontend** from the branch containing the fix. This skips
+compute deployment and database initialization/migrations. Normal deployments
+still default to `all`. If an older deployment is stuck at its backend health
+check, cancel that run before publishing so it cannot subsequently overwrite the
+new frontend.
+
+The login screen is visible before network requests start. Session restoration
+times out after 8 seconds with a retry option, and transient failures retain the
+saved session token. This makes an API outage visible; it does not repair the API.
+Run the startup regression tests with:
+
+```bash
+node --test scripts/test_frontend_startup.js
+```
+
 ## Running locally (development)
 
 ```bash
