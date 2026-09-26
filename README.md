@@ -214,6 +214,29 @@ Organizations** and **Admin → Team & users**.
     The link is therefore what defines the scope, and a tenant admin can never
     mint a system-wide account. An unbound tenant admin (no organizations yet)
     has an empty care list, so the accounts they create see nothing at all.
+  - **Linked organizations (engineer / application)**: an engineer or
+    application account is **not limited to one organization**. On the *Add
+    team member* form the admin (tenant admin or master — the form is
+    admin-only) sees a **Linked organizations** checklist and may tick **any
+    number** of the organizations under the tenant admin's care; the account
+    then reaches exactly those. **Nothing ticked = every organization under
+    that tenant admin's care** (the behaviour above, unchanged). The selection
+    lives in `staff_customer_links` (like `admin_customer_links` does for a
+    tenant admin's care list) and is sent as `customer_ids` on
+    `POST/PATCH /api/users`; a non-empty selection replaces the single
+    `customer_id` binding, an empty list clears it. Server-side every ticked
+    organization must be on the acting tenant admin's care list **and** under
+    the linked tenant admin's care (`400` / `403` otherwise), and at read time
+    the reach is intersected with that admin's *current* care list — an
+    organization the admin later drops is dropped for their staff too, and an
+    empty reach means **nothing**, never everything. The master may also tick
+    organizations for a LabSynch-wide engineer with no tenant admin, which
+    simply restricts that engineer to them. Team lists, the assignee picker,
+    ticket notifications and `tenant_guard` all follow the same reach, so a
+    linked engineer is visible to and assignable by the tenants they serve,
+    not by others; `GET /api/tenant-admins` carries each admin's
+    `customer_ids` so the form can offer the right organizations once a
+    linked tenant admin is chosen.
   - **Customer** users are restricted to their own organization, location and
     department.
   - The master can create tenant admins (linked **or** unlinked), technicians
@@ -233,15 +256,17 @@ Organizations** and **Admin → Team & users**.
   automatically (themselves or their organization's admin).
 
   On the **Add user** form a tenant admin sees a *Linked tenant admin* picker
-  next to the now-**optional** *Linked organization* — it defaults to themselves and
-  lists only their peer admins (`GET /api/tenant-admins` with no `customer_id`,
-  which the backend already scopes to the caller's care list). Leaving the
-  organization empty places the account under the named admin's care. A tenant
-  admin may only name themselves or a peer who cares for at least one of the
-  same organizations, so an account cannot be pushed into a tenant they do not
-  manage. Ids from these pickers are coerced server-side: browsers send
-  `<select>` values as strings, which previously failed an integer care-list
-  comparison and rejected a legitimately chosen organization with a 403.
+  next to the **optional** *Linked organizations* checklist (see above) — it
+  defaults to themselves and lists only their peer admins (`GET
+  /api/tenant-admins` with no `customer_id`, which the backend already scopes
+  to the caller's care list). Leaving every organization unticked places the
+  account under the named admin's care as a whole; ticking some restricts it to
+  those. A tenant admin may only name themselves or a peer who cares for at
+  least one of the same organizations, so an account cannot be pushed into a
+  tenant they do not manage. Ids from these pickers are coerced server-side:
+  browsers send `<select>`/checkbox values as strings, which previously failed
+  an integer care-list comparison and rejected a legitimately chosen
+  organization with a 403.
 - **Join requests & who cares for a new organization**: anyone can request an
   account from the sign-in screen. **Full name, email and phone number are
   required**, plus a password of at least 6 characters. The request stays

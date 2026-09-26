@@ -114,6 +114,16 @@ CREATE TABLE IF NOT EXISTS admin_customer_links (
     PRIMARY KEY (admin_id, customer_id)
 );
 
+-- Organizations an engineer/application account is explicitly linked to. A
+-- staff account may serve SEVERAL organizations under its tenant admin's care;
+-- with no rows here it reaches every organization on that admin's care list.
+CREATE TABLE IF NOT EXISTS staff_customer_links (
+    user_id INTEGER NOT NULL,
+    customer_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, customer_id)
+);
+
 -- A tenant admin who says a join-request organization is not theirs is
 -- recorded here, so the request stays visible to the other tenant admins and
 -- to the master instead of disappearing for everyone.
@@ -475,6 +485,14 @@ def _sqlite_migrate(c):
               "created_at TEXT NOT NULL, "
               "PRIMARY KEY (admin_id, customer_id))")
 
+    # An engineer/application account may be linked to several organizations
+    # under its tenant admin's care (none linked = the whole care list).
+    c.execute("CREATE TABLE IF NOT EXISTS staff_customer_links ("
+              "user_id INTEGER NOT NULL, "
+              "customer_id INTEGER NOT NULL, "
+              "created_at TEXT NOT NULL, "
+              "PRIMARY KEY (user_id, customer_id))")
+
     # Customer feedback on settled tickets: one editable 1-5 rating per ticket
     # plus a thread of comments from the customer side. Purely additive, so an
     # existing ticket with no feedback behaves exactly as before.
@@ -694,6 +712,16 @@ CREATE TABLE IF NOT EXISTS admin_customer_links (
     customer_id BIGINT NOT NULL,
     created_at TEXT NOT NULL,
     PRIMARY KEY (admin_id, customer_id)
+);
+
+-- Organizations an engineer/application account is explicitly linked to. A
+-- staff account may serve SEVERAL organizations under its tenant admin's care;
+-- with no rows here it reaches every organization on that admin's care list.
+CREATE TABLE IF NOT EXISTS staff_customer_links (
+    user_id BIGINT NOT NULL,
+    customer_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, customer_id)
 );
 
 -- A tenant admin who says a join-request organization is not theirs is
@@ -1151,6 +1179,14 @@ def _pg_migrate(c):
               "customer_id BIGINT NOT NULL, "
               "created_at TEXT NOT NULL, "
               "PRIMARY KEY (admin_id, customer_id))")
+
+    # An engineer/application account may be linked to several organizations
+    # under its tenant admin's care (none linked = the whole care list).
+    c.execute("CREATE TABLE IF NOT EXISTS staff_customer_links ("
+              "user_id BIGINT NOT NULL, "
+              "customer_id BIGINT NOT NULL, "
+              "created_at TEXT NOT NULL, "
+              "PRIMARY KEY (user_id, customer_id))")
 
     # Customer feedback on settled tickets: one editable 1-5 rating per ticket
     # plus a thread of comments from the customer side. Purely additive, so an

@@ -1661,8 +1661,15 @@ async function viewUsers(v) {
   try {
     const list = await API.get("/api/users");
     state.users = list;
-    const canEdit = (usr) => isMaster()
-      || (isAdmin() && usr.role !== "admin" && usr.customer_id === state.user.customer_id);
+    // The backend already lists only the accounts the actor may manage (their
+    // care-list organizations' users and their own staff); tenant admins still
+    // never touch admin accounts. Anything else is refused server-side.
+    const canEdit = (usr) => isMaster() || (isAdmin() && usr.role !== "admin");
+    // Organization(s) a user belongs to: the single organization, or — for an
+    // engineer/application — the organizations it was linked to.
+    const orgLabel = (usr) => usr.customer_name
+      ? esc(usr.customer_name)
+      : ((usr.customer_names && usr.customer_names.length) ? "🏢 " + esc(usr.customer_names.join(", ")) : "");
     v.innerHTML = `
       ${isAdmin() ? `<div class="btn-row" style="margin-bottom:12px"><button class="btn btn-primary" onclick="openUserEditor(false)">＋ Add user</button></div>` : ""}
       <div class="list list-grid">${list.map((u) => `
@@ -1671,7 +1678,7 @@ async function viewUsers(v) {
             <div class="c-avatar">${esc(initials(u.name))}</div>
             <div class="item-main">
               <div class="item-title">${esc(u.name)}</div>
-              <div class="item-sub">${esc(u.email)}${u.customer_name ? " · " + esc(u.customer_name) : ""}${u.location_name || u.department_name ? " · " + esc(u.location_name || u.department_name) : ""}${u.responsible_admin_name ? " · 👤 " + esc(u.responsible_admin_name) : ""}</div>
+              <div class="item-sub">${esc(u.email)}${orgLabel(u) ? " · " + orgLabel(u) : ""}${u.location_name || u.department_name ? " · " + esc(u.location_name || u.department_name) : ""}${u.responsible_admin_name ? " · 👤 " + esc(u.responsible_admin_name) : ""}</div>
             </div>
             ${roleBadge(u)}
           </div>
@@ -1822,6 +1829,8 @@ function viewProfile(v) {
       <div class="kv"><span class="k">Phone</span><span class="v">${esc(u.phone || "—")}</span></div>
       <div class="kv"><span class="k">Role</span><span class="v">${roleLabel(u)}</span></div>
       ${u.customer_name ? `<div class="kv"><span class="k">Organization</span><span class="v">${esc(u.customer_name)}</span></div>` : ""}
+      ${(u.role === "engineer" || u.role === "application") && !u.customer_name && u.care_customers && u.care_customers.length
+        ? `<div class="kv"><span class="k">Linked organizations</span><span class="v" style="text-align:right">${u.care_customers.map((x) => esc(x.name)).join(", ")}</span></div>` : ""}
       ${(u.location_name || u.department_name) ? `<div class="kv"><span class="k">Location/Department</span><span class="v">${esc(u.location_name || u.department_name)}</span></div>` : ""}
     </div>
     ${isTenantAdmin ? `
@@ -2363,12 +2372,13 @@ async function deleteEquipment(id) {
 // /api/tenant-admins with NO customer_id returns exactly the actor's own tenant:
 // every admin whose primary organization or care list overlaps theirs — and, for
 // an admin with no organizations yet, just themselves.
-let _peerAdminsCache = null;
+// Each row carries the admin's current care list (`customer_ids`), which the
+// Add user form uses to offer the organizations a staff account may be linked
+// to — so this is fetched fresh each time rather than cached for the session
+// (a care list changes whenever an organization is added or taken into care).
 async function tenantAdminPeers() {
-  if (_peerAdminsCache) return _peerAdminsCache;
   try {
-    _peerAdminsCache = await API.get("/api/tenant-admins");
-    return _peerAdminsCache;
+    return await API.get("/api/tenant-admins");
   } catch (e) { return []; }
 }
 
@@ -2731,6 +2741,14 @@ async function openUserEditor(edit, id) {
   const respOptions = master
     ? respAdminOpts(respAdmins, respSelected, true)
     : (tenantAdmin ? respAdminOpts(respAdmins, respSelected, false) : "");
+  // Linked organizations for engineer/application accounts: a staff account is
+  // not limited to one organization — it may be linked to several under the
+  // tenant admin's care. Nothing ticked = every organization on that care list.
+  // Pre-tick the current selection (or the legacy single organization binding).
+  const startLinked = u
+    ? ((u.customer_ids && u.customer_ids.length) ? u.customer_ids : (u.customer_id ? [u.customer_id] : []))
+    : [];
+  _userEditorCtx = { customers, admins: respAdmins, selected: startLinked, respSelected };
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit user" : "Add user"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
@@ -2763,10 +2781,14 @@ async function openUserEditor(edit, id) {
           ${deptOpts(state.departments || [], u && u.department_id, u && u.location_id)}
         </select>
         ${master ? `<label class="field" id="uRespAdminField" style="${startCustId ? "" : "display:none"}"><span>Responsible tenant admin</span>
-          <select id="uRespAdmin">${respOptions}</select></label>` : ""}
+          <select id="uRespAdmin" onchange="onUserRespAdminPick()">${respOptions}</select></label>` : ""}
         ${tenantAdmin ? `<label class="field" id="uRespAdminField" style="${startCust ? "display:none" : ""}"><span>Linked tenant admin</span>
-          <select id="uRespAdmin">${respOptions}</select>
-          <small style="display:block;margin-top:4px;color:var(--ink-soft);font-size:12px">With no organization selected, this account sees every organization that tenant admin cares for.</small></label>` : ""}
+          <select id="uRespAdmin" onchange="onUserRespAdminPick()">${respOptions}</select>
+          <small style="display:block;margin-top:4px;color:var(--ink-soft);font-size:12px">With no organization ticked below, this account sees every organization that tenant admin cares for.</small></label>` : ""}
+        <div class="field" id="uLinkedOrgsField" style="display:none"><span>Linked organizations (optional — tick one or more)</span>
+          <div class="check-list" id="uLinkedOrgs"></div>
+          <small style="display:block;margin-top:6px;color:var(--ink-soft);font-size:12px">An engineer or application account is not limited to one organization: tick every organization it serves. Leave all unticked to give it access to <strong>all</strong> organizations under the ${master ? "linked tenant admin's care (or LabSynch-wide when none is linked)" : "tenant admin's care"}.</small>
+        </div>
       </div>
       <label class="field"><span>${edit ? "New password (leave blank to keep)" : "Password *"}</span><input id="uPassword" type="password" placeholder="${edit ? "••••••••" : "Set a password"}"></label>
     </div>
@@ -2802,10 +2824,22 @@ function toggleCustomerSelect() {
     if (respFieldM) {
       if (isStaff) {
         respFieldM.style.display = "";
-        if (!respFieldM.querySelector("select")?.innerHTML?.trim()) {
+        // For staff the picker lists EVERY tenant admin (an engineer is placed
+        // under an admin's care, not under an organization). Load it once —
+        // checking for real admin options, not just the "— None —" placeholder,
+        // which used to leave the master with nothing to choose from.
+        const sel0 = respFieldM.querySelector("select");
+        const hasAdmins = sel0 && Array.from(sel0.options).some((o) => o.value);
+        if (!hasAdmins && !_userEditorCtx.adminsLoading) {
+          _userEditorCtx.adminsLoading = true;
           tenantAdminPeers().then((admins) => {
+            _userEditorCtx.adminsLoading = false;
             const sel = $("#uRespAdmin");
-            if (sel) sel.innerHTML = respAdminOpts(admins, null, true);
+            if (!sel) return;
+            // keep the account's current tenant admin selected when editing
+            sel.innerHTML = respAdminOpts(admins, _userEditorCtx.respSelected, true);
+            _userEditorCtx.admins = admins;
+            renderUserOrgChecklist();
           });
         }
       } else if (isCustRole) {
@@ -2836,9 +2870,64 @@ function toggleCustomerSelect() {
     return r === "customer" ? "" : "none";
   })();
   if ($("#uDepartmentField")) $("#uDepartmentField").style.display = "none";
+  // Engineer/Application: the multi-organization checklist replaces the single
+  // organization picker (customers and tenant admins keep the single picker).
+  const linkedField = $("#uLinkedOrgsField");
+  if (linkedField) {
+    linkedField.style.display = isStaff ? "" : "none";
+    if (isStaff) renderUserOrgChecklist();
+  }
   if ($("#uCustomerField") && $("#uCustomerField").style.display !== "none") {
     onUserCustPick();
   }
+}
+
+// Context of the open Add/Edit user sheet: the organizations the actor may
+// offer, the tenant admins that may be linked (each with its care list), and
+// the organizations currently ticked.
+let _userEditorCtx = { customers: [], admins: [], selected: [], respSelected: null };
+
+// Organizations currently ticked in the Linked organizations checklist.
+function checkedUserOrgs() {
+  return $$("#uLinkedOrgs input[type=checkbox]:checked").map((el) => Number(el.value)).filter((n) => n);
+}
+
+// (Re)build the checklist. The offer is the actor's organizations — for the
+// master every organization, for a tenant admin their care list — narrowed to
+// the care list of the linked tenant admin chosen above, since a staff account
+// may only be linked to organizations under that admin's care.
+function renderUserOrgChecklist() {
+  const host = $("#uLinkedOrgs");
+  if (!host) return;
+  const ctx = _userEditorCtx;
+  const raSel = $("#uRespAdmin");
+  const raId = raSel ? raSel.value : "";
+  const admin = raId ? (ctx.admins || []).find((a) => String(a.id) === String(raId)) : null;
+  // The actor's own care list IS the offer, so only a peer's list narrows it.
+  const isSelf = admin && state.user && String(admin.id) === String(state.user.id);
+  const allowed = admin && !isSelf && Array.isArray(admin.customer_ids) ? new Set(admin.customer_ids.map(String)) : null;
+  const list = allowed ? (ctx.customers || []).filter((x) => allowed.has(String(x.id))) : (ctx.customers || []);
+  const checked = new Set((ctx.selected || []).map(String));
+  if (!list.length) {
+    host.innerHTML = `<div class="check-empty">${admin
+      ? `No organizations under ${esc(admin.name)}'s care yet.`
+      : "No organizations available yet."}</div>`;
+    return;
+  }
+  host.innerHTML = list.map((x) => `
+    <label class="check-item">
+      <input type="checkbox" value="${x.id}" ${checked.has(String(x.id)) ? "checked" : ""} onchange="_userEditorCtx.selected = checkedUserOrgs()">
+      <span>${esc(x.name)}</span>
+    </label>`).join("");
+}
+
+// The linked tenant admin changed: offer that admin's organizations instead
+// (ticks on organizations that are still offered are kept).
+function onUserRespAdminPick() {
+  const role = $("#uRole") ? $("#uRole").value : "";
+  if (role !== "engineer" && role !== "application") return;
+  _userEditorCtx.selected = checkedUserOrgs();
+  renderUserOrgChecklist();
 }
 
 function onUserCustPick() {
@@ -2923,6 +3012,13 @@ async function saveUser(id) {
     body.location_id = null;
     body.department_id = null;
     if ($("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
+  }
+  if (body.role === "engineer" || body.role === "application") {
+    // Linked organizations: the staff account may serve several organizations
+    // under the tenant admin's care. An empty list = all of them (the single
+    // organization picker is not used for staff, so it never competes).
+    body.customer_ids = checkedUserOrgs();
+    if (body.customer_ids.length) body.customer_id = null;
   }
   const pw = $("#uPassword").value;
   if (pw) body.password = pw;
@@ -4150,7 +4246,7 @@ Object.assign(window, {
   togglePushAlerts, syncPushAlerts, pushStateLabel,
 });
 
-const BUILD_VERSION = "49";
+const BUILD_VERSION = "50";
 
 async function checkVersion() {
   // Advisory only: a version endpoint outage must not block sign-in/session

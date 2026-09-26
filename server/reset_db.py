@@ -14,7 +14,7 @@ TABLES = [
     "sessions", "notification_pings", "notifications",
     "audit_logs", "comments", "pm_logs", "pm_schedules", "portal_links",
     "breakdowns", "complaints", "equipment", "categories", "departments",
-    "locations", "admin_customer_links", "onboarding_apps", "users",
+    "locations", "admin_customer_links", "staff_customer_links", "onboarding_apps", "users",
     "customers",
 ]
 

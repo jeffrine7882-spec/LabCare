@@ -72,7 +72,7 @@ jobs:
           code="$(curl -sS -m 30 -o /tmp/idx.html -w '%{http_code}' "$SITE_URL/" 2>/dev/null)"
           marker="absent"; grep -q 'id="startupRetry"' /tmp/idx.html 2>/dev/null && marker="present"
           echo "::notice title=LABPROBE_FRONTEND_INDEX::http=$code bytes=$(wc -c < /tmp/idx.html 2>/dev/null) startupRetry_button=$marker"
-          code="$(curl -sS -m 30 -o /tmp/app.js -w '%{http_code}' "$SITE_URL/app.js?v=49.1" 2>/dev/null)"
+          code="$(curl -sS -m 30 -o /tmp/app.js -w '%{http_code}' "$SITE_URL/app.js?v=50" 2>/dev/null)"
           marker="absent"; grep -q 'startupRetry' /tmp/app.js 2>/dev/null && marker="present"
           echo "::notice title=LABPROBE_FRONTEND_APPJS::http=$code bytes=$(wc -c < /tmp/app.js 2>/dev/null) boot_retry_wiring=$marker"
           for path in /api/health /api/version; do
