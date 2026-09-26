@@ -4019,7 +4019,7 @@ Object.assign(window, {
   togglePushAlerts, syncPushAlerts, pushStateLabel,
 });
 
-const BUILD_VERSION = "48";
+const BUILD_VERSION = "49";
 
 async function boot() {
   // Bust stale WebView or browser caches automatically if a newer version was deployed

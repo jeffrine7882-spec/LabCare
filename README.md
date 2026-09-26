@@ -259,7 +259,13 @@ Organizations** and **Admin → Team & users**.
 - **Ticket numbering**: complaints `CMP-0001…`, breakdowns `BRK-0001…`.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.
-- **History / audit log**: every ticket records who did what and when.
+- **History / audit log**: every ticket records who did what and when, shown
+  newest first in the ticket's **History** card via `GET
+  /api/audit?entity_type=<kind>&entity_id=<id>`. Scoped like the ticket itself,
+  so a caller only ever sees the history of tickets they may open. Unlike the
+  public portal's activity feed — which hides a reporter's own submissions so
+  they are not alarmed by them — this trail shows every recorded action,
+  including the customer's own ratings and feedback.
 - **No file attachments**: neither ticket type accepts uploaded photos or
   documents. That function was replaced by a generated **Service report (PDF)**
   on every ticket — see below. The whole attachments subsystem is gone, not

@@ -2795,6 +2795,56 @@ def add_comment():
 
 
 # --------------------------------------------------------------------------
+# Ticket history (audit log)
+# --------------------------------------------------------------------------
+AUDIT_TABLES = {"complaint": "complaints", "breakdown": "breakdowns"}
+
+
+@app.get("/api/audit")
+def get_audit():
+    """One ticket's history timeline: who did what, when, newest first.
+
+    This is the read side of audit(). The History card on both ticket detail
+    views has always called it, but the route never existed, so every ticket
+    rendered "History unavailable." while the rows accumulated unread.
+
+    Scoped exactly like the ticket itself — a customer only their own
+    organization's tickets, tenant staff only their care list, the master
+    everything — so it cannot be used to read another organization's activity
+    by guessing an id.
+
+    Nothing is filtered out: unlike the public portal's activity feed, which
+    hides a reporter's own submissions so they are not alarmed by them, this is
+    an audit trail and shows every recorded action, including the customer's
+    own ratings and feedback."""
+    u, err, code = require_role("admin", "engineer", "application", "customer")
+    if err:
+        return err, code
+    entity = (request.args.get("entity_type") or "").strip().lower()
+    eid = _id(request.args.get("entity_id"))
+    if entity not in AUDIT_TABLES or not eid:
+        return jsonify({"error": "Invalid entity"}), 400
+    c = conn()
+    row = c.execute(
+        "SELECT customer_id, location_id, department_id FROM %s WHERE id=?"
+        % AUDIT_TABLES[entity], (eid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
+    # Newest first: the card is a timeline of recent activity, not a transcript.
+    # created_at is a text timestamp, so ties (same second) fall back to the id.
+    rows = c.execute(
+        "SELECT action, user_name, detail, created_at FROM audit_logs "
+        "WHERE entity_type=? AND entity_id=? ORDER BY created_at DESC, id DESC",
+        (entity, eid)).fetchall()
+    c.close()
+    return jsonify([dict(r) for r in rows])
+
+
+# --------------------------------------------------------------------------
 # Customer feedback on settled tickets
 # --------------------------------------------------------------------------
 # A ticket accepts feedback only once it is settled: a complaint when resolved
@@ -4729,7 +4779,7 @@ def portal_events(token):
 # --------------------------------------------------------------------------
 # Version check
 # --------------------------------------------------------------------------
-APP_VERSION = "48"
+APP_VERSION = "49"
 
 @app.get("/api/version")
 def api_version():
