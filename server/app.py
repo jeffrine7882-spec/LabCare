@@ -1190,7 +1190,7 @@ def create_location():
         return err, code
     b = get_body()
     if not (b.get("name") or "").strip() or not b.get("customer_id"):
-        return jsonify({"error": "Location/department name and customer are required"}), 400
+        return jsonify({"error": "Location/department name and organization are required"}), 400
     err_t, code_t = tenant_guard(u, b["customer_id"])
     if err_t:
         return err_t, code_t

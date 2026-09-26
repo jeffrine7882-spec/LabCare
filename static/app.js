@@ -1450,7 +1450,7 @@ async function openLocationEditor(edit, id) {
     <div class="sheet-head"><h3>${edit ? "Edit location/department" : "Add location/department"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
       <label class="field"><span>Location/Department name *</span><input id="locName" value="${esc(l ? l.name : "")}" placeholder="e.g. Molecular Lab"></label>
-      <label class="field"><span>Customer *</span>
+      <label class="field"><span>Organization *</span>
         <select id="locCustomer">
           ${customers.map((x) => `<option value="${x.id}" ${l && l.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
@@ -1472,7 +1472,7 @@ async function saveLocation(id) {
     address: $("#locAddress").value.trim(),
   };
   if (!body.name) { toast("Location/department name is required", "error"); return; }
-  if (!body.customer_id) { toast("Customer is required", "error"); return; }
+  if (!body.customer_id) { toast("Organization is required", "error"); return; }
   closeSheet();
   showLoading();
   try {
