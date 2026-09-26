@@ -380,10 +380,10 @@ function render() {
   const titles = {
     dashboard: "Dashboard", complaints: "Complaints", breakdowns: "Breakdowns",
     equipment: "Equipment", equipmentDetail: "Equipment", more: "Menu",
-    customers: "Organizations", customerDetail: "Organization", users: "Team",
+    customers: "Organization, Customer & Department", customerDetail: "Organization", users: "Add team member",
     complaintDetail: "Complaint", breakdownDetail: "Breakdown", profile: "My Account",
     pm: "Maintenance", pmDetail: "Maintenance", portals: "QR Portal",
-    locations: "Organizations", departments: "Organizations", org: "Organizations",
+    locations: "Organization, Customer & Department", departments: "Organization, Customer & Department", org: "Organization, Customer & Department",
     onboarding: "Join requests", categories: "Categories",
   };
   $("#tbTitle").textContent = titles[state.view] || "LabSynch";
@@ -1407,8 +1407,8 @@ async function viewOrg(v, tab) {
     : (isTech() ? `<button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location/department</button>` : "");
   v.innerHTML = `
     <div class="hero" style="background:linear-gradient(135deg,#450a0a,#b91c1c)">
-      <h2>Organizations</h2>
-      <p>Organizations and locations/departments in one place.</p>
+      <h2>Organization, Customer & Department</h2>
+      <p>Manage organizations, customers and their locations/departments in one place.</p>
     </div>
     <div class="seg" style="margin:14px 0 12px">
       ${tabs.map(([k, label]) => `<button class="${t === k ? "active" : ""}" onclick="setOrgTab('${k}')">${label}</button>`).join("")}
@@ -1587,7 +1587,7 @@ async function openLocationEditor(edit, id) {
         ${hasCustomers ? `<select id="locCustomer">
           ${customers.map((x) => `<option value="${x.id}" ${l && String(l.customer_id) === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select>` : `<div style="padding:12px;border:1.5px dashed var(--line);border-radius:12px;background:var(--bg);color:var(--ink-soft);font-size:13px">
-          No organizations found. As Tenant Admin, please create an Organization first via <b>Organizations & locations/departments → ＋ Add organization</b>, then add its Location/Department here. The new organization will automatically be linked to your account.
+          No organizations found. As Tenant Admin, please create an Organization first via <b>Organization, Customer & Department → ＋ Add organization</b>, then add its Location/Department here. The new organization will automatically be linked to your account.
         </div><input type="hidden" id="locCustomer" value="">`}
         </label>
       <label class="field"><span>City</span><input id="locCity" value="${esc(l ? l.city : "")}" placeholder="e.g. Kuala Lumpur"></label>
@@ -2031,9 +2031,9 @@ async function assignCare(id, adminId) {
 function viewMore(v) {
   const items = [];
   items.push(`<button class="menu-item" onclick="navigate('profile')"><span class="mi-ico">👤</span> My account <span class="mi-arrow">›</span></button>`);
-  if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Organizations &amp; locations/departments <span class="mi-arrow">›</span></button>`);
+  if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Organization, Customer &amp; Department <span class="mi-arrow">›</span></button>`);
   if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('categories')"><span class="mi-ico">🏷️</span> Categories <span class="mi-arrow">›</span></button>`);
-  if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('users')"><span class="mi-ico">👥</span> Team & users <span class="mi-arrow">›</span></button>`);
+  if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('users')"><span class="mi-ico">👥</span> Add team member <span class="mi-arrow">›</span></button>`);
   if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('onboarding')"><span class="mi-ico">📥</span> Join requests <span class="mi-arrow">›</span></button>`);
 
   // Create new: quick access from the menu (same as the ＋ button)
