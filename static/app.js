@@ -2590,6 +2590,14 @@ async function openCustomerEditor(edit) {
       <label class="field"><span>Phone</span><input id="cuPhone" value="${esc(cu ? cu.phone : "")}"></label>
       <label class="field"><span>City</span><input id="cuCity" value="${esc(cu ? cu.city : "")}"></label>
       <label class="field"><span>Address</span><input id="cuAddress" value="${esc(cu ? cu.address : "")}"></label>
+      ${!edit ? `
+      <div class="section-title" style="margin-top:18px">Customer login (optional — creates a customer account for this organization)</div>
+      <label class="field"><span>Customer full name</span><input id="cuLoginName" placeholder="e.g. Lab Manager"></label>
+      <label class="field"><span>Customer login email</span><input id="cuLoginEmail" type="email" placeholder="customer@hospital.com"></label>
+      <label class="field"><span>Customer login password</span><input id="cuLoginPassword" type="password" placeholder="Min 6 characters"></label>
+      <label class="field"><span>Location/Department for customer (optional, defaults to Main Lab)</span><input id="cuLoginLocation" placeholder="e.g. Molecular Lab"></label>
+      <small style="display:block;margin-top:4px;color:var(--ink-soft);font-size:12px">If you set a password, a customer account will be created and can log in immediately to see only this organization+location tickets.</small>
+      ` : ""}
     </div>
     <div class="sheet-foot">
       ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteCustomer(${cu.id})">Delete</button>` : ""}
@@ -2623,12 +2631,72 @@ async function saveCustomer(id) {
     address: $("#cuAddress").value.trim(),
   };
   if (!body.name) { toast("Organization name is required", "error"); return; }
+  const isNew = !id;
+  const loginName = isNew ? $("#cuLoginName")?.value.trim() : "";
+  const loginEmail = isNew ? $("#cuLoginEmail")?.value.trim() : "";
+  const loginPassword = isNew ? $("#cuLoginPassword")?.value : "";
+  const loginLocation = isNew ? $("#cuLoginLocation")?.value.trim() : "";
+  if (isNew && loginPassword && loginPassword.length < 6) {
+    toast("Customer password must be at least 6 characters", "error");
+    return;
+  }
+  if (isNew && loginPassword && !loginEmail) {
+    toast("Customer login email is required when setting a password", "error");
+    return;
+  }
   closeSheet();
   showLoading();
   try {
-    if (id) await API.put("/api/customers/" + id, body);
-    else await API.post("/api/customers", body);
-    toast(id ? "Organization updated" : "Organization added", "success");
+    let orgId = id;
+    let orgRes;
+    if (id) {
+      await API.put("/api/customers/" + id, body);
+    } else {
+      orgRes = await API.post("/api/customers", body);
+      orgId = orgRes.id;
+    }
+    // If password provided, create a customer user for this org
+    if (isNew && loginPassword) {
+      try {
+        // Create or get location for this customer
+        let locId = null, deptId = null;
+        const locName = loginLocation || "Main Lab";
+        // Try to find existing location with same name for this customer, or create
+        try {
+          const locs = await API.get(`/api/locations?customer_id=${orgId}`);
+          const existing = locs.find((l) => l.name.toLowerCase() === locName.toLowerCase());
+          if (existing) {
+            locId = existing.id;
+          } else {
+            const newLoc = await API.post("/api/locations", { name: locName, customer_id: orgId });
+            locId = newLoc.id;
+          }
+          // Get department for location
+          try {
+            const depts = await API.get(`/api/departments?location_id=${locId}`);
+            if (depts.length) deptId = depts[0].id;
+          } catch (e) {}
+        } catch (e) {
+          // If location creation fails, proceed without location (backend will still allow)
+        }
+        const userBody = {
+          name: loginName || body.contact_name || body.name,
+          email: loginEmail,
+          password: loginPassword,
+          role: "customer",
+          customer_id: orgId,
+          location_id: locId,
+          department_id: deptId,
+        };
+        await API.post("/api/users", userBody);
+        toast(`Organization added + customer login ${loginEmail} created`, "success");
+      } catch (e) {
+        // Org created but user failed — show warning
+        toast(`Organization ${body.name} added, but customer login failed: ${e.message}`, "error");
+      }
+    } else {
+      toast(id ? "Organization updated" : "Organization added", "success");
+    }
     state.customers = null;
     if (state.view === "customerDetail" && id) await viewCustomerDetail($("#view"));
     else if (state.view === "customers" || state.view === "org") await refreshCustomers();
