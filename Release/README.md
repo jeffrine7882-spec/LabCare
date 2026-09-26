@@ -1,7 +1,7 @@
 # LabSynch — native installers
 
-Built by GitHub Actions run [#75](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36235890695)
-from commit 075d789 on 2026-09-26 UTC.
+Built by GitHub Actions run [#77](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36236657086)
+from commit 9e6fd67 on 2026-09-26 UTC.
 
 ## Android — android/LabSynch-Alerts-v1.3.apk
 Requires Android 8.0+ (API 26) and installs on the latest Android
