@@ -66,6 +66,17 @@ backend can no longer withhold a merged frontend fix.
 The login screen is visible before network requests start. Session restoration
 times out after 8 seconds with a retry option, and transient failures retain the
 saved session token. This makes an API outage visible; it does not repair the API.
+
+Sessions last until the user signs out. Server-side sessions never expire and
+survive every restart/deploy (`seed()` no longer wipes the `sessions` table on
+boot — that was what signed everyone out of the web app, the Android app and the
+Windows app on each deploy). The web app discards its saved token only when the
+LabSynch API itself answers a JSON 401 to `/api/me`; a non-JSON 401/403 from a
+proxy or captive portal keeps the token and offers Retry. The fallback cookie is
+issued for 400 days and re-issued on every `/api/me`, and `/api/logout` accepts
+the token through every channel so a manual sign-out really ends the session.
+`server/test_session_persistence.py` pins the server side; the native apps'
+behaviour is described in `apps/README.md`.
 Run the startup regression tests with:
 
 ```bash

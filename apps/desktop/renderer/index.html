@@ -205,7 +205,7 @@
     }
     window.signOut = signOut;
 
-    function loginScreen() {
+    function loginScreen(message) {
       document.getElementById("root").innerHTML = `
         <div class="brand">LabSynch</div>
         <div class="tag">Windows desktop alerts — rings for every bell alert</div>
@@ -219,8 +219,10 @@
         </div>
         <a class="sitelink ghost" style="color:#7f1d1d" href="${esc(SITE)}" target="_blank" rel="noopener"
            onclick="openSite(); return false;"> Just take me to the LabSynch site</a>
-        <div class="foot">Uses the same account as the LabSynch web app.<br>Runs in the system tray and starts with Windows.</div>
+        <div class="foot">Uses the same account as the LabSynch web app.<br>Runs in the system tray and starts with Windows.<br>You stay signed in until you sign out.</div>
       `;
+      // e.g. the session was ended on the site / by an administrator
+      if (message) document.getElementById("err").textContent = String(message);
       const btn = document.getElementById("btn");
       const go = async () => {
         if (!L || !L.signIn) {
@@ -283,9 +285,10 @@
         } else {
           loginScreen();
         }
-        // Reflect a sign-out that happened from the tray menu.
+        // Reflect a sign-out from the tray menu, a session the server confirmed
+        // is gone (with its reason), or a sign-in adopted from the Site tab.
         if (L.onState) L.onState((st) => {
-          if (st && !st.signedIn) { window.myName = ""; window.myEmail = ""; loginScreen(); }
+          if (st && !st.signedIn) { window.myName = ""; window.myEmail = ""; loginScreen(st.reason || ""); }
           else if (st && st.signedIn) { window.myName = st.name || ""; window.myEmail = st.email || ""; home(); }
         });
       } catch (e) {

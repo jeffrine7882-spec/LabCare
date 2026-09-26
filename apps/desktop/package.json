@@ -1,6 +1,6 @@
 {
   "name": "labcare-desktop",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "LabSynch desktop alerts for Windows \u2014 rings for every bell notification from the system tray, and opens the LabSynch site.",
   "main": "main.js",
   "author": "LabSynch",

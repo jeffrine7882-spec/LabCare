@@ -80,10 +80,26 @@ public class MainActivity extends Activity {
     private final List<Notif> notifs = new ArrayList<>();
     private boolean notifsLoading = false;
 
+    /**
+     * The session can end outside this screen's own buttons: the relay drops a
+     * token the API repeatedly confirmed dead, or the site bridge signs in /
+     * out. Re-render the native screens so "Signed in as" never lies. (Held in
+     * a field: the preference manager only keeps listeners weakly.)
+     */
+    private final SharedPreferences.OnSharedPreferenceChangeListener sessionWatcher =
+            (p, key) -> {
+                if (!"token".equals(key)) return;
+                if (!"site".equals(screen)) render();
+            };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("labcare", MODE_PRIVATE);
+        prefs.registerOnSharedPreferenceChangeListener(sessionWatcher);
+        if (getIntent() != null && "home".equals(getIntent().getStringExtra("screen"))) {
+            screen = "home";            // e.g. tapped the "Signed out of LabSynch" notification
+        }
 
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -114,6 +130,22 @@ public class MainActivity extends Activity {
         }
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 100);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        try { prefs.unregisterOnSharedPreferenceChangeListener(sessionWatcher); } catch (Exception ignored) { }
+        super.onDestroy();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null && "home".equals(intent.getStringExtra("screen"))) {
+            screen = "home";
+            render();
         }
     }
 
@@ -384,12 +416,15 @@ public class MainActivity extends Activity {
         return w;
     }
 
+    /** The site session cookie: 400 days (the WebView's cap); re-issued by the site on every visit. */
+    private static final long SITE_COOKIE_MAX_AGE_S = 400L * 24 * 3600;
+
     /** Session cookie name matches the web app's HttpOnly auth cookie. */
     private String cookieValue() {
         String tok = prefs.getString("token", "");
         return tok.isEmpty()
                 ? "labcare_token=; Path=/; Max-Age=0"
-                : "labcare_token=" + tok + "; Path=/; Secure";
+                : "labcare_token=" + tok + "; Path=/; Secure; Max-Age=" + SITE_COOKIE_MAX_AGE_S;
     }
 
     private void syncSiteSession() {
@@ -439,9 +474,44 @@ public class MainActivity extends Activity {
 
     /**
      * Saves blob downloads (e.g. PDF service reports) from the in-app site and
-     * hands them to the system viewer via {@link FilesProvider}.
+     * hands them to the system viewer via {@link FilesProvider}, and mirrors a
+     * sign-in / sign-out the user makes INSIDE the site into this app, so the
+     * phone alerts follow the site session without a second sign-in and a
+     * manual sign-out on the site is a sign-out here too. (The web app calls
+     * these only when the bridge exists; they are no-ops in a browser.)
      */
     private class SiteBridge {
+        @JavascriptInterface
+        public void signedIn(final String token, final String email, final String name) {
+            if (token == null || token.length() < 3) return;
+            runOnUiThread(() -> {
+                if (token.equals(prefs.getString("token", ""))) return;
+                prefs.edit()
+                        .putString("token", token)
+                        .putString("email", email == null ? "" : email)
+                        .putString("name", name == null ? "" : name)
+                        .apply();
+                notifs.clear();
+                syncSiteSession();          // cookie ← the new token, no reload needed
+                ensureRelayRunning();
+                toast("Phone alerts linked to your site session");
+            });
+        }
+
+        @JavascriptInterface
+        public void signedOut(final String token) {
+            runOnUiThread(() -> {
+                String cur = prefs.getString("token", "");
+                if (cur.isEmpty()) return;
+                // only the session this app shares with the site ends it here
+                if (token != null && !token.isEmpty() && !token.equals(cur)) return;
+                prefs.edit().remove("token").remove("email").remove("name").remove("uid").apply();
+                notifs.clear();
+                syncSiteSession();          // the site already cleared its own copy
+                stopRelay();
+            });
+        }
+
         @JavascriptInterface
         public void save(final String name, final String b64, final String mime) {
             try {

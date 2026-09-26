@@ -2,8 +2,8 @@
 
 | App | Installer | Where |
 |---|---|---|
-| **Android** | `LabSynch-Alerts-v1.4.apk` | `../Release/android/` (also on the GitHub [Releases](../../releases) page) |
-| **Windows** | `LabSynch-Alerts-Setup-1.3.0.exe` | `../Release/windows/` |
+| **Android** | `LabSynch-Alerts-v1.5.apk` | `../Release/android/` (also on the GitHub [Releases](../../releases) page) |
+| **Windows** | `LabSynch-Alerts-Setup-1.4.0.exe` | `../Release/windows/` |
 
 Both sign in with the **same account as the web app**
 (`https://labcare.insforge.site`) and ring the LabSynch chime + show a
@@ -34,6 +34,20 @@ asleep or rebooted — not only while their windows are open:
   straight to the tray, and a no-op when already running. Quit asks for
   confirmation, and the uninstaller removes the watchdog task and the
   auto-start entry.
+
+## Signed in until you sign out (v1.5 APK / 1.4.0 EXE)
+Both apps (and the web app) keep the session until the user signs out. A
+server restart or deploy, an outage, a proxy/captive-portal 401 or a network
+blip never signs anyone out any more — the server no longer wipes sessions on
+boot, sessions never expire, and the clients treat a 401 as a verdict only when
+the LabSynch API itself repeats it (JSON `Not authenticated`, re-checked against
+`/api/me`) for six consecutive polls (≈ 1 minute). That single case — the user
+signed out on the site, or an administrator removed the account — drops the
+dead token and shows a "Signed out of LabSynch — sign in again" notification
+instead of polling silently forever. A sign-in or sign-out made inside the Site
+tab is mirrored into the app (Android: JS bridge; Windows: the site's session
+cookie), and a manual sign-out in either app also ends the session on the
+server.
 
 Remaining honest limit: an explicit **Force stop** (Android) stops everything
 by OS design, and server-push ringing (app fully closed/force-stopped, or iOS)

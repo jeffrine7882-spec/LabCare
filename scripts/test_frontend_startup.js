@@ -88,7 +88,7 @@ test('hung session request paints immediately, times out, and keeps saved token'
 
 test('gateway failure offers retry on InsForge and retry restores saved session', async () => {
   let healthy = false;
-  const a = app(url => Promise.resolve(url === '/api/version' ? json({ version: '50' }) :
+  const a = app(url => Promise.resolve(url === '/api/version' ? json({ version: '52' }) :
     healthy ? json({ id: 1, role: 'customer', name: 'Test' }) : json({}, 503)));
   await a.context.started;
   assert.match(a.node('startupStatus').textContent, /temporarily unavailable/);
@@ -102,12 +102,48 @@ test('gateway failure offers retry on InsForge and retry restores saved session'
 });
 
 test('401 clears expired token and unlocks login without an outage warning', async () => {
-  const a = app(url => Promise.resolve(url === '/api/me' ? json({ error: 'Sign in' }, 401) : json({ version: '50' })));
+  const a = app(url => Promise.resolve(url === '/api/me' ? json({ error: 'Sign in' }, 401) : json({ version: '52' })));
   await a.context.started;
   assert.equal(a.context.localStorage.getItem('labcare_token'), null);
   assert.equal(a.node('startupStatus').textContent, '');
   assert.equal(a.node('startupRetry').classList.contains('hidden'), true);
   assert.equal(a.node('loginBtn').disabled, false);
+});
+
+test('a non-JSON 401/403 (proxy, captive portal) keeps the saved session and offers retry', async () => {
+  for (const status of [401, 403]) {
+    let intercepted = true;
+    const a = app(url => Promise.resolve(url === '/api/version' ? json({ version: '52' }) :
+      intercepted ? new Response('<html>Authorization Required</html>', { status, headers: { 'content-type': 'text/html' } })
+        : json({ id: 1, role: 'customer', name: 'Test' })));
+    await a.context.started;
+    assert.equal(a.context.localStorage.getItem('labcare_token'), 'saved-session', `status ${status}`);
+    assert.equal(a.run('API.token'), 'saved-session');
+    assert.equal(a.run('state.user'), null);
+    assert.notEqual(a.node('startupStatus').textContent, '');
+    assert.equal(a.node('startupRetry').classList.contains('hidden'), false);
+    // once the intermediary is out of the way the same token signs the user back in
+    intercepted = false;
+    await a.node('startupRetry').listeners.click();
+    assert.equal(a.run('state.user.id'), 1);
+    assert.equal(a.node('app').classList.contains('hidden'), false);
+  }
+});
+
+test('only the API\'s own JSON 401 carries the auth flag', async () => {
+  const a = app(url => Promise.resolve(url === '/api/me' ? json({ id: 1, role: 'customer', name: 'Test' }) : json({ version: '52' })));
+  await a.context.started;
+  a.context.fetch = () => Promise.resolve(json({ error: 'Not authenticated' }, 401));
+  await assert.rejects(a.run('API.get("/api/test")'), e => e.status === 401 && e.auth === true);
+  a.context.fetch = () => Promise.resolve(new Response('denied', { status: 401, headers: { 'content-type': 'text/plain' } }));
+  await assert.rejects(a.run('API.get("/api/test")'), e => e.status === 401 && !e.auth);
+  a.context.fetch = () => Promise.resolve(json({ error: 'Forbidden' }, 403));
+  await assert.rejects(a.run('API.get("/api/test")'), e => e.status === 403 && !e.auth);
+  // the manual sign-out is unaffected: it still discards the token
+  a.context.fetch = () => Promise.resolve(json({ ok: true }));
+  a.run('logout()');
+  assert.equal(a.run('API.token'), null);
+  assert.equal(a.context.localStorage.getItem('labcare_token'), null);
 });
 
 test('version endpoint stall cannot block a restored session', async () => {
@@ -140,7 +176,7 @@ test('HTML fallback and malformed session JSON never become a signed-in user', a
 });
 
 test('writes are not retried on timeout or gateway failures', async () => {
-  const a = app(url => Promise.resolve(url === '/api/me' ? json({}, 401) : json({ version: '50' })));
+  const a = app(url => Promise.resolve(url === '/api/me' ? json({}, 401) : json({ version: '52' })));
   await a.context.started;
   for (const mode of ['timeout', 'gateway']) {
     let count = 0;
@@ -151,7 +187,7 @@ test('writes are not retried on timeout or gateway failures', async () => {
 });
 
 test('GET retries transient gateway failures but not authentication failures', async () => {
-  const a = app(url => Promise.resolve(url === '/api/me' ? json({}, 401) : json({ version: '50' })));
+  const a = app(url => Promise.resolve(url === '/api/me' ? json({}, 401) : json({ version: '52' })));
   await a.context.started;
   let count = 0;
   a.context.fetch = () => Promise.resolve(++count < 3 ? json({}, 503) : json({ ok: true }));
