@@ -10,12 +10,12 @@
 :root {
   --bg: #f3f5f9;
   --card: #ffffff;
-  --ink: #0f172a;
-  --ink-soft: #64748b;
-  --line: #e2e8f0;
-  --brand: #0f766e;
-  --brand-2: #14b8a6;
-  --brand-soft: #ccfbf1;
+  --ink: #111111;
+  --ink-soft: #6b7280;
+  --line: #e5e7eb;
+  --brand: #b91c1c;
+  --brand-2: #111111;
+  --brand-soft: #fee2e2;
   --accent: #f59e0b;
   --danger: #dc2626;
   --danger-soft: #fee2e2;
@@ -206,7 +206,7 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
 
 /* ---------- Hero / greeting ---------- */
 .hero {
-  background: linear-gradient(135deg, #0f766e, #0d9488);
+  background: linear-gradient(135deg, #b91c1c, #7f1d1d);
   color: #fff; border-radius: 18px; padding: 18px; box-shadow: var(--shadow-lg);
   position: relative; overflow: hidden;
 }
@@ -308,7 +308,7 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
 /* ---------- Login ---------- */
 .login-screen {
   min-height: 100dvh; display: flex; align-items: center; justify-content: center;
-  padding: 24px; background: linear-gradient(160deg, #0f766e 0%, #134e4a 60%, #0c3b38 100%);
+  padding: 24px; background: linear-gradient(160deg, #b91c1c 0%, #450a0a 60%, #111111 100%);
   overflow-y: auto;
 }
 .login-screen.align-top { align-items: flex-start; }
@@ -340,9 +340,9 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
 .menu-item.danger { color: var(--danger); }
 .menu-item.create-new {
   border: 1.5px dashed var(--brand); background: var(--brand-soft);
-  color: #0f766e;
+  color: #b91c1c;
 }
-.menu-item.create-new .mi-arrow { color: #0f766e; font-weight: 800; }
+.menu-item.create-new .mi-arrow { color: #b91c1c; font-weight: 800; }
 .section-role { color: var(--ink-soft); font-size: 12px; }
 
 /* ---------- Empty state ---------- */
@@ -526,7 +526,7 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
   .side-create-btn {
     width: 100%; padding: 11px 12px; border-radius: 12px; cursor: pointer;
     border: 1.5px dashed var(--brand); background: var(--brand-soft);
-    color: #0f766e; font-weight: 700; font-size: 13.5px; text-align: left;
+    color: #b91c1c; font-weight: 700; font-size: 13.5px; text-align: left;
     transition: background .12s ease, transform .1s ease;
   }
   .side-create-btn:hover { background: #b8f3e6; transform: translateY(-1px); }
@@ -578,7 +578,7 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
   .login-brand {
     display: flex; flex-direction: column; justify-content: center;
     padding: 48px 42px; color: #fff;
-    background: linear-gradient(160deg, #0f766e, #0d9488);
+    background: linear-gradient(160deg, #b91c1c, #7f1d1d);
   }
   .login-brand .login-logo { text-align: left; font-size: 56px; }
   .login-brand .login-title { text-align: left; font-size: 30px; color: #fff; }

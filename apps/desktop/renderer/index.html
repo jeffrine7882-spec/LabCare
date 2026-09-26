@@ -5,46 +5,46 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LabSynch Alerts</title>
 <style>
-  :root { --teal:#0f766e; --teal-dark:#115e59; --ink:#111827; --soft:#6b7280; --bg:#f3f5f9; --border:#e5e7eb; }
+  :root { --brand:#b91c1c; --brand-dark:#7f1d1d; --ink:#111827; --soft:#6b7280; --bg:#f3f5f9; --border:#e5e7eb; }
   * { box-sizing:border-box; margin:0; padding:0; }
   body { font-family:-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); height:100vh; overflow:auto; }
   .wrap { padding:20px 18px; display:flex; flex-direction:column; min-height:100vh; }
-  .brand { font-size:28px; font-weight:800; color:var(--teal); text-align:center; letter-spacing:.5px; }
+  .brand { font-size:28px; font-weight:800; color:var(--brand); text-align:center; letter-spacing:.5px; }
   .tag { font-size:13px; color:var(--soft); text-align:center; margin:4px 0 14px; }
   .card { background:#fff; border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:12px; }
   label { display:block; font-size:13px; color:var(--soft); margin:12px 0 6px; font-weight:600; }
   input { width:100%; padding:12px; font-size:15px; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--ink); }
   button { width:100%; padding:13px; font-size:14px; font-weight:700; border:0; border-radius:12px; cursor:pointer; color:#fff; margin-top:10px; }
-  .primary { background:var(--teal); }
+  .primary { background:var(--brand); }
   .primary:disabled { opacity:.6; cursor:default; }
   .danger { background:#dc2626; }
-  .ghost { background:#e2f2f0; color:var(--teal-dark); }
+  .ghost { background:#fee2e2; color:var(--brand-dark); }
   .err { color:#dc2626; font-size:13px; margin-top:4px; }
   .muted { color:var(--soft); font-size:13px; }
   .row { display:flex; align-items:center; justify-content:space-between; }
-  .pill { background:#c7f2ec; color:var(--teal-dark); font-weight:700; font-size:12px; padding:4px 10px; border-radius:999px; }
+  .pill { background:#fecaca; color:var(--brand-dark); font-weight:700; font-size:12px; padding:4px 10px; border-radius:999px; }
   .foot { margin-top:auto; text-align:center; font-size:12px; color:var(--soft); padding-top:14px; line-height:1.6; }
   .tabbar { display:flex; gap:4px; margin-bottom:14px; }
-  .tab { flex:1; text-align:center; font-size:12px; font-weight:700; padding:9px 0; border-radius:10px; color:var(--teal); background:#e2f2f0; cursor:pointer; border:0; margin:0; }
-  .tab.active { background:var(--teal); color:#fff; }
+  .tab { flex:1; text-align:center; font-size:12px; font-weight:700; padding:9px 0; border-radius:10px; color:var(--brand); background:#fee2e2; cursor:pointer; border:0; margin:0; }
+  .tab.active { background:var(--brand); color:#fff; }
   .notif { padding:10px 0; border-bottom:1px solid var(--border); cursor:pointer; }
   .notif:last-child { border-bottom:0; }
   .notif .t { font-size:14px; line-height:1.35; }
   .notif.unread .t { font-weight:700; color:var(--ink); }
   .notif.read .t { font-weight:400; color:var(--soft); }
   .notif .m { font-size:12px; color:#94a3b8; margin-top:3px; }
-  .dot { color:var(--teal); font-weight:800; margin-right:6px; }
+  .dot { color:var(--brand); font-weight:800; margin-right:6px; }
   .sound-opt { display:flex; align-items:center; gap:10px; padding:9px 0; cursor:pointer; }
-  .sound-opt input { width:auto; margin:0; accent-color:var(--teal); }
+  .sound-opt input { width:auto; margin:0; accent-color:var(--brand); }
   .empty { text-align:center; color:var(--soft); font-size:14px; padding:18px 0; }
   .hdr-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
-  .linkbtn { background:none; border:0; color:var(--teal); font-weight:700; font-size:13px; cursor:pointer; width:auto; margin:0; padding:0; }
+  .linkbtn { background:none; border:0; color:var(--brand); font-weight:700; font-size:13px; cursor:pointer; width:auto; margin:0; padding:0; }
   .url { font-size:12px; color:#94a3b8; text-align:center; margin-top:8px; word-break:break-all; }
   /* The site link is a real <a> as well as a button, so it still works if the
      IPC bridge is unavailable — the window is never a dead end. */
   a.sitelink { display:block; width:100%; padding:13px; font-size:14px; font-weight:700;
                border-radius:12px; text-align:center; text-decoration:none;
-               background:var(--teal); color:#fff; margin-top:10px; }
+               background:var(--brand); color:#fff; margin-top:10px; }
 </style>
 </head>
 <body>
@@ -217,7 +217,7 @@
           <input id="password" type="password" autocomplete="current-password" placeholder="••••••••">
           <button class="primary" id="btn">Sign in &amp; enable alerts</button>
         </div>
-        <a class="sitelink ghost" style="color:#115e59" href="${esc(SITE)}" target="_blank" rel="noopener"
+        <a class="sitelink ghost" style="color:#7f1d1d" href="${esc(SITE)}" target="_blank" rel="noopener"
            onclick="openSite(); return false;">🔬 Just take me to the LabSynch site</a>
         <div class="foot">Uses the same account as the LabSynch web app.<br>Runs in the system tray and starts with Windows.</div>
       `;

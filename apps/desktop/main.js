@@ -407,12 +407,12 @@ function showLoadFailure(target, title, message, retryUrl) {
          font:15px/1.55 -apple-system,"Segoe UI",Roboto,sans-serif; }
   .box { max-width:520px; margin:0 auto; padding:44px 26px; text-align:center; }
   .logo { font-size:40px; }
-  h1 { font-size:20px; margin:12px 0 6px; color:#0f766e; }
+  h1 { font-size:20px; margin:12px 0 6px; color:#b91c1c; }
   p { color:#6b7280; font-size:14px; margin:0 0 20px; word-break:break-word; }
   a.btn { display:block; padding:13px; border-radius:12px; font-weight:700;
           font-size:14px; text-decoration:none; margin-bottom:10px; }
-  a.primary { background:#0f766e; color:#fff; }
-  a.ghost { background:#e2f2f0; color:#115e59; }
+  a.primary { background:#b91c1c; color:#fff; }
+  a.ghost { background:#fee2e2; color:#7f1d1d; }
   .url { font-size:12px; color:#94a3b8; margin-top:14px; word-break:break-all; }
 </style></head>
 <body><div class="box">

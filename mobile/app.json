@@ -7,7 +7,7 @@
     "userInterfaceStyle": "light",
     "scheme": "labcare",
     "icon": "./assets/icon.png",
-    "splash": { "backgroundColor": "#0f766e" },
+    "splash": { "backgroundColor": "#b91c1c" },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.insforge.labcare"
@@ -20,7 +20,7 @@
       [
         "expo-notifications",
         {
-          "color": "#0f766e",
+          "color": "#b91c1c",
           "icon": "./assets/notif-icon.png",
           "sounds": ["./assets/alert.wav"]
         }

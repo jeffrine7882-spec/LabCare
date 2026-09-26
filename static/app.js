@@ -1117,7 +1117,7 @@ async function refreshBreakdowns() {
 
 function breakdownCard(b) {
   const passed = isCust() ? "" : `<span class="mono">${esc(b.code)}</span>`;
-  const sn = b.equipment_serial ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(b.equipment_serial)}</span>` : "";
+  const sn = b.equipment_serial ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11px;font-weight:600;background:var(--brand-soft,#fee2e2);color:var(--brand,#b91c1c)">S/N: ${esc(b.equipment_serial)}</span>` : "";
   const scope = isCust() ? "" : (b.customer_name ? "<b>" + esc(b.customer_name) + "</b> · " : "");
   return `
     <div class="item" onclick="navigate('breakdownDetail',{id:${b.id}})">
@@ -1168,7 +1168,7 @@ function breakdownDetailHtml(b) {
           ${badge("priority", b.priority)}
         </div>
         <h2 style="font-size:17px;line-height:1.35">${esc(b.equipment_name || "Equipment")}</h2>
-        ${b.equipment_serial ? `<div style="margin-top:4px"><span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(b.equipment_serial)}</span></div>` : ""}
+        ${b.equipment_serial ? `<div style="margin-top:4px"><span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#fee2e2);color:var(--brand,#b91c1c)">S/N: ${esc(b.equipment_serial)}</span></div>` : ""}
         <div class="item-sub" style="margin-top:6px">${esc(b.customer_name || "")}</div>
       </div>
     </div>
@@ -1328,7 +1328,7 @@ function equipmentCard(e) {
     ? ""
     : `${esc(e.customer_name || "")} · ${esc(e.location_name || e.department_name || "—")}`;
   const snBadge = e.serial_number
-    ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(e.serial_number)}</span>`
+    ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#fee2e2);color:var(--brand,#b91c1c)">S/N: ${esc(e.serial_number)}</span>`
     : `<span class="badge" style="font-size:11.5px;background:var(--bg);color:var(--ink-soft)">No S/N</span>`;
   const details = [
     e.model ? `Model: ${esc(e.model)}` : null,
@@ -1369,7 +1369,7 @@ async function viewEquipmentDetail(v) {
         <div class="card" style="margin-top:8px">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <h2 style="font-size:18px;margin:0">${esc(e.name)}</h2>
-            ${e.serial_number ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:12px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(e.serial_number)}</span>` : `<span class="badge" style="font-size:12px;background:var(--bg);color:var(--ink-soft)">No S/N</span>`}
+            ${e.serial_number ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:12px;font-weight:600;background:var(--brand-soft,#fee2e2);color:var(--brand,#b91c1c)">S/N: ${esc(e.serial_number)}</span>` : `<span class="badge" style="font-size:12px;background:var(--bg);color:var(--ink-soft)">No S/N</span>`}
           </div>
           <div class="item-sub mono" style="margin-top:4px">${esc(e.model ? "Model: " + e.model : "No model specified")}</div>
           <div class="item-meta" style="margin-top:8px">
@@ -1408,7 +1408,7 @@ async function viewOrg(v, tab) {
     ? (isAdmin() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add organization</button>` : "")
     : (isTech() ? `<button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location/department</button>` : "");
   v.innerHTML = `
-    <div class="hero" style="background:linear-gradient(135deg,#134e4a,#0f766e)">
+    <div class="hero" style="background:linear-gradient(135deg,#450a0a,#b91c1c)">
       <h2>Organizations</h2>
       <p>Organizations and locations/departments in one place.</p>
     </div>

@@ -39,7 +39,7 @@ import * as Notifications from "expo-notifications";
 const API_BASE = Constants.expoConfig?.extra?.apiBase || "https://labcare.insforge.site";
 
 const COLORS = {
-  teal: "#0f766e",
+  teal: "#b91c1c",
   tealDark: "#115e59",
   ink: "#111827",
   inkSoft: "#6b7280",
