@@ -26,7 +26,7 @@
   <meta name="twitter:description" content="Lab synchronization platform for complaints and breakdowns.">
   <meta name="twitter:image" content="/og-image.png">
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="/styles.css?v=19">
+  <link rel="stylesheet" href="/styles.css?v=20">
 </head>
 <body>
   <div id="app" class="hidden">
@@ -119,17 +119,24 @@
           </label>
           <div id="jnCustomerBlock">
             <label class="field"><span>Organization *</span>
-              <select id="jnCustomer" onchange="onJoinCust()"><option value="">— Select your organization —</option></select>
+              <select id="jnCustomer"><option value="">— Loading organizations… —</option></select>
             </label>
-            <div id="jnNewCustomerWrap" class="hidden" style="margin-top:6px">
+            <div class="join-actions">
+              <button type="button" class="link-btn" id="jnNewCustomerBtn">＋ Create new organization</button>
+            </div>
+            <div id="jnLookupError" class="join-hint hidden" role="alert"></div>
+            <div id="jnNewCustomerWrap" class="hidden">
               <label class="field"><span>New organization name *</span>
                 <input id="jnNewCustomer" placeholder="e.g. Hospital/Clinic">
               </label>
             </div>
             <label class="field"><span>Location/Department *</span>
-              <select id="jnLocation" onchange="onJoinLoc()"><option value="">— Select location/department —</option></select>
+              <select id="jnLocation" disabled><option value="">— Select your organization first —</option></select>
             </label>
-            <div id="jnNewLocationWrap" class="hidden" style="margin-top:6px">
+            <div class="join-actions">
+              <button type="button" class="link-btn" id="jnNewLocationBtn">＋ Create new location/department</button>
+            </div>
+            <div id="jnNewLocationWrap" class="hidden">
               <label class="field"><span>New location/department name *</span>
                 <input id="jnNewLocation" placeholder="e.g. Molecular Lab">
               </label>
@@ -156,6 +163,6 @@
   <!-- Modal host -->
   <div id="modalHost" class="modal-host hidden"></div>
 
-  <script src="/app.js?v=50"></script>
+  <script src="/app.js?v=51"></script>
 </body>
 </html>

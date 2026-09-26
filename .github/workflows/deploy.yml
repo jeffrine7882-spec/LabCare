@@ -231,5 +231,5 @@ jobs:
         if: always() && steps.frontend_tests.outcome == 'success' && steps.schema_tests.outcome == 'success' && steps.link_project.outcome == 'success'
         run: |
           curl --retry 3 --retry-delay 5 --retry-all-errors -fsS -m 30 -o /dev/null "$SITE_URL/"
-          curl --retry 3 --retry-delay 5 --retry-all-errors -fsS -m 30 -o /dev/null "$SITE_URL/app.js?v=50"
+          curl --retry 3 --retry-delay 5 --retry-all-errors -fsS -m 30 -o /dev/null "$SITE_URL/app.js?v=51"
           echo "frontend live — $SITE_URL"

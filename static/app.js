@@ -3986,94 +3986,203 @@ function onFab() {
 }
 
 // ---------------------------------------------------------------- Join request
-async function loadJoinOptions() {
-  try {
-    const opts = await API.get("/api/lookup/options");
-    const custSel = $("#jnCustomer");
-    custSel.innerHTML = `<option value="">— Select your organization —</option>` +
-      opts.customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("") +
-      `<option value="__new__">＋ Create new organization…</option>`;
-    state.signup = { customers: opts.customers, locations: opts.locations, departments: opts.departments };
-  } catch (e) { /* ignore */ }
+// The public "Request an account" form. Its Organization and Location/Department
+// pickers are fed by /api/lookup/options (state.signup). Design rules, learned
+// from the field:
+//   * every path stays usable when the lookup is slow, empty or failing — the
+//     "＋ Create new …" buttons are real buttons under each picker, not only an
+//     option hidden at the bottom of a native dropdown;
+//   * the location picker says why it is waiting ("select your organization
+//     first") instead of presenting an empty list;
+//   * ids are posted as numbers, and department_id only when one really matches
+//     the chosen location (the server resolves it otherwise).
+const JOIN_NEW = "__new__";
+let joinOptionsLoading = null;
+
+function joinError(msg) {
+  const el = $("#joinError");
+  if (!el) return;
+  if (!msg) { el.classList.add("hidden"); el.textContent = ""; return; }
+  el.textContent = msg;
+  el.classList.remove("hidden");
 }
 
-function onJoinCust() {
-  const cust = $("#jnCustomer").value;
-  const isNewCust = cust === "__new__";
-  if ($("#jnNewCustomerWrap")) {
-    $("#jnNewCustomerWrap").classList.toggle("hidden", !isNewCust);
-    if (isNewCust && $("#jnNewCustomer")) $("#jnNewCustomer").focus();
-  }
-  if (!isNewCust && $("#jnNewCustomer")) $("#jnNewCustomer").value = "";
+function joinLookupError(msg) {
+  const el = $("#jnLookupError");
+  if (!el) return;
+  if (!msg) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.innerHTML = `${esc(msg)} <a href="#" id="jnLookupRetry">Retry</a>`;
+  el.classList.remove("hidden");
+  const retry = $("#jnLookupRetry");
+  if (retry) retry.addEventListener("click", (e) => { e.preventDefault(); loadJoinOptions(); });
+}
 
-  if (isNewCust) {
-    // When creating a new organization, user can choose from existing location/department names in the system or create a new one
-    const allNames = [
-      ...(state.signup?.locations || []).map((l) => l.name),
-      ...(state.signup?.departments || []).map((d) => d.name),
-    ]
-      .map((n) => (n || "").trim())
-      .filter(Boolean);
-    const distinctNames = Array.from(new Set(allNames)).sort((a, b) => a.localeCompare(b));
+function renderJoinCustomers(keep) {
+  const sel = $("#jnCustomer");
+  if (!sel) return;
+  const list = state.signup?.customers || [];
+  sel.innerHTML =
+    `<option value="">${list.length ? "— Select your organization —" : "— No organizations yet — create one below —"}</option>` +
+    list.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("") +
+    `<option value="${JOIN_NEW}">＋ Create new organization…</option>`;
+  // Keep the user's pick across a reload/retry; a pick that no longer exists falls back to the placeholder.
+  sel.value = keep && Array.from(sel.options).some((o) => o.value === keep) ? keep : "";
+}
 
-    let opts = `<option value="">— Select location/department —</option>`;
-    if (distinctNames.length) {
-      opts += distinctNames.map((name) => `<option value="name:${esc(name)}">${esc(name)}</option>`).join("");
+async function loadJoinOptions() {
+  if (joinOptionsLoading) return joinOptionsLoading;
+  const sel = $("#jnCustomer");
+  const keep = sel ? sel.value : "";
+  // A reload (Retry, re-opening the panel) must not throw away what the user
+  // already picked or typed for the location.
+  const keepLoc = $("#jnLocation")?.value || "";
+  const keepLocName = $("#jnNewLocation")?.value || "";
+  joinLookupError("");
+  if (sel && !state.signup) sel.innerHTML = `<option value="">— Loading organizations… —</option>`;
+  joinOptionsLoading = (async () => {
+    try {
+      const opts = await API.get("/api/lookup/options", { timeoutMs: 10000 });
+      state.signup = {
+        customers: opts.customers || [],
+        locations: opts.locations || [],
+        departments: opts.departments || [],
+      };
+    } catch (e) {
+      // Never leave dead dropdowns behind: an empty list still offers "create new".
+      if (!state.signup) state.signup = { customers: [], locations: [], departments: [] };
+      joinLookupError("Couldn't load the organization list — " + (e.message || "network error") +
+        " You can still create a new organization below.");
+    } finally {
+      joinOptionsLoading = null;
     }
-    opts += `<option value="__new__">＋ Create new location/department…</option>`;
-    $("#jnLocation").innerHTML = opts;
-    $("#jnLocation").value = "";
-    if ($("#jnNewLocationWrap")) $("#jnNewLocationWrap").classList.add("hidden");
-    if ($("#jnNewLocation")) $("#jnNewLocation").value = "";
-    if ($("#jnDepartment")) $("#jnDepartment").innerHTML = `<option value="">— Select department —</option>`;
+    renderJoinCustomers(keep);
+    onJoinCust(false);
+    const locSel = $("#jnLocation");
+    if (keep && keepLoc && $("#jnCustomer")?.value === keep && locSel &&
+        Array.from(locSel.options).some((o) => o.value === keepLoc)) {
+      locSel.value = keepLoc;
+      onJoinLoc(false);
+      if (keepLoc === JOIN_NEW && keepLocName && $("#jnNewLocation")) $("#jnNewLocation").value = keepLocName;
+    }
+  })();
+  return joinOptionsLoading;
+}
+
+// Rebuild the Location/Department picker for the current Organization choice.
+// `focusInput` is true for a real user change (may open the keyboard), false
+// when called programmatically (data arrived, form reset).
+function onJoinCust(focusInput = true) {
+  const custSel = $("#jnCustomer");
+  const locSel = $("#jnLocation");
+  if (!custSel || !locSel) return;
+  const cust = custSel.value;
+  const isNewCust = cust === JOIN_NEW;
+  const newWrap = $("#jnNewCustomerWrap");
+  if (newWrap) newWrap.classList.toggle("hidden", !isNewCust);
+  const newBtn = $("#jnNewCustomerBtn");
+  if (newBtn) newBtn.setAttribute("aria-pressed", isNewCust ? "true" : "false");
+  const newInput = $("#jnNewCustomer");
+  if (newInput) {
+    if (!isNewCust) newInput.value = "";
+    else if (focusInput) newInput.focus();
+  }
+
+  const locations = state.signup?.locations || [];
+  const departments = state.signup?.departments || [];
+  let opts;
+  let autoNew = false; // nothing to pick → jump straight to "create new"
+  if (!cust) {
+    opts = `<option value="">— Select your organization first —</option>`;
+  } else if (isNewCust) {
+    // A new organization may reuse a location/department name already in the system, or a new one.
+    const names = Array.from(new Set(
+      [...locations, ...departments].map((x) => (x.name || "").trim()).filter(Boolean)
+    )).sort((a, b) => a.localeCompare(b));
+    opts = `<option value="">— Select location/department —</option>` +
+      names.map((n) => `<option value="name:${esc(n)}">${esc(n)}</option>`).join("") +
+      `<option value="${JOIN_NEW}">＋ Create new location/department…</option>`;
+    autoNew = !names.length;
+  } else {
+    const locs = locations.filter((l) => String(l.customer_id) === String(cust));
+    opts = `<option value="">${locs.length ? "— Select location/department —" : "— No locations yet — create one below —"}</option>` +
+      locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("") +
+      `<option value="${JOIN_NEW}">＋ Create new location/department…</option>`;
+    autoNew = !locs.length;
+  }
+  locSel.innerHTML = opts;
+  locSel.disabled = !cust;
+  locSel.value = autoNew ? JOIN_NEW : "";
+  onJoinLoc(false);
+}
+
+function onJoinLoc(focusInput = true) {
+  const locSel = $("#jnLocation");
+  if (!locSel) return;
+  const loc = locSel.value;
+  const isNew = loc === JOIN_NEW;
+  const wrap = $("#jnNewLocationWrap");
+  if (wrap) wrap.classList.toggle("hidden", !isNew);
+  const btn = $("#jnNewLocationBtn");
+  if (btn) btn.setAttribute("aria-pressed", isNew ? "true" : "false");
+  const input = $("#jnNewLocation");
+  if (input) {
+    if (!isNew) input.value = "";
+    else if (focusInput) input.focus();
+  }
+  const deptSel = $("#jnDepartment");
+  if (!deptSel) return;
+  const dept = (!isNew && loc && !loc.startsWith("name:"))
+    ? (state.signup?.departments || []).find((d) => String(d.location_id) === String(loc))
+    : null;
+  // Only a department that really belongs to the chosen location is carried
+  // along; otherwise the server derives it (never invent an id here).
+  deptSel.innerHTML = dept
+    ? `<option value="${dept.id}" selected>${esc(dept.name || "Department")}</option>`
+    : `<option value="">— Select department —</option>`;
+  deptSel.value = dept ? String(dept.id) : "";
+}
+
+// "＋ Create new organization" button: same as picking the option in the list.
+function startNewJoinCustomer() {
+  const sel = $("#jnCustomer");
+  if (!sel) return;
+  if (!Array.from(sel.options).some((o) => o.value === JOIN_NEW)) {
+    sel.insertAdjacentHTML("beforeend", `<option value="${JOIN_NEW}">＋ Create new organization…</option>`);
+  }
+  sel.value = JOIN_NEW;
+  joinError("");
+  onJoinCust(true);
+}
+
+// "＋ Create new location/department" button. Needs an organization context
+// (existing or new) so the server knows where to create it.
+function startNewJoinLocation() {
+  const custSel = $("#jnCustomer");
+  const locSel = $("#jnLocation");
+  if (!custSel || !locSel) return;
+  if (!custSel.value) {
+    joinError("Select your organization first (or create a new one) — the location/department is created under it.");
+    custSel.focus();
     return;
   }
-
-  const locs = cust ? (state.signup?.locations || []).filter((l) => String(l.customer_id) === String(cust)) : [];
-  let opts;
-  if (!cust) {
-    opts = `<option value="">— Select organization first —</option>`;
-  } else {
-    opts = `<option value="">— Select location/department —</option>`;
-    if (locs.length) {
-      opts += locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
-    } else {
-      opts += `<option value="" disabled>— No locations yet —</option>`;
-    }
-    opts += `<option value="__new__">＋ Create new location/department…</option>`;
+  if (!Array.from(locSel.options).some((o) => o.value === JOIN_NEW)) {
+    locSel.insertAdjacentHTML("beforeend", `<option value="${JOIN_NEW}">＋ Create new location/department…</option>`);
   }
-  $("#jnLocation").innerHTML = opts;
-  $("#jnLocation").value = "";
-  if ($("#jnNewLocationWrap")) $("#jnNewLocationWrap").classList.add("hidden");
-  if ($("#jnNewLocation")) $("#jnNewLocation").value = "";
-  if ($("#jnDepartment")) $("#jnDepartment").innerHTML = `<option value="">— Select department —</option>`;
-}
-
-function onJoinLoc() {
-  const loc = $("#jnLocation").value;
-  const isNew = loc === "__new__";
-  if ($("#jnNewLocationWrap")) {
-    $("#jnNewLocationWrap").classList.toggle("hidden", !isNew);
-    if (isNew && $("#jnNewLocation")) $("#jnNewLocation").focus();
-  }
-  if (!isNew && $("#jnNewLocation")) {
-    $("#jnNewLocation").value = "";
-  }
-  if (!isNew && loc && !loc.startsWith("name:")) {
-    const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(loc));
-    const dId = depts[0]?.id || loc;
-    if ($("#jnDepartment")) {
-      $("#jnDepartment").innerHTML = `<option value="${dId}" selected>— Select department —</option>`;
-      $("#jnDepartment").value = String(dId);
-    }
-  } else if ($("#jnDepartment")) {
-    $("#jnDepartment").innerHTML = `<option value="">— Select department —</option>`;
-  }
+  locSel.disabled = false;
+  locSel.value = JOIN_NEW;
+  joinError("");
+  onJoinLoc(true);
 }
 
 function onJoinRoleChange() {
   const isCust = $("#jnRole").value === "customer";
   $("#jnCustomerBlock").classList.toggle("hidden", !isCust);
+}
+
+function resetJoinPickers() {
+  const custSel = $("#jnCustomer");
+  if (custSel) custSel.value = "";
+  onJoinCust(false); // hides both "new …" inputs, clears them and re-gates the location picker
 }
 
 $("#showJoinBtn").addEventListener("click", () => {
@@ -4085,10 +4194,14 @@ $("#showJoinBtn").addEventListener("click", () => {
 });
 
 $("#jnRole").addEventListener("change", onJoinRoleChange);
+$("#jnCustomer").addEventListener("change", () => { joinError(""); onJoinCust(true); });
+$("#jnLocation").addEventListener("change", () => { joinError(""); onJoinLoc(true); });
+$("#jnNewCustomerBtn").addEventListener("click", startNewJoinCustomer);
+$("#jnNewLocationBtn").addEventListener("click", startNewJoinLocation);
 
 $("#joinForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  $("#joinError").classList.add("hidden");
+  joinError("");
   $("#joinOk").classList.add("hidden");
   const role = $("#jnRole").value;
   const body = {
@@ -4099,76 +4212,66 @@ $("#joinForm").addEventListener("submit", async (e) => {
     role,
   };
   if (!body.name || !body.email || !body.password) {
-    const el = $("#joinError");
-    el.textContent = "Please fill in your full name, email and password";
-    el.classList.remove("hidden");
+    joinError("Please fill in your full name, email and password");
     return;
   }
   if (!body.phone) {
-    const el = $("#joinError");
-    el.textContent = "Please enter your phone number";
-    el.classList.remove("hidden");
+    joinError("Please enter your phone number");
     return;
   }
   if (role === "customer") {
     const custVal = $("#jnCustomer").value;
-    if (custVal === "__new__") {
+    if (custVal === JOIN_NEW) {
       const newCustName = ($("#jnNewCustomer")?.value || "").trim();
       if (!newCustName) {
-        const el = $("#joinError");
-        el.textContent = "Please enter the new organization name";
-        el.classList.remove("hidden");
+        joinError("Please enter the new organization name");
+        $("#jnNewCustomer")?.focus();
         return;
       }
       body.new_customer_name = newCustName;
     } else if (custVal) {
-      body.customer_id = custVal;
+      body.customer_id = parseInt(custVal, 10);
     } else {
-      const el = $("#joinError");
-      el.textContent = "Please select or create an organization";
-      el.classList.remove("hidden");
+      joinError("Please select your organization, or use “＋ Create new organization”");
+      $("#jnCustomer").focus();
       return;
     }
 
     const locVal = $("#jnLocation").value;
-    if (locVal === "__new__") {
+    if (locVal === JOIN_NEW) {
       const newLocName = ($("#jnNewLocation")?.value || "").trim();
       if (!newLocName) {
-        const el = $("#joinError");
-        el.textContent = "Please enter the new location/department name";
-        el.classList.remove("hidden");
+        joinError("Please enter the new location/department name");
+        $("#jnNewLocation")?.focus();
         return;
       }
       body.new_location_name = newLocName;
     } else if (locVal.startsWith("name:")) {
       body.new_location_name = locVal.slice(5).trim();
     } else if (locVal) {
-      body.location_id = locVal;
-      const depts = (state.signup?.departments || []).filter((d) => String(d.location_id) === String(body.location_id));
-      body.department_id = $("#jnDepartment")?.value || depts[0]?.id || body.location_id;
+      body.location_id = parseInt(locVal, 10);
+      const deptVal = $("#jnDepartment")?.value || "";
+      if (deptVal) body.department_id = parseInt(deptVal, 10);
     } else {
-      const el = $("#joinError");
-      el.textContent = "Please select or create a location/department";
-      el.classList.remove("hidden");
+      joinError("Please select your location/department, or use “＋ Create new location/department”");
+      $("#jnLocation").focus();
       return;
     }
   }
+  const submitBtn = $("#joinForm button[type=submit]");
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Submitting…"; }
   try {
     const res = await API.post("/api/signup", body);
     $("#joinOk").textContent = res.message || "Submitted for approval ✓";
     $("#joinOk").classList.remove("hidden");
     $("#joinForm").reset();
-    if ($("#jnNewCustomerWrap")) $("#jnNewCustomerWrap").classList.add("hidden");
-    if ($("#jnNewCustomer")) $("#jnNewCustomer").value = "";
-    if ($("#jnNewLocationWrap")) $("#jnNewLocationWrap").classList.add("hidden");
-    if ($("#jnNewLocation")) $("#jnNewLocation").value = "";
     $("#jnCustomerBlock").classList.remove("hidden");
-    onJoinCust();
-    loadJoinOptions();
+    resetJoinPickers();
+    loadJoinOptions(); // a just-created organization/location is now offered to the next requester
   } catch (err) {
-    const el = $("#joinError");
-    el.textContent = err.message || "Submission failed";
-    el.classList.remove("hidden");
+    joinError(err.message || "Submission failed");
+  } finally {
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Submit for approval"; }
   }
 });
 
@@ -4242,11 +4345,11 @@ Object.assign(window, {
   onCustPickComplaint, onLocPickComplaint,
   onCustPickBreakdown, onLocPickBreakdown,
   onUserCustPick, onUserLocPick,
-  onJoinCust, onJoinLoc, onJoinRoleChange, loadJoinOptions, primeAudio,
+  onJoinCust, onJoinLoc, onJoinRoleChange, loadJoinOptions, startNewJoinCustomer, startNewJoinLocation, primeAudio,
   togglePushAlerts, syncPushAlerts, pushStateLabel,
 });
 
-const BUILD_VERSION = "50";
+const BUILD_VERSION = "51";
 
 async function checkVersion() {
   // Advisory only: a version endpoint outage must not block sign-in/session

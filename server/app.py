@@ -795,16 +795,24 @@ def equipment_scope(c, equipment_id):
 
 def _validate_loc_dept(c, customer_id, location_id, department_id):
     """Ensure a location_id (and department_id) belong to the given customer.
-    Returns (None, None) on success or (error_json, code)."""
+    Returns (None, None) on success or (error_json, code).
+
+    Ids are normalised with _id() on both sides: callers pass what the browser
+    posted (<select> values are strings, "5"), the rows hold ints, and a bare
+    `!=` between the two is always True — which is how the public sign-up form
+    rejected every existing location it offered."""
+    customer_id = _id(customer_id)
+    location_id = _id(location_id)
+    department_id = _id(department_id)
     if location_id:
         loc = c.execute("SELECT customer_id FROM locations WHERE id=?", (location_id,)).fetchone()
-        if not loc or loc["customer_id"] != customer_id:
+        if not loc or _id(loc["customer_id"]) != customer_id:
             return jsonify({"error": "Location does not belong to the selected organization"}), 400
     if department_id:
         dept = c.execute("SELECT customer_id, location_id FROM departments WHERE id=?", (department_id,)).fetchone()
-        if not dept or dept["customer_id"] != customer_id:
+        if not dept or _id(dept["customer_id"]) != customer_id:
             return jsonify({"error": "Department does not belong to the selected organization"}), 400
-        if location_id and dept["location_id"] != location_id:
+        if location_id and _id(dept["location_id"]) != location_id:
             return jsonify({"error": "Department is not within the selected location"}), 400
     return None, None
 
@@ -1367,9 +1375,11 @@ def signup():
     if c.execute("SELECT id FROM onboarding_apps WHERE lower(email)=? AND status='pending'", (email,)).fetchone():
         c.close()
         return jsonify({"error": "A request for this email is already awaiting approval"}), 409
-    customer_id = b.get("customer_id") or None
-    location_id = b.get("location_id") or None
-    department_id = b.get("department_id") or None
+    # The form posts <select> values, i.e. strings — normalise to ints up front
+    # so the ownership checks and inserts below see the same type the DB returns.
+    customer_id = _id(b.get("customer_id"))
+    location_id = _id(b.get("location_id"))
+    department_id = _id(b.get("department_id"))
     new_cust_name = (b.get("new_customer_name") or b.get("new_organization_name") or b.get("new_customer") or "").strip()
     new_loc_name = (b.get("new_location_name") or b.get("new_location") or "").strip()
     # Set when this signup creates an organization that did not exist before:
@@ -5145,7 +5155,7 @@ def portal_events(token):
 # --------------------------------------------------------------------------
 # Version check
 # --------------------------------------------------------------------------
-APP_VERSION = "50"
+APP_VERSION = "51"
 
 @app.get("/api/version")
 def api_version():
