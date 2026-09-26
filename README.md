@@ -1,8 +1,8 @@
 # LabCare — Complaint & Breakdown Management
 
 Lab equipment complaints and breakdown tracking with role-based login
-(Admin / Technician / Customer), sound alerts, attachments, PDF service
-reports, QR customer portal, preventive maintenance and an audit log.
+(Admin / Technician / Customer), sound alerts, PDF service reports, QR
+customer portal, preventive maintenance and an audit log.
 
 ## Project layout
 
@@ -178,20 +178,22 @@ organisations** and **Admin → Team & users**.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.
 - **History / audit log**: every ticket records who did what and when.
-- **Attachments**: photos, PDF and Office documents (max 8 MB) — **complaint
-  tickets only**. Breakdown tickets do not take attachments: they offer a
-  **Service report (PDF)** instead, the same function a complaint has. The
-  upload API rejects `entity_type=breakdown` outright (not just hidden in the
-  UI), and any files attached to breakdowns before that change are purged on
-  startup by an idempotent migration in `database.py`. The "Added file" audit
-  entries are kept, since the history log is an audit trail.
+- **No file attachments**: neither ticket type accepts uploaded photos or
+  documents. That function was replaced by a generated **Service report (PDF)**
+  on every ticket — see below. The whole attachments subsystem is gone, not
+  merely hidden: the upload / list / download / delete endpoints have been
+  removed (writes now return 405), the `attachments` table is dropped by an
+  idempotent migration in `database.py` and no longer created on a fresh
+  install, and the frontend upload / preview / delete helpers are deleted. The
+  `"Added file"` entries in the audit log are deliberately kept — the history
+  log is an audit trail, and those rows live in `audit_logs`, not here.
 - **Service report PDFs** ([`server/report.py`](server/report.py)): one per
   ticket, on the LabCare letterhead — `GET /api/complaints/<id>/report.pdf`
-  (summary, description, linked breakdown work orders, conversation log and up
-  to four attached photos) and `GET /api/breakdowns/<id>/report.pdf` (summary,
-  fault description, source complaint, root cause, resolution notes and work
-  log). Plus a management `GET /api/reports/trend.pdf`. Each ticket's **Report**
-  section exposes its button.
+  (summary, description, linked breakdown work orders and conversation log) and
+  `GET /api/breakdowns/<id>/report.pdf` (summary, fault description, source
+  complaint, root cause, resolution notes and work log). Plus a management
+  `GET /api/reports/trend.pdf`. Each ticket's **Report** section exposes its
+  button.
 - **Sound + email alerts** for new tickets and updates.
 - **Desktop push alerts**: every bell notification can also ring as a real
   system notification via Web Push (service worker + VAPID), so users hear the

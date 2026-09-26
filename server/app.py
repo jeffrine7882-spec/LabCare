@@ -27,7 +27,7 @@ CORS(app)
 MASTER_ADMIN_EMAIL = "admin@labcare.com"
 # Reserved account that absorbs references from deleted users: immutable
 # history columns (complaints.created_by, breakdowns.reported_by, comments,
-# attachments, pm_logs) are NOT NULL with enforced FKs, so they cannot simply
+# pm_logs) are NOT NULL with enforced FKs, so they cannot simply
 # be unlinked — they are reassigned to this inert placeholder. It can never
 # log in, is hidden from user lists, and cannot itself be deleted.
 FORMER_USER_EMAIL = "former-user@labcare.invalid"
@@ -53,7 +53,7 @@ def _archive_and_purge(kind, keep_first=None, limit=TICKET_CAP, log_path=HISTORY
 
     * The newest ``keep_first`` (default ``limit``) tickets stay in the live DB.
     * Any older tickets beyond the cap are moved into the append-only history
-      log file (with their comments + attachments + audit trail) and then
+      log file (with their comments + audit trail) and then
       removed from the database so the cap always holds.
     Returns the number of tickets archived in this run.
     """
@@ -81,10 +81,6 @@ def _archive_and_purge(kind, keep_first=None, limit=TICKET_CAP, log_path=HISTORY
                 "LEFT JOIN users u ON u.id = cm.user_id "
                 "WHERE cm.entity_type=? AND cm.entity_id=? ORDER BY cm.created_at",
                 (entity, r["id"])).fetchall())
-            rec["attachments"] = rows_to_dicts(c.execute(
-                "SELECT id, entity_type, entity_id, filename, mime, size, uploaded_by, created_at "
-                "FROM attachments WHERE entity_type=? AND entity_id=? ORDER BY id",
-                (entity, r["id"])).fetchall())
             rec["audit"] = rows_to_dicts(c.execute(
                 "SELECT * FROM audit_logs WHERE entity_type=? AND entity_id=? ORDER BY id",
                 (entity, r["id"])).fetchall())
@@ -97,7 +93,6 @@ def _archive_and_purge(kind, keep_first=None, limit=TICKET_CAP, log_path=HISTORY
             c.execute("UPDATE breakdowns SET complaint_id=NULL WHERE complaint_id=?", (r["id"],))
         c.execute("DELETE FROM comments WHERE entity_type=? AND entity_id=?", (entity, r["id"]))
         c.execute("DELETE FROM notifications WHERE entity_type=? AND entity_id=?", (entity, r["id"]))
-        c.execute("DELETE FROM attachments WHERE entity_type=? AND entity_id=?", (entity, r["id"]))
         c.execute("DELETE FROM audit_logs WHERE entity_type=? AND entity_id=?", (entity, r["id"]))
         c.execute(f"DELETE FROM {table} WHERE id=?", (r["id"],))
     c.commit()
@@ -2169,7 +2164,6 @@ def delete_complaint(cid):
     c.execute("UPDATE breakdowns SET complaint_id=NULL WHERE complaint_id=?", (cid,))
     c.execute("DELETE FROM comments WHERE entity_type='complaint' AND entity_id=?", (cid,))
     c.execute("DELETE FROM notifications WHERE entity_type='complaint' AND entity_id=?", (cid,))
-    c.execute("DELETE FROM attachments WHERE entity_type='complaint' AND entity_id=?", (cid,))
     c.execute("DELETE FROM audit_logs WHERE entity_type='complaint' AND entity_id=?", (cid,))
     c.execute("DELETE FROM complaints WHERE id=?", (cid,))
     c.commit()
@@ -2445,7 +2439,6 @@ def delete_breakdown(bid):
         return jsonify({"error": "Not found"}), 404
     c.execute("DELETE FROM comments WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id=?", (bid,))
-    c.execute("DELETE FROM attachments WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM audit_logs WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM breakdowns WHERE id=?", (bid,))
     c.commit()
@@ -2922,7 +2915,7 @@ def delete_user(uid):
             "VALUES ('Former user', ?, '', '!no-login!', 'customer', NULL, NULL, NULL, 0, 0, ?)",
             (FORMER_USER_EMAIL, now())).lastrowid
     for table, col in (("complaints", "created_by"), ("breakdowns", "reported_by"),
-                       ("comments", "user_id"), ("attachments", "uploaded_by"),
+                       ("comments", "user_id"),
                        ("pm_logs", "performed_by")):
         c.execute(f"UPDATE {table} SET {col}=? WHERE {col}=?", (former_id, uid))
     for table, col in (
@@ -3318,197 +3311,6 @@ def app_config():
 
 
 # --------------------------------------------------------------------------
-# Attachments (photos)
-# --------------------------------------------------------------------------
-def _attachments_meta(c, entity, entity_id):
-    rows = c.execute(
-        "SELECT id, filename, mime, size, uploaded_by, created_at FROM attachments "
-        "WHERE entity_type=? AND entity_id=? ORDER BY created_at", (entity, entity_id)).fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        up = c.execute("SELECT name FROM users WHERE id=?", (r["uploaded_by"],)).fetchone()
-        d["uploaded_by_name"] = up["name"] if up else None
-        out.append(d)
-    return out
-
-
-@app.post("/api/attachments")
-def upload_attachment():
-    u, err, code = require_role("admin", "engineer", "application", "customer")
-    if err:
-        return err, code
-    entity = request.form.get("entity_type")
-    eid = request.form.get("entity_id")
-    if entity not in ("complaint", "breakdown") or not eid:
-        return jsonify({"error": "Invalid entity"}), 400
-    # Breakdown tickets no longer support attachments: they get a Service Report
-    # PDF instead (GET /api/breakdowns/<id>/report.pdf), the same function a
-    # complaint has. Rejected here rather than only hidden in the UI, so no
-    # client — including a cached older one — can attach a file that nothing
-    # would ever display.
-    if entity == "breakdown":
-        return jsonify({"error": "Attachments are not supported on breakdown tickets. "
-                                 "Use the Service report (PDF) on the ticket instead."}), 400
-    eid = int(eid)
-    # authorisation: scope the actor to the ticket (customer, tenant staff, or master)
-    c = conn()
-    row = c.execute("SELECT customer_id, location_id, department_id FROM complaints WHERE id=?", (eid,)).fetchone()
-    c.close()
-    if not row or not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
-        return jsonify({"error": "Not authorised"}), 403
-
-    f = request.files.get("file")
-    if not f or not f.filename:
-        return jsonify({"error": "No file uploaded"}), 400
-    data = f.read()
-    # Some mobile browsers send a blank/generic content type. Derive the real
-    # type from the filename extension when the client's MIME is unreliable.
-    mime = (f.mimetype or "").strip().lower() or None
-    if not mime or mime == "application/octet-stream" or mime == "binary/octet-stream":
-        guessed = mimetypes.guess_type(f.filename or "")[0]
-        if guessed:
-            mime = guessed.lower()
-    if not mime:
-        mime = "application/octet-stream"
-    allowed = (
-        "image/",
-        "application/pdf",
-        # Office documents (service reports, worksheets, slides)
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-powerpoint",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "text/csv",
-        "text/plain",
-    )
-    if not any(mime.startswith(x) for x in allowed):
-        return jsonify({"error": "Unsupported file type (use an image, PDF, or Office document)"}), 400
-    if len(data) > 8 * 1024 * 1024:
-        return jsonify({"error": "File too large (max 8 MB)"}), 400
-
-    c = conn()
-    cur = c.execute(
-        "INSERT INTO attachments (entity_type,entity_id,filename,mime,size,uploaded_by,data,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        (entity, eid, f.filename[:200], mime, len(data), u["id"], data, now()),
-    )
-    c.commit()
-    row = c.execute("SELECT id, filename, mime, size, uploaded_by, created_at FROM attachments WHERE id=?",
-                    (cur.lastrowid,)).fetchone()
-    d = dict(row)
-    d["uploaded_by_name"] = u["name"]
-    c.close()
-
-    audit(entity, eid, u, "attachment", f"Added {f.filename[:120]}")
-
-    # notify followers (only complaints take attachments now)
-    rc = conn()
-    raw = rc.execute("SELECT * FROM complaints WHERE id=?", (eid,)).fetchone()
-    if raw:
-        rec = complaint_payload(rc, raw)
-        rc.close()
-        ping_followers("complaint", u["id"], rec,
-                       f"{u['name']} attached a file to complaint {rec['code']}",
-                       lambda r: email_mod.email_comment("complaint", r, rec, u["name"], "📎 Attached a file."))
-    else:
-        rc.close()
-    return jsonify(d), 201
-
-
-@app.get("/api/attachments")
-def list_attachments():
-    u, err, code = require_role("admin", "engineer", "application", "customer")
-    if err:
-        return err, code
-    entity = request.args.get("entity_type")
-    eid = request.args.get("entity_id", type=int)
-    if entity not in ("complaint", "breakdown") or not eid:
-        return jsonify({"error": "Invalid entity"}), 400
-    c = conn()
-    row = c.execute(f"SELECT customer_id, location_id, department_id FROM {entity}s WHERE id=?", (eid,)).fetchone()
-    if not row:
-        c.close()
-        return jsonify({"error": "Not found"}), 404
-    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
-        c.close()
-        return jsonify({"error": "Not authorised"}), 403
-    out = _attachments_meta(c, entity, eid)
-    c.close()
-    return jsonify(out)
-
-
-@app.get("/api/audit")
-def list_audit():
-    """Per-ticket history log: who did what and when."""
-    u, err, code = require_role("admin", "engineer", "application", "customer")
-    if err:
-        return err, code
-    entity = request.args.get("entity_type")
-    eid = request.args.get("entity_id", type=int)
-    if entity not in ("complaint", "breakdown") or not eid:
-        return jsonify({"error": "Invalid entity"}), 400
-    # authorization: customers only on their own in-scope tickets
-    c = conn()
-    row = c.execute(f"SELECT customer_id, location_id, department_id FROM {entity}s WHERE id=?", (eid,)).fetchone()
-    if not row:
-        c.close()
-        return jsonify({"error": "Not found"}), 404
-    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
-        c.close()
-        return jsonify({"error": "Not authorised"}), 403
-    rows = c.execute(
-        "SELECT * FROM audit_logs WHERE entity_type=? AND entity_id=? ORDER BY id", (entity, eid)).fetchall()
-    c.close()
-    return jsonify(rows_to_dicts(rows))
-
-
-@app.get("/api/attachments/<int:aid>/file")
-def attachment_file(aid):
-    u, err, code = require_role("admin", "engineer", "application", "customer")
-    if err:
-        return err, code
-    c = conn()
-    row = c.execute("SELECT * FROM attachments WHERE id=?", (aid,)).fetchone()
-    if not row:
-        c.close()
-        return jsonify({"error": "Not found"}), 404
-    tbl = row["entity_type"]
-    trow = c.execute(f"SELECT customer_id, location_id, department_id FROM {tbl}s WHERE id=?", (row["entity_id"],)).fetchone()
-    if not trow or not _customer_allowed(u, trow["customer_id"], trow["location_id"], trow["department_id"]):
-        c.close()
-        return jsonify({"error": "Not authorised"}), 403
-    data = row["data"]
-    mime = row["mime"]
-    c.close()
-    return Response(data, mimetype=mime, headers={
-        "Content-Disposition": f'inline; filename="{row["filename"]}"'})
-
-
-@app.delete("/api/attachments/<int:aid>")
-def delete_attachment(aid):
-    u, err, code = require_role("admin", "engineer", "application")
-    if err:
-        return err, code
-    c = conn()
-    row = c.execute("SELECT * FROM attachments WHERE id=?", (aid,)).fetchone()
-    if not row:
-        c.close()
-        return jsonify({"error": "Not found"}), 404
-    tbl = row["entity_type"]
-    trow = c.execute(f"SELECT customer_id FROM {tbl}s WHERE id=?", (row["entity_id"],)).fetchone()
-    if not trow or not _customer_allowed(u, trow["customer_id"]):
-        c.close()
-        return jsonify({"error": "Not authorised"}), 403
-    c.execute("DELETE FROM attachments WHERE id=?", (aid,))
-    c.commit()
-    c.close()
-    return jsonify({"ok": True})
-
-
-# --------------------------------------------------------------------------
 # Reports & export
 # --------------------------------------------------------------------------
 @app.get("/api/export.csv")
@@ -3557,16 +3359,6 @@ def export_csv():
         "Content-Disposition": f"attachment; filename={fname}"})
 
 
-def _load_ticket_photos(entity_type, entity_id):
-    """Return raw photo bytes for a ticket's attachments."""
-    from database import conn as _c
-    c = _c()
-    rows = c.execute("SELECT data FROM attachments WHERE entity_type=? AND entity_id=? ORDER BY created_at LIMIT 4",
-                     (entity_type, entity_id)).fetchall()
-    c.close()
-    return [r["data"] for r in rows]
-
-
 @app.get("/api/complaints/<int:cid>/report.pdf")
 def complaint_report_pdf(cid):
     u, err, code = require_role("admin", "engineer", "application", "customer")
@@ -3588,8 +3380,7 @@ def complaint_report_pdf(cid):
         "WHERE cm.entity_type='complaint' AND cm.entity_id=? ORDER BY cm.created_at", (cid,)).fetchall())
     c.close()
 
-    photos = _load_ticket_photos("complaint", cid)
-    pdf = report_mod.service_report(comp, breakdowns, comments, photos)
+    pdf = report_mod.service_report(comp, breakdowns, comments)
     return Response(pdf, mimetype="application/pdf", headers={
         "Content-Disposition": f'inline; filename="service_report_{comp["code"]}.pdf"'})
 

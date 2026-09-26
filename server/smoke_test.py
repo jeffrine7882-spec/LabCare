@@ -102,22 +102,25 @@ check("re-accept 409", r.status_code == 409)
 r = j("POST", "/api/comments", {"entity_type": "complaint", "entity_id": cpid2, "text": "hello"}, tok)
 check("add comment", r.status_code == 201)
 
-# 7. attachment (BYTEA)
+# 7. attachments are gone from BOTH ticket types — every ticket offers a Service
+# Report PDF instead (see the pdf checks below). The endpoints that used to
+# upload, list, download and delete files no longer exist. Writes come back 405:
+# the SPA catch-all registers the URL for GET only, so Flask has no POST/DELETE
+# handler. GETs fall through to that catch-all and return the app shell HTML,
+# never file bytes — so nothing stored can still be retrieved.
 png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
-r = j("POST", "/api/attachments", None, tok,
-      raw={"entity_type": "complaint", "entity_id": str(cpid), "file": (io.BytesIO(png), "shot.png")})
-aid = r.get_json().get("id") if r.status_code == 201 else None
-check("upload attachment", r.status_code == 201, aid)
-r = c.get(f"/api/attachments/{aid}/file", headers={"Authorization": "Bearer " + tok})
-check("download attachment (bytes equal)", r.status_code == 200 and r.data == png)
-
-# 7b. breakdown tickets no longer take attachments — they get a Service Report
-# PDF instead (see the breakdown pdf check below). Rejected at the API, not just
-# hidden in the UI.
-r = j("POST", "/api/attachments", None, tok,
-      raw={"entity_type": "breakdown", "entity_id": str(bid), "file": (io.BytesIO(png), "shot.png")})
-check("breakdown attachment rejected (function removed)", r.status_code == 400,
-      (r.get_json() or {}).get("error"))
+hdr = {"Authorization": "Bearer " + tok}
+for entity, eid, label in (("complaint", cpid, "complaint"), ("breakdown", bid, "breakdown")):
+    r = c.post("/api/attachments", headers=hdr,
+               data={"entity_type": entity, "entity_id": str(eid),
+                     "file": (io.BytesIO(png), "shot.png")},
+               content_type="multipart/form-data")
+    check(f"{label} attachment upload gone", r.status_code == 405, r.status_code)
+r = c.delete("/api/attachments/1", headers=hdr)
+check("attachment delete gone", r.status_code == 405, r.status_code)
+r = c.get("/api/attachments/1/file", headers=hdr)
+check("attachment download serves no file bytes (SPA shell only)",
+      r.status_code == 200 and r.mimetype == "text/html", r.mimetype)
 
 # 8. portal link + public submission (complaint + breakdown kinds)
 r = j("POST", "/api/portal-links", {"customer_id": cid, "equipment_id": eid, "label": "QR"}, tok)

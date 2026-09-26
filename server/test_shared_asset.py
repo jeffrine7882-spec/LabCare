@@ -21,7 +21,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
         c = conn()
         c.execute("PRAGMA foreign_keys = OFF")
         for t in ["pm_logs", "pm_schedules", "portal_links", "push_subscriptions", "app_devices",
-                  "audit_logs", "comments", "attachments", "notifications", "notification_pings",
+                  "audit_logs", "comments", "notifications", "notification_pings",
                   "breakdowns", "complaints", "equipment", "departments", "locations",
                   "admin_customer_links", "onboarding_apps", "sessions", "users", "customers"]:
             c.execute(f"DELETE FROM {t}")

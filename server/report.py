@@ -8,8 +8,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import (BaseDocTemplate, Frame, PageTemplate, Paragraph,
-                                Spacer, Table, TableStyle, Image, HRFlowable)
-from reportlab.lib.utils import ImageReader
+                                Spacer, Table, TableStyle, HRFlowable)
 
 BRAND = HexColor("#0F766E")
 BRAND_DARK = HexColor("#134E4A")
@@ -122,11 +121,8 @@ def _log_table(comments):
     return t
 
 
-def service_report(complaint, breakdowns, comments, photos):
-    """Build a single-ticket service report PDF and return raw bytes.
-
-    photos: list of raw image bytes (up to 4 shown as a thumbnail row).
-    """
+def service_report(complaint, breakdowns, comments):
+    """Build a single-ticket service report PDF and return raw bytes."""
     buf = io.BytesIO()
     doc = init_doc(buf, f"Service Report {complaint.get('code', '')}")
 
@@ -184,27 +180,6 @@ def service_report(complaint, breakdowns, comments, photos):
     story.append(Paragraph("Conversation log", H2))
     story.append(_log_table(comments) if comments else Paragraph("No comments.", BODY))
 
-    # attached photos (thumbnail row)
-    if photos:
-        story.append(Paragraph("Attached photos", H2))
-        imgs = []
-        for raw in photos[:4]:
-            try:
-                ir = ImageReader(io.BytesIO(raw))
-                w, h = ir.getSize()
-                imgs.append(Image(ir, width=38 * mm if w >= h else 38 * mm * (w / max(h, 1)),
-                                  height=38 * mm if h < w else 38 * mm * (h / max(w, 1))))
-            except Exception:
-                pass
-        if imgs:
-            row = Table([imgs], colWidths=[42 * mm] * len(imgs))
-            row.setStyle(TableStyle([
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 2),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-            ]))
-            story.append(row)
 
     doc.build(story)
     return buf.getvalue()
@@ -217,8 +192,8 @@ def breakdown_report(breakdown, comments, source_complaint=None):
     the same summary block and log table, then the fault, root cause,
     resolution and work log for this one work order.
 
-    Breakdown tickets carry no file attachments — that function was replaced by
-    this PDF — so, unlike the complaint report, there is no attached-photos row.
+    Neither ticket type carries file attachments any more — that function was
+    replaced by these PDFs — so neither report has an attached-photos row.
     """
     buf = io.BytesIO()
     doc = init_doc(buf, f"Service Report {breakdown.get('code', '')}")

@@ -431,19 +431,6 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
 .hbar-row .hbar-fill { height: 100%; border-radius: 99px; }
 .hbar-row .hbar-num { font-size: 12px; font-weight: 700; min-width: 20px; }
 
-/* ---------- Photos ---------- */
-.photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.photo-thumb {
-  aspect-ratio: 1; border-radius: 10px; object-fit: cover; width: 100%;
-  background: var(--bg); border: 1px solid var(--line); cursor: pointer;
-}
-.photo-file {
-  aspect-ratio: 1; border-radius: 10px; display: flex; flex-direction: column; gap: 4px;
-  align-items: center; justify-content: center; background: var(--bg); border: 1px solid var(--line);
-  font-size: 11px; color: var(--ink-soft); cursor: pointer; text-align: center; padding: 6px;
-}
-.photo-file:hover { border-color: var(--brand-2); color: var(--ink); }
-.photo-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 8px; flex-wrap: wrap; }
 
 /* ---------- Notifications ---------- */
 .notif { display: flex; gap: 10px; padding: 12px; border-radius: 12px; margin-bottom: 8px; background: var(--card); box-shadow: var(--shadow); cursor: pointer; transition: box-shadow .15s ease; }
@@ -615,8 +602,6 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
   .sheet-body { padding: 22px 24px; }
   .sheet-foot { padding-bottom: 18px; }
 
-  /* Slightly larger photos grid on desktop */
-  .photo-grid { grid-template-columns: repeat(4, 1fr); gap: 10px; }
 
   /* Two-column "More" menu */
   .menu-group {
@@ -637,7 +622,6 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
   .list.list-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .photo-grid { grid-template-columns: repeat(6, 1fr); }
 }
 
 /* Reduce motion for accessibility */

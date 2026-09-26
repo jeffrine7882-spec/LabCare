@@ -636,7 +636,8 @@ async function viewComplaintDetail(v) {
     const c = await API.get("/api/complaints/" + id);
     state.complaintDetail = c;
     v.innerHTML = complaintDetailHtml(c);
-    loadPhotos("complaint", id);
+    // No loadPhotos() here: attachments are gone from complaints too — the
+    // ticket offers a Service report (PDF) instead, rendered by the template.
     loadHistory("complaint", id);
   } catch (e) {
     v.innerHTML = `<div class="empty"><div class="e-ico">⚠️</div><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
@@ -696,9 +697,6 @@ function complaintDetailHtml(c) {
         <button class="btn btn-danger btn-sm" onclick="deleteTicket('complaint',${c.id})">🗑 Delete ticket</button>
       </div>` : ""}
     </div>
-
-    <div class="section-title">Photos &amp; files</div>
-    <div class="card" id="photosBox"><div class="empty" style="padding:12px"><div class="spinner" style="margin:0 auto"></div></div></div>
 
     <div class="section-title">History</div>
     <div class="card" id="historyBox"><div class="empty" style="padding:12px"><div class="spinner" style="margin:0 auto"></div></div></div>
@@ -2953,43 +2951,9 @@ function auditHtml(a) {
     </li>`;
 }
 
-// ---------------------------------------------------------------- Photos & files
-async function loadPhotos(entity, id) {
-  const box = $("#photosBox");
-  if (!box) return;
-  try {
-    const list = await API.get(`/api/attachments?entity_type=${entity}&entity_id=${id}`);
-    if (!list.length) {
-      box.innerHTML = `<p style="color:var(--ink-soft);font-size:13px">No photos attached.</p>`;
-    } else {
-      box.innerHTML = `
-        <div class="photo-grid">
-          ${list.map((a) => {
-            const isImg = (a.mime || "").startsWith("image/");
-            return isImg
-              ? `<img class="photo-thumb" data-aid="${a.id}" onclick="viewPhoto(${a.id})" alt="${esc(a.filename)}">`
-              : `<div class="photo-file" onclick="downloadReport('/api/attachments/${a.id}/file')">📎<br>${esc(a.filename)}${isTech() ? `<br><span style="color:var(--danger)" onclick="event.stopPropagation();deleteAttachment(${a.id},'${entity}',${id})">remove</span>` : ""}</div>`;
-          }).join("")}
-        </div>`;
-      // load thumbnails with auth headers (img tags can't send them)
-      box.querySelectorAll("img[data-aid]").forEach((img) => authedImage(img, `/api/attachments/${img.dataset.aid}/file`));
-    }
-  } catch (e) {
-    box.innerHTML = `<p style="color:var(--ink-soft);font-size:13px">Couldn't load photos.</p>`;
-  }
-  // upload button
-  const actions = document.createElement("div");
-  actions.className = "photo-actions";
-  actions.innerHTML = `
-    <span style="font-size:12px;color:var(--ink-soft)">Photo · PDF · Word · Excel (max 8 MB)</span>
-    <label class="btn btn-ghost btn-sm" style="cursor:pointer">
-      📎 Attach file
-      <input type="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt" multiple="multiple" style="display:none"
-             onchange="uploadPhotos(event,'${entity}',${id})">
-    </label>`;
-  box.appendChild(actions);
-}
-
+// ---------------------------------------------------------------- Authed images
+// Fetches a protected image with the bearer token and swaps in an object URL,
+// because <img> tags cannot send auth headers. Still used by the portal QR code.
 async function authedImage(img, url) {
   try {
     const res = await fetch(withToken(url), { headers: { "Authorization": "Bearer " + (API.token || "") }, credentials: "same-origin" });
@@ -2999,54 +2963,6 @@ async function authedImage(img, url) {
   } catch (e) {
     img.remove();
   }
-}
-
-async function uploadPhotos(ev, entity, id) {
-  const files = Array.from(ev.target.files || []);
-  for (const file of files) {
-    const fd = new FormData();
-    fd.append("entity_type", entity);
-    fd.append("entity_id", id);
-    fd.append("file", file);
-    showLoading();
-    try {
-      const res = await fetch(withToken("/api/attachments"), {
-        method: "POST",
-        headers: { "Authorization": "Bearer " + (API.token || "") },
-        credentials: "same-origin",
-        body: fd,
-      });
-      if (!res.ok) {
-        let err = {};
-        try { err = await res.json(); } catch (_) {}
-        throw new Error(err.error || "Upload failed");
-      }
-      await loadPhotos(entity, id);
-      toast("Attachment added", "success");
-    } catch (e) {
-      toast(e.message || "Upload failed", "error");
-    }
-    hideLoading();
-  }
-}
-
-function viewPhoto(aid) {
-  openSheet(`
-    <div class="sheet-head"><h3>Photo</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
-    <div class="sheet-body" style="text-align:center;background:#000;padding:12px">
-      <img id="bigPhoto" style="max-width:100%;max-height:70dvh;border-radius:10px">
-    </div>`);
-  authedImage($("#bigPhoto"), `/api/attachments/${aid}/file`);
-}
-
-async function deleteAttachment(aid, entity, id) {
-  showLoading();
-  try {
-    await API.del("/api/attachments/" + aid);
-    await loadPhotos(entity, id);
-    toast("Attachment removed", "success");
-  } catch (e) { toast(e.message, "error"); }
-  hideLoading();
 }
 
 function downloadReport(url) {
@@ -3754,7 +3670,7 @@ Object.assign(window, {
   renderCareList, addCareCustomer, removeCareCustomer,
   viewOnboarding, reviewJoin, toggleAlertSound, playAlertSound,
   openAlertSheet, pickAlertPreset, onAlertCustomPicked, clearAlertCustom, alertPreviewCustom,
-  uploadPhotos, viewPhoto, deleteAttachment, downloadReport, openExportSheet,
+  downloadReport, openExportSheet,
   openNotifications, openNotif, markAllRead,
   setPMFilter, openPMEditor, savePM, deletePM, openPMComplete, confirmPMComplete,
   openPortalEditor, savePortal, showPortalQR, copyPortalURL, downloadQR, deletePortal, onPortalCust,

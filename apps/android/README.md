@@ -16,7 +16,7 @@ Requirements: **Android 8.0+**, installable on the latest Android 14/15/16
 ## What it does
 * **Opens the LabCare site** (`https://labcare.insforge.site`) in the app's
   **Site** tab, already signed in with your LabCare account — the same data
-  and features as the web app (tickets, equipment, PDF reports, attachments).
+  and features as the web app (tickets, equipment, PDF service reports).
 * Signs in with the same account as the web app.
 * A foreground **alert relay** polls your bell every **10 seconds** and, on a
   new notification, drops a **heads-up bubble banner on top of the display**,
