@@ -1675,45 +1675,44 @@ def delete_department(did):
 # --------------------------------------------------------------------------
 @app.get("/api/categories")
 def list_categories():
+    """Every equipment category, so the Add equipment form always offers the
+    full prepared list rather than only the categories already in use.
+
+    The list is shared, but each caller's equipment_count tallies only equipment
+    they may see — a tenant admin is not told how many instruments another
+    tenant has in a category."""
     u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
     scope = tenant_scope(u, c)
-    if scope:
-        # tenant staff see only the categories used by their care-list customers' equipment
-        marks = ", ".join("?" for _ in scope)
-        rows = c.execute(
-            "SELECT name, "
-            f"(SELECT COUNT(*) n FROM equipment e WHERE e.category=cat.name AND e.customer_id IN ({marks})) AS n "
-            "FROM categories cat "
-            f"WHERE name IN (SELECT category FROM equipment WHERE customer_id IN ({marks})) "
-            "ORDER BY name", list(scope) + list(scope)).fetchall()
-        out = [{"name": r["name"], "equipment_count": r["n"]} for r in rows]
-    else:
-        rows = c.execute("SELECT * FROM categories ORDER BY name").fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
+    marks = ", ".join("?" for _ in scope) if scope else ""
+    rows = c.execute("SELECT * FROM categories ORDER BY name").fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        if scope:
+            d["equipment_count"] = c.execute(
+                f"SELECT COUNT(*) n FROM equipment WHERE category=? AND customer_id IN ({marks})",
+                [r["name"]] + list(scope)).fetchone()["n"]
+        else:
             d["equipment_count"] = c.execute(
                 "SELECT COUNT(*) n FROM equipment WHERE category=?", (r["name"],)).fetchone()["n"]
-            out.append(d)
+        out.append(d)
     c.close()
     return jsonify(out)
 
 
 @app.post("/api/categories")
 def create_category():
-    # Categories are global (not per customer), so only unbound provider staff
-    # (the master admin or LabCare's own engineers) may add them. Tenant-scoped
-    # staff may not create global categories.
+    # Categories are global (not per customer), and anyone who may add equipment
+    # may also add a category when the one they need is missing — otherwise they
+    # would have to mislabel the instrument as "Other" and wait for the master.
+    # Renaming and deleting stay master-only: those rewrite records belonging to
+    # every tenant, while adding one can only lengthen a shared pick-list.
     u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
-    if u["role"] == "admin" and not is_master_admin(u):
-        return jsonify({"error": "Only the master administrator can manage categories"}), 403
-    if u["role"]  in ("engineer", "application") and u.get("customer_id"):
-        return jsonify({"error": "Only the master administrator can manage categories"}), 403
     b = get_body()
     name = (b.get("name") or "").strip()
     if not name:
@@ -4397,7 +4396,7 @@ def portal_events(token):
 # --------------------------------------------------------------------------
 # Version check
 # --------------------------------------------------------------------------
-APP_VERSION = "46"
+APP_VERSION = "47"
 
 @app.get("/api/version")
 def api_version():

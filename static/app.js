@@ -2206,7 +2206,7 @@ async function openEquipmentEditor(edit) {
         <select id="eqCategory" onchange="eqCategoryPick()">
           <option value="">— Select —</option>
           ${catNames.map((x) => `<option value="${esc(x)}" ${currentCat === x ? "selected" : ""}>${esc(x)}</option>`).join("")}
-          ${isMaster() ? `<option value="__custom__">＋ New category…</option>` : ""}
+          ${isTech() ? `<option value="__custom__">＋ New category…</option>` : ""}
         </select></label>
       <label class="field" id="eqCategoryCustomWrap" style="display:none"><span>New category name</span><input id="eqCategoryCustom" placeholder="Type a new category"></label>
       <label class="field"><span>Warranty expiry</span><input id="eqWarranty" type="date" value="${e && e.warranty_expiry ? e.warranty_expiry.slice(0, 10) : ""}"></label>
@@ -2414,8 +2414,17 @@ async function saveEquipment(id) {
   if (category === "__custom__") {
     category = ($("#eqCategoryCustom").value || "").trim();
     if (!category) { toast("Please name the new category", "error"); return; }
-    // register the new category so it shows in the list for everyone
-    try { await API.post("/api/categories", { name: category }); } catch (e) { /* duplicate — fine */ }
+    // Register it so it joins the shared list and is offered from now on.
+    // A duplicate just means somebody else already added that name. Anything
+    // else is worth saying out loud — the equipment still saves with this
+    // category, but the name would not appear in the list for next time.
+    try {
+      await API.post("/api/categories", { name: category });
+    } catch (e) {
+      if (!/already exists/i.test(e.message || "")) {
+        toast("The equipment will save, but the new category could not be added to the shared list: " + e.message, "error");
+      }
+    }
   }
   const locVal = $("#eqLocation")?.value || null;
   const deptMatch = (state.departments || []).find((d) => String(d.location_id) === String(locVal));
@@ -3892,7 +3901,7 @@ Object.assign(window, {
   togglePushAlerts, syncPushAlerts, pushStateLabel,
 });
 
-const BUILD_VERSION = "46";
+const BUILD_VERSION = "47";
 
 async function boot() {
   // Bust stale WebView or browser caches automatically if a newer version was deployed
