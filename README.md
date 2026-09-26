@@ -197,6 +197,38 @@ Organizations** and **Admin → Team & users**.
   manage. Ids from these pickers are coerced server-side: browsers send
   `<select>` values as strings, which previously failed an integer care-list
   comparison and rejected a legitimately chosen organization with a 403.
+- **Join requests & who cares for a new organization**: anyone can request an
+  account from the sign-in screen. **Full name, email and phone number are
+  required**, plus a password of at least 6 characters. The request stays
+  pending until the master approves or rejects it (`GET /api/onboarding`).
+
+  A request that **creates a new organization** leaves it with no tenant admin,
+  so it is flagged `customers.pending_care` and **every tenant admin is asked
+  whether it is under their care** — both as a bell notification with inline
+  *Take into my care* / *Not mine* buttons and as a *New organizations awaiting
+  care* panel on the Organizations screen. The master is told as well and may
+  instead **assign** it to a chosen tenant admin.
+
+  - **The first tenant admin to claim it wins.** The claim is a guarded
+    `UPDATE … WHERE pending_care=1` whose rowcount decides the winner, so two
+    admins answering at once cannot both take it — the second gets a 409.
+  - **"Not mine" is per admin** (`pending_care_declines`), so a single decline
+    cannot make the request vanish for everybody and strand the organization
+    with no owner. The remaining admins see how many peers already declined.
+  - Once claimed or assigned the flag is cleared and **ordinary shared care
+    resumes** — another tenant admin may still add the organization to their own
+    list. Exclusivity applies to the decision only, not to care in general.
+  - Signing up against an organization that **already exists** (picked from the
+    list, or matched by name) does **not** open a care decision.
+  - **Rejecting** a join request withdraws its organization from the pending
+    list and tells the admins who were asked. The organization row is kept: it
+    already has a location and department, and a later signup naming the same
+    organization reuses it.
+
+  Backed by `GET /api/customers/pending-care`, `POST /api/customers/<id>/take-care`,
+  `…/decline-care` and `…/assign-care` (master only). Notifications carry
+  `care_pending` / `care_claimed_by` so the client stops offering buttons for a
+  decision that is already settled.
 - **Ticket numbering**: complaints `CMP-0001…`, breakdowns `BRK-0001…`.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.
