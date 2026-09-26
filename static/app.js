@@ -187,6 +187,8 @@ const AUDIT_META = {
   resolution: { t: "Resolution", ico: "✅" },
   updated: { t: "Updated", ico: "✏️" },
   comment: { t: "Commented", ico: "💬" },
+  rating: { t: "Rated the service", ico: "⭐" },
+  feedback: { t: "Left feedback", ico: "📝" },
   attachment: { t: "Added file", ico: "📎" },
 };
 const badge = (type, value) => {
@@ -405,6 +407,7 @@ async function viewDashboard(v) {
   try {
     const d = await API.get("/api/dashboard");
     const c = d.counts;
+    const fb = d.customer_feedback || { average_rating: null, rating_count: 0 };
     const nowHour = mytHour();
     const greet = nowHour < 12 ? "Good morning" : nowHour < 18 ? "Good afternoon" : "Good evening";
     const firstName = (state.user.name || "").split(" ")[0];
@@ -430,6 +433,18 @@ async function viewDashboard(v) {
         <div class="stat tone-green"><span class="stat-num">${c.resolved_complaints}</span><span class="stat-label">Resolved complaints</span></div>
         <div class="stat ${c.pm_due ? "tone-amber" : "tone-green"}" onclick="navigate('pm')" style="cursor:pointer"><span class="stat-num">${c.pm_due}</span><span class="stat-label">PM due</span></div>
         <div class="stat tone-blue" onclick="navigate('pm')" style="cursor:pointer"><span class="stat-num">${c.pm_total}</span><span class="stat-label">PM schedules</span></div>
+      </div>` : ""}
+
+      ${fb.rating_count ? `
+      <div class="section-title">Customer satisfaction</div>
+      <div class="card" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <div style="font-size:34px;font-weight:800;line-height:1">${fb.average_rating}</div>
+        <div>
+          ${starsHtml(fb.average_rating, 18)}
+          <div style="font-size:12px;color:var(--ink-soft);margin-top:4px">
+            average of ${fb.rating_count} customer rating${fb.rating_count === 1 ? "" : "s"} on settled tickets
+          </div>
+        </div>
       </div>` : ""}
 
       ${renderBarChart("Complaints — last 3 months", d.monthly_complaints, "month", "n", "var(--brand-2)")}
@@ -710,6 +725,8 @@ function complaintDetailHtml(c) {
       </div>
     </div>
 
+    ${feedbackSectionHtml("complaint", c)}
+
     <div class="section-title">Report</div>
     <div class="card">
       <div class="action-panel">
@@ -741,6 +758,104 @@ async function addComment() {
     await API.post("/api/comments", { entity_type: entity, entity_id: id, text });
     input.value = "";
     await viewComplaintDetail($("#view"));
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+// ------------------------------------------------------- Customer feedback
+// A settled ticket can be rated 1-5 and commented on by the customer side.
+// Mirrors the server's FEEDBACK_STATUSES: a complaint when resolved or closed,
+// a breakdown when resolved (breakdowns have no closed status).
+const FEEDBACK_STATUSES = { complaint: ["resolved", "closed"], breakdown: ["resolved"] };
+const FEEDBACK_STARS = [1, 2, 3, 4, 5];
+
+function starsHtml(n, size) {
+  const filled = Math.max(0, Math.min(5, Math.round(n || 0)));
+  return `<span style="font-size:${size || 16}px;letter-spacing:1px;white-space:nowrap">`
+    + `<span style="color:#f59e0b">${"★".repeat(filled)}</span>`
+    + `<span style="color:#cbd5e1">${"☆".repeat(5 - filled)}</span></span>`;
+}
+
+function feedbackSectionHtml(kind, rec) {
+  const fb = rec.feedback || { rating: null, comments: [] };
+  const comments = fb.comments || [];
+  const rated = fb.rating ? fb.rating.rating : 0;
+  const mine = isCust();
+  // The server states it outright; fall back to the status for older payloads.
+  const open = rec.feedback_open !== undefined
+    ? !!rec.feedback_open
+    : (FEEDBACK_STATUSES[kind] || []).indexOf(rec.status) >= 0;
+  // Nothing given and nothing to give: leave the section out entirely rather
+  // than showing an empty box on every open ticket.
+  if (!open && !fb.rating && !comments.length) return "";
+
+  const writeable = open && mine;
+  const thread = comments.map((x) => commentHtml({
+    user_name: x.author_name || "Customer", created_at: x.created_at, text: x.text,
+  })).join("");
+
+  return `
+    <div class="section-title">Customer feedback</div>
+    <div class="card">
+      ${fb.rating ? `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          ${starsHtml(rated, 20)}
+          <b style="font-size:14px">${rated} / 5</b>
+          <span style="font-size:12px;color:var(--ink-soft)">by ${esc(fb.rating.rated_by || "Customer")}</span>
+        </div>`
+      : `<p style="font-size:13px;color:var(--ink-soft);margin:0">${
+          writeable ? "Not rated yet." : "The customer did not leave a rating."}</p>`}
+
+      ${writeable ? `
+        <div style="margin-top:12px">
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:6px">
+            ${fb.rating ? "Change your rating:" : "How was the service? Tap a star — this is optional."}
+          </div>
+          <div id="fbStars" style="display:flex;gap:6px;font-size:30px;line-height:1">
+            ${FEEDBACK_STARS.map((n) => `<span role="button" aria-label="${n} star${n > 1 ? "s" : ""}"
+              onclick="rateTicket('${kind}', ${rec.id}, ${n})"
+              style="cursor:pointer;color:${n <= rated ? "#f59e0b" : "#cbd5e1"}">★</span>`).join("")}
+          </div>
+        </div>` : ""}
+
+      <div style="margin-top:${fb.rating || writeable ? 14 : 0}">
+        ${thread || (writeable ? "" : `<p style="color:var(--ink-soft);font-size:13px;margin:0">No customer comments.</p>`)}
+        ${writeable ? `
+          <div style="display:flex;gap:8px;margin-top:${thread ? 12 : 0}">
+            <input id="fbInput" placeholder="Add a comment… (optional)" onkeydown="if(event.key==='Enter')addFeedback('${kind}', ${rec.id})">
+            <button class="btn btn-primary btn-sm" onclick="addFeedback('${kind}', ${rec.id})">Send</button>
+          </div>` : ""}
+      </div>
+
+      ${open && !mine ? `<p style="font-size:11.5px;color:var(--ink-soft);margin:12px 0 0">Feedback comes from the customer side — you can read it but not write it.</p>` : ""}
+    </div>`;
+}
+
+async function reloadTicketDetail() {
+  if (state.view === "complaintDetail") await viewComplaintDetail($("#view"));
+  else if (state.view === "breakdownDetail") await viewBreakdownDetail($("#view"));
+}
+
+async function rateTicket(kind, id, stars) {
+  showLoading();
+  try {
+    const r = await API.post(`/api/tickets/${kind}/${id}/rating`, { rating: stars });
+    toast(r && r.created === false ? "Rating updated — thank you" : "Thanks for your rating", "success");
+    await reloadTicketDetail();
+  } catch (e) { toast(e.message, "error"); }
+  hideLoading();
+}
+
+async function addFeedback(kind, id) {
+  const input = $("#fbInput");
+  const text = ((input && input.value) || "").trim();
+  if (!text) return;
+  showLoading();
+  try {
+    await API.post(`/api/tickets/${kind}/${id}/feedback`, { text });
+    if (input) input.value = "";
+    toast("Feedback added", "success");
+    await reloadTicketDetail();
   } catch (e) { toast(e.message, "error"); }
   hideLoading();
 }
@@ -1088,6 +1203,8 @@ function breakdownDetailHtml(b) {
         <button class="btn btn-primary btn-sm" onclick="addBrokComment()">Send</button>
       </div>
     </div>
+
+    ${feedbackSectionHtml("breakdown", b)}
 
     <div class="section-title">Report</div>
     <div class="card">
@@ -3882,6 +3999,7 @@ Object.assign(window, {
   openUserEditor, saveUser, deleteUser, toggleCustomerSelect, logout,
   renderCareList, addCareCustomer, removeCareCustomer,
   refreshPendingCare, takeCare, declineCare, careDecision, openAssignCare, assignCare,
+  rateTicket, addFeedback, feedbackSectionHtml, starsHtml,
   viewOnboarding, reviewJoin, toggleAlertSound, playAlertSound,
   openAlertSheet, pickAlertPreset, onAlertCustomPicked, clearAlertCustom, alertPreviewCustom,
   downloadReport, openExportSheet,
@@ -3901,7 +4019,7 @@ Object.assign(window, {
   togglePushAlerts, syncPushAlerts, pushStateLabel,
 });
 
-const BUILD_VERSION = "47";
+const BUILD_VERSION = "48";
 
 async function boot() {
   // Bust stale WebView or browser caches automatically if a newer version was deployed

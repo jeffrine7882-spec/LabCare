@@ -276,6 +276,34 @@ Organizations** and **Admin → Team & users**.
   complaint, root cause, resolution notes and work log). Plus a management
   `GET /api/reports/trend.pdf`. Each ticket's **Report** section exposes its
   button.
+- **Customer feedback on settled tickets**: once a ticket is finished the
+  customer side can rate it out of 5 stars and leave comments. It is entirely
+  optional — nothing is required to close a ticket, and one nobody rated looks
+  and behaves exactly as before.
+  - **When it opens**: complaints at `resolved` or `closed`, breakdowns at
+    `resolved` (they have no closed status). Before that the section is not
+    rendered at all and the API answers `409`.
+  - **Who may give it**: customer-role users of that organization, plus anyone
+    holding that organization's QR portal link — anonymous visitors included.
+    Staff (master admin, tenant admin, technician, application) can **read**
+    feedback but never write it; an attempt returns `403`.
+  - **Shape**: one rating per ticket, editable — re-voting replaces the previous
+    one rather than adding a row — plus a comment thread the customer side can
+    keep adding to. A name is optional on the portal and defaults to "Customer".
+  - **Where it appears**: the ticket detail view in the app, each settled ticket
+    in the portal's history list, a **Customer satisfaction** card on the
+    dashboard (average rating and how many ratings it covers, scoped to what the
+    caller may see), and a **Customer feedback** section on both Service report
+    PDFs. That section is omitted entirely when the customer left neither a
+    rating nor a comment, rather than printing an empty one.
+  - **Endpoints**: `POST /api/tickets/<kind>/<id>/rating` and `…/feedback` for
+    signed-in customers, `GET|POST /api/portal/<token>/feedback` and
+    `…/rating` for the public portal. Ratings are whole stars 1–5 (fractions are
+    rejected); comment text is capped at 2000 characters.
+  - **Never affects the ticket**: feedback cannot change status, priority,
+    assignment, ordering or the work log. It lives in its own `ticket_ratings`
+    and `ticket_feedback` tables, sends no notifications, and shows up in the
+    audit log as `rating` / `feedback` entries.
 - **Sound + email alerts** for new tickets and updates.
 - **Desktop push alerts**: every bell notification can also ring as a real
   system notification via Web Push (service worker + VAPID), so users hear the
