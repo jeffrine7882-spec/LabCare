@@ -88,7 +88,7 @@ test('hung session request paints immediately, times out, and keeps saved token'
 
 test('gateway failure offers retry on InsForge and retry restores saved session', async () => {
   let healthy = false;
-  const a = app(url => Promise.resolve(url === '/api/version' ? json({ version: '49' }) :
+  const a = app(url => Promise.resolve(url === '/api/version' ? json({ version: '50' }) :
     healthy ? json({ id: 1, role: 'customer', name: 'Test' }) : json({}, 503)));
   await a.context.started;
   assert.match(a.node('startupStatus').textContent, /temporarily unavailable/);
@@ -102,7 +102,7 @@ test('gateway failure offers retry on InsForge and retry restores saved session'
 });
 
 test('401 clears expired token and unlocks login without an outage warning', async () => {
-  const a = app(url => Promise.resolve(url === '/api/me' ? json({ error: 'Sign in' }, 401) : json({ version: '49' })));
+  const a = app(url => Promise.resolve(url === '/api/me' ? json({ error: 'Sign in' }, 401) : json({ version: '50' })));
   await a.context.started;
   assert.equal(a.context.localStorage.getItem('labcare_token'), null);
   assert.equal(a.node('startupStatus').textContent, '');
@@ -140,7 +140,7 @@ test('HTML fallback and malformed session JSON never become a signed-in user', a
 });
 
 test('writes are not retried on timeout or gateway failures', async () => {
-  const a = app(url => Promise.resolve(url === '/api/me' ? json({}, 401) : json({ version: '49' })));
+  const a = app(url => Promise.resolve(url === '/api/me' ? json({}, 401) : json({ version: '50' })));
   await a.context.started;
   for (const mode of ['timeout', 'gateway']) {
     let count = 0;
@@ -151,7 +151,7 @@ test('writes are not retried on timeout or gateway failures', async () => {
 });
 
 test('GET retries transient gateway failures but not authentication failures', async () => {
-  const a = app(url => Promise.resolve(url === '/api/me' ? json({}, 401) : json({ version: '49' })));
+  const a = app(url => Promise.resolve(url === '/api/me' ? json({}, 401) : json({ version: '50' })));
   await a.context.started;
   let count = 0;
   a.context.fetch = () => Promise.resolve(++count < 3 ? json({}, 503) : json({ ok: true }));

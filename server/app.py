@@ -214,16 +214,79 @@ def scoped_customer_id(u):
     return None
 
 
+STAFF_ROLES = ("engineer", "application")
+
+
+def _staff_link_ids(c, user_id):
+    """Organizations an engineer/application account is explicitly linked to.
+
+    Reads the staff_customer_links join table (insertion order). Empty means
+    "no explicit selection" — the account then reaches every organization on
+    its tenant admin's care list (see tenant_scope)."""
+    rows = c.execute(
+        "SELECT customer_id FROM staff_customer_links WHERE user_id=? ORDER BY created_at, customer_id",
+        (user_id,)).fetchall()
+    out = []
+    for r in rows:
+        if r["customer_id"] not in out:
+            out.append(r["customer_id"])
+    return out
+
+
+def _set_staff_links(c, user_id, customer_ids):
+    """Replace a staff account's explicit organization links (no commit)."""
+    c.execute("DELETE FROM staff_customer_links WHERE user_id=?", (user_id,))
+    seen = []
+    for cid in customer_ids or []:
+        if cid in seen:
+            continue
+        seen.append(cid)
+        c.execute(
+            "INSERT OR IGNORE INTO staff_customer_links (user_id, customer_id, created_at) VALUES (?,?,?)",
+            (user_id, cid, now()))
+
+
+def _tenant_admin_row(c, admin_id):
+    """The users row of a TENANT admin (not the master), else None."""
+    if not admin_id:
+        return None
+    row = c.execute("SELECT * FROM users WHERE id=?", (admin_id,)).fetchone()
+    if row and row["role"] == "admin" and not is_master_admin(dict(row)):
+        return row
+    return None
+
+
+def _clean_customer_ids(raw):
+    """Coerce a JSON list of organization ids (strings from <select>/<input>
+    values included) to a de-duplicated list of ints. Returns None when the
+    value is not a list at all, so callers can tell "absent/invalid" from
+    "explicitly empty"."""
+    if not isinstance(raw, (list, tuple)):
+        return None
+    out = []
+    for v in raw:
+        cid = _id(v)
+        if cid and cid not in out:
+            out.append(cid)
+    return out
+
+
 def tenant_scope(u, c):
     """The customer ids a tenant-scoped staff member may access, or None.
 
     * Tenant admin: their PRIMARY customer plus any added to their care list.
-    * Tenant engineer: their single customer.
-    * Engineer/application with NO customer but a linked tenant admin: that
-      admin's care list — the account belongs to the tenant, not to one
-      organization, so it must not become system-wide.
-    * Master admin / provider engineer (no customer, no tenant admin): None =
-      unscoped (all)."""
+    * Tenant engineer (legacy single binding on users.customer_id): that one
+      customer.
+    * Engineer/application with NO customer of their own:
+        - explicitly linked to organizations (staff_customer_links): exactly
+          those — and, when a tenant admin is linked, never beyond that admin's
+          CURRENT care list, so an organization the admin has since dropped is
+          dropped for their staff too;
+        - otherwise, with a linked tenant admin: that admin's whole care list —
+          the account belongs to the tenant, not to one organization, so it
+          must not become system-wide.
+    * Master admin / provider engineer (no customer, no links, no tenant
+      admin): None = unscoped (all)."""
     if not u:
         return None
     if u.get("role") == "admin":
@@ -231,20 +294,25 @@ def tenant_scope(u, c):
             return None
         # tenant admin — empty list when they have no organizations yet
         return _admin_scope_ids(c, u["id"], u)
-    if u.get("role")  in ("engineer", "application"):
+    if u.get("role") in STAFF_ROLES:
         if u.get("customer_id"):
             return [u["customer_id"]]
         # No organization of their own: they were placed under a tenant admin's
-        # care, so they inherit exactly that admin's care list. Deliberately NOT
-        # unscoped — otherwise a tenant admin could mint an account that sees
-        # every organization on the system. The master's own LabSynch-wide staff
-        # have no link (or are linked to the master) and stay unscoped.
-        ra = u.get("responsible_admin_id")
-        if ra:
-            row = c.execute("SELECT * FROM users WHERE id=?", (ra,)).fetchone()
-            if row and row["role"] == "admin" and not is_master_admin(dict(row)):
-                return _admin_scope_ids(c, row["id"], row)
-        return None
+        # care, so they inherit (a selection of) that admin's care list.
+        # Deliberately NOT unscoped — otherwise a tenant admin could mint an
+        # account that sees every organization on the system. The master's own
+        # LabSynch-wide staff have no link (or are linked to the master) and
+        # stay unscoped.
+        admin_scope = None
+        row = _tenant_admin_row(c, u.get("responsible_admin_id"))
+        if row is not None:
+            admin_scope = _admin_scope_ids(c, row["id"], row)
+        linked = _staff_link_ids(c, u["id"])
+        if linked:
+            if admin_scope is not None:
+                return [cid for cid in linked if cid in admin_scope]
+            return linked
+        return admin_scope
     return None
 
 
@@ -252,6 +320,26 @@ def in_scope(col, scope):
     """Return (sql, params) appending `col IN (?, …)` for a scope list."""
     marks = ", ".join("?" for _ in scope)
     return f"{col} IN ({marks})", list(scope)
+
+
+def scope_where(scope, col="customer_id"):
+    """(sql, params) for a tenant_scope() result.
+
+    None = unscoped -> ("", []); an EMPTY list = nothing at all -> ("0=1", [])
+    — never "everything"; otherwise `col IN (...)`."""
+    if scope is None:
+        return "", []
+    if not scope:
+        return "0=1", []
+    return in_scope(col, scope)
+
+
+def scopes_overlap(a, b):
+    """True when two tenant_scope() results can reach a common organization
+    (None = unscoped overlaps everything)."""
+    if a is None or b is None:
+        return True
+    return bool(set(a) & set(b))
 
 
 def customer_scope_filter(c, u, col="customer_id"):
@@ -322,7 +410,22 @@ def tenant_guard(u, customer_id, c=None):
             bound_int = bound
         if bound_int is not None and cid_int is not None and cid_int != bound_int:
             return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
-        # If bound is None (unscoped engineer), allow
+        if bound_int is None and u.get("role") in STAFF_ROLES and cid_int is not None:
+            # Customer-less staff are NOT automatically unscoped: an account
+            # under a tenant admin's care (or linked to chosen organizations)
+            # may only touch those organizations. Only a genuinely
+            # LabSynch-wide engineer (scope None) passes for any organization.
+            own = c is None
+            if own:
+                c = conn()
+            try:
+                staff_scope = tenant_scope(u, c)
+            finally:
+                if own:
+                    c.close()
+            if staff_scope is not None and cid_int not in [int(x) for x in staff_scope]:
+                return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
+        # Otherwise (unscoped engineer, or a customer-role user) allow
         return None, None
     if is_master_admin(u):
         return None, None
@@ -384,12 +487,57 @@ def assignee_allowed(u, assignee_id, c):
         return True            # master / provider engineer actor
     if not scope:
         return False           # tenant admin with no organizations yet
-    row = c.execute("SELECT role, customer_id FROM users WHERE id=?", (assignee_id,)).fetchone()
+    row = c.execute("SELECT * FROM users WHERE id=?", (assignee_id,)).fetchone()
     if not row or row["role"] not in ("engineer", "application", "admin"):
         return False
     if row["customer_id"] is None:
-        return row["role"]  in ("engineer", "application")
+        if row["role"] not in STAFF_ROLES:
+            return False       # the master / an unbound tenant admin
+        # Customer-less staff: the provider's LabSynch-wide engineers (scope
+        # None) may be assigned by anyone; staff under a tenant admin's care —
+        # or linked to chosen organizations — only by tenants they reach.
+        return scopes_overlap(tenant_scope(dict(row), c), scope)
     return row["customer_id"] in scope
+
+
+def _staff_reaches_tenant(c, actor, staff_row, scope):
+    """Is a customer-less staff account part of this tenant admin's team?
+
+    True for the provider's LabSynch-wide engineers (everyone may see and
+    assign them), for staff whose reach overlaps the actor's care list, and for
+    staff the actor is personally responsible for (even while that care list
+    is still empty, so the accounts can be corrected or removed)."""
+    row = dict(staff_row)
+    if row.get("role") not in STAFF_ROLES:
+        return False
+    if row.get("responsible_admin_id") == actor["id"]:
+        return True
+    return scopes_overlap(tenant_scope(row, c), scope)
+
+
+def validate_staff_customers(c, u, scope, customer_ids, responsible_admin_id):
+    """Validate the explicit organization links for a staff account.
+
+    Every organization must exist, be on the acting tenant admin's care list
+    (the master may name any), and — when a tenant admin is linked — be under
+    THAT admin's care, since the links are a selection of the admin's care list.
+    Returns (error_json, code) or (None, None)."""
+    if not customer_ids:
+        return None, None
+    if scope is not None:
+        missing = [cid for cid in customer_ids if cid not in scope]
+        if missing:
+            return jsonify({"error": "You can only link accounts to an organization you care for"}), 403
+    marks = ", ".join("?" for _ in customer_ids)
+    found = c.execute(f"SELECT id FROM customers WHERE id IN ({marks})", list(customer_ids)).fetchall()
+    if len(found) != len(customer_ids):
+        return jsonify({"error": "Linked organization not found"}), 400
+    admin_row = _tenant_admin_row(c, responsible_admin_id)
+    if admin_row is not None:
+        care = _admin_scope_ids(c, admin_row["id"], admin_row)
+        if any(cid not in care for cid in customer_ids):
+            return jsonify({"error": "Linked organizations must all be under the linked tenant admin's care"}), 400
+    return None, None
 
 
 def validate_responsible_admin(c, customer_id, responsible_admin_id, customerless_user=False):
@@ -493,8 +641,13 @@ def public_user(u, c=None):
     frontend can scope pickers without extra round-trips."""
     u = dict(u)
     u.pop("password_hash", None)
-    if is_tenant_admin(u) and c is not None:
-        u["customer_ids"] = _admin_scope_ids(c, u["id"], u)
+    if c is not None:
+        if is_tenant_admin(u):
+            u["customer_ids"] = _admin_scope_ids(c, u["id"], u)
+        elif u.get("role") in STAFF_ROLES:
+            # the organizations an engineer/application was explicitly linked
+            # to ([] = every organization under the linked tenant admin's care)
+            u["customer_ids"] = _staff_link_ids(c, u["id"])
     return u
 
 
@@ -597,13 +750,19 @@ def _staff_in_tenant_care(c, admin_id, user_row, scope):
     An engineer/application account with no organization of its own is owned by
     the tenant admin named in its responsible_admin_id. The actor may manage it
     when they ARE that admin, or when that admin is a peer who cares for at least
-    one organization the actor also cares for."""
+    one organization the actor also cares for.
+
+    An account with no tenant admin at all but explicit organization links
+    (set up by the master) is manageable by a tenant admin who cares for EVERY
+    linked organization — a partially foreign or LabSynch-wide account stays
+    with the master."""
     row = dict(user_row)
     if row.get("role") not in ("engineer", "application"):
         return False
     ra = row.get("responsible_admin_id")
     if not ra:
-        return False
+        linked = _staff_link_ids(c, row["id"]) if row.get("id") else []
+        return bool(linked) and all(cid in (scope or []) for cid in linked)
     if ra == admin_id:
         return True
     ar = c.execute("SELECT * FROM users WHERE id=?", (ra,)).fetchone()
@@ -709,8 +868,68 @@ def notify(user_id, text, entity_type="", entity_id=None, email_fn=None):
                 pass
 
 
+def _ticket_team_ids(c, rec):
+    """Tenant admins, engineers and applications who hear about a ticket: only
+    those linked to the ticket's ORGANIZATION.
+
+    * master: every organization;
+    * tenant admin: the organizations on their care list (primary + linked);
+    * engineer/application bound to one organization: that organization;
+    * customer-less engineer/application: their reach — the organizations they
+      were explicitly linked to, else their tenant admin's care list. Only a
+      genuinely LabSynch-wide account (no organization, no links, no tenant
+      admin — created by the master) hears every organization.
+    A ticket without an organization (should not exist) reaches only the
+    unscoped accounts, never everyone."""
+    cust = rec.get("customer_id")
+    ids = set()
+    for r in c.execute(
+            "SELECT * FROM users WHERE role IN ('engineer','application','admin') "
+            "AND active=1 AND COALESCE(pending,0)=0").fetchall():
+        row = dict(r)
+        if row["role"] == "admin":
+            if is_master_admin(row):
+                ids.add(row["id"])
+            elif cust is not None and cust in _admin_scope_ids(c, row["id"], r):
+                ids.add(row["id"])
+            continue
+        if row.get("customer_id"):
+            if row["customer_id"] == cust:
+                ids.add(row["id"])
+            continue
+        reach = tenant_scope(row, c)
+        if reach is None or (cust is not None and cust in reach):
+            ids.add(row["id"])
+    return ids
+
+
+def _ticket_customer_ids(c, rec):
+    """Customer users who hear about a ticket: those linked to the ticket's
+    organization — and, when they are linked to a location (department), only
+    tickets at that location (department). A customer's alerts follow where
+    they are linked, not merely the tickets they raised themselves."""
+    cust = rec.get("customer_id")
+    if not cust:
+        return set()
+    loc, dept = rec.get("location_id"), rec.get("department_id")
+    ids = set()
+    for r in c.execute(
+            "SELECT id, location_id, department_id FROM users WHERE role='customer' "
+            "AND active=1 AND COALESCE(pending,0)=0 AND customer_id=?", (cust,)).fetchall():
+        if r["location_id"] and r["location_id"] != loc:
+            continue
+        if r["department_id"] and r["department_id"] != dept:
+            continue
+        ids.add(r["id"])
+    return ids
+
+
 def _stakeholder_ids(kind, rec, include_team=False):
-    """User ids that should hear about an event on this ticket."""
+    """User ids that should hear about an event on this ticket.
+
+    Always: the participants (assignee + reporter) and the customer users
+    linked to the ticket's organization/location. With include_team: also the
+    tenant admins, engineers and applications linked to its organization."""
     ids = set()
     if kind == "complaint":
         if rec.get("assigned_to"): ids.add(rec["assigned_to"])
@@ -718,29 +937,12 @@ def _stakeholder_ids(kind, rec, include_team=False):
     else:
         if rec.get("assigned_to"): ids.add(rec["assigned_to"])
         if rec.get("reported_by"): ids.add(rec["reported_by"])
-    if include_team:
-        c = conn()
-        cust = rec.get("customer_id")
-        for r in c.execute(
-                "SELECT id, email, customer_id, role FROM users WHERE role IN ('engineer','application','admin') AND active=1").fetchall():
-            if cust is None or r["customer_id"] == cust:
-                ids.add(r["id"])
-                continue
-            if r["customer_id"] is None:
-                # provider engineers hear everything; among customer-less
-                # admins only the MASTER does — unbound tenant admins rely
-                # solely on their care list (checked below).
-                if r["role"]  in ("engineer", "application") or (r["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL:
-                    ids.add(r["id"])
-                    continue
-            # tenant admins also hear tickets for customers they care for
-            # via admin_customer_links (not just their primary customer)
-            if r["role"] == "admin":
-                link = c.execute(
-                    "SELECT 1 FROM admin_customer_links WHERE admin_id=? AND customer_id=?",
-                    (r["id"], cust)).fetchone()
-                if link:
-                    ids.add(r["id"])
+    c = conn()
+    try:
+        ids |= _ticket_customer_ids(c, rec)
+        if include_team:
+            ids |= _ticket_team_ids(c, rec)
+    finally:
         c.close()
     return ids
 
@@ -1359,13 +1561,12 @@ def list_customers():
         where, params = " WHERE id=?", [u.get("customer_id")]
     elif u["role"]  in ("engineer", "application") and u.get("customer_id"):
         where, params = " WHERE id=?", [u["customer_id"]]
-    elif u["role"] == "admin" and not is_master_admin(u):
-        scope = tenant_scope(u, c)
-        if scope:
-            where = " WHERE id IN ({})".format(", ".join("?" for _ in scope))
-            params = list(scope)
-        else:
-            where, params = " WHERE 0=1", []   # unbound tenant admin: nothing yet
+    elif u["role"] in STAFF_ROLES or (u["role"] == "admin" and not is_master_admin(u)):
+        # tenant admins: their care list; customer-less staff: the organizations
+        # they were linked to, or their tenant admin's care list. An EMPTY
+        # scope (unbound tenant admin) yields nothing — never everything.
+        sw, sp = scope_where(tenant_scope(u, c), "id")
+        where, params = (" WHERE " + sw if sw else ""), sp
     else:
         where, params = "", []
     rows = c.execute("SELECT * FROM customers" + where + " ORDER BY name", params).fetchall()
@@ -1441,18 +1642,13 @@ def update_customer(cid):
 
 @app.delete("/api/customers/<int:cid>")
 def delete_customer(cid):
-    u, err, code = require_role("admin")
+    # Deleting an organization is the master's alone — a tenant admin cannot
+    # delete an organization even when it is under their care (they may only
+    # drop it from their care list via DELETE /api/my-customers/<id>).
+    u, err, code = require_master()
     if err:
         return err, code
     c = conn()
-    if not is_master_admin(u):
-        err_t, code_t = tenant_guard(u, cid, c)
-        if err_t:
-            c.close()
-            return err_t, code_t
-        if u.get("customer_id") == cid:
-            c.close()
-            return jsonify({"error": "You cannot delete your own primary organization"}), 400
     n_equip = c.execute("SELECT COUNT(*) n FROM equipment WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_cmp = c.execute("SELECT COUNT(*) n FROM complaints WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_brk = c.execute("SELECT COUNT(*) n FROM breakdowns WHERE customer_id=?", (cid,)).fetchone()["n"]
@@ -1463,8 +1659,9 @@ def delete_customer(cid):
         c.close()
         return jsonify({"error": "Organization has linked locations, equipment, tickets, PM schedules or portal links; cannot delete."}), 409
     c.execute("DELETE FROM customers WHERE id=?", (cid,))
-    # drop any care-list links to the removed organization
+    # drop any care-list / staff links to the removed organization
     c.execute("DELETE FROM admin_customer_links WHERE customer_id=?", (cid,))
+    c.execute("DELETE FROM staff_customer_links WHERE customer_id=?", (cid,))
     c.commit()
     c.close()
     return jsonify({"ok": True})
@@ -3133,19 +3330,27 @@ def list_users():
     scope = tenant_scope(u, c) if tenant_filter else None
     for r in rows:
         if tenant_filter:
-            # tenant admins only see their care-list customers' users, plus the
-            # provider's unbound engineers they may assign work to (never other admins).
+            # tenant admins only see their care-list customers' users, plus their
+            # own customer-less staff and the provider's LabSynch-wide engineers
+            # they may assign work to (never other admins, never another
+            # tenant's staff).
             if r["role"] == "admin":
                 continue
-            if r["customer_id"] is not None and r["customer_id"] not in scope:
+            if r["customer_id"] is not None:
+                if r["customer_id"] not in scope:
+                    continue
+            elif not _staff_reaches_tenant(c, u, r, scope):
                 continue
-        d = public_user(r)
+        d = public_user(r, c)
         d["customer_name"] = None
         d["location_name"] = None
         d["department_name"] = None
         if r["customer_id"]:
             cu = c.execute("SELECT name FROM customers WHERE id=?", (r["customer_id"],)).fetchone()
             d["customer_name"] = cu["name"] if cu else None
+        # names of the organizations a staff account is explicitly linked to
+        d["customer_names"] = [_name_of(c, "customers", cid) or "?" for cid in d.get("customer_ids") or []] \
+            if r["role"] in STAFF_ROLES else []
         d["location_name"] = _name_of(c, "locations", r["location_id"])
         d["department_name"] = _name_of(c, "departments", r["department_id"])
         d["responsible_admin_name"] = _responsible_admin_name(c, r["responsible_admin_id"])
@@ -3162,23 +3367,29 @@ def list_engineers():
     c = conn()
     # assignee picker: only the player's own tenant staff + provider engineers.
     # The master admin is never listed as an assignable engineer.
-    q = "SELECT id,name,email,role FROM users WHERE role IN ('engineer','application','admin') AND active=1"
+    q = "SELECT * FROM users WHERE role IN ('engineer','application','admin') AND active=1"
     params = []
     scope = tenant_scope(u, c)
-    if u["role"] == "admin" and not is_master_admin(u):
-        # tenant admin: own tenant staff + provider engineers only — even with
-        # an empty care list (IN (NULL) matches nothing, provider techs still show)
+    if scope is not None:
+        # tenant admin / scoped staff: own tenant staff + provider engineers
+        # only — even with an empty care list (IN (NULL) matches nothing,
+        # provider techs still show)
         marks = ", ".join("?" for _ in scope) or "NULL"
-        q += f" AND (customer_id IN ({marks}) OR (customer_id IS NULL AND role IN ('engineer','application')))"
-        params += list(scope)
-    elif scope:
-        marks = ", ".join("?" for _ in scope)
         q += f" AND (customer_id IN ({marks}) OR (customer_id IS NULL AND role IN ('engineer','application')))"
         params += list(scope)
     q += " ORDER BY name"
     rows = c.execute(q, params).fetchall()
+    out = []
+    for r in rows:
+        # Customer-less staff are only "everyone's" when they are LabSynch-wide:
+        # an account under a tenant admin's care, or linked to chosen
+        # organizations, is listed for the tenants it reaches — not for others.
+        if scope is not None and r["customer_id"] is None and r["role"] in STAFF_ROLES \
+                and not scopes_overlap(tenant_scope(dict(r), c), scope):
+            continue
+        out.append({k: r[k] for k in ("id", "name", "email", "role")})
     c.close()
-    return jsonify(rows_to_dicts(rows))
+    return jsonify(out)
 
 
 @app.get("/api/tenant-admins")
@@ -3225,8 +3436,16 @@ def list_tenant_admins():
         else:
             q = "SELECT id, name, email, role, customer_id FROM users WHERE role='admin' AND active=1 ORDER BY name"
             rows = c.execute(q).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        # each admin's care list, so the Add user form can offer exactly the
+        # organizations a staff account may be linked to under that admin
+        d["customer_ids"] = ([] if (d.get("email") or "").strip().lower() == MASTER_ADMIN_EMAIL
+                             else _admin_scope_ids(c, d["id"], d))
+        out.append(d)
     c.close()
-    return jsonify(rows_to_dicts(rows))
+    return jsonify(out)
 
 
 @app.post("/api/users")
@@ -3244,6 +3463,7 @@ def create_user():
     is_tenant = is_tenant_admin(u)
     scope = None
     c = None
+    staff_links = None   # explicit organization links (staff roles only)
     if is_tenant:
         c = conn()
         scope = tenant_scope(u, c)
@@ -3281,6 +3501,14 @@ def create_user():
             customer_id = (u.get("customer_id") if u.get("role")  in ("engineer", "application") else
                            _id(b.get("customer_id")))
         location_id = department_id = None
+        # `customer_ids` links the account to SEVERAL organizations under the
+        # tenant admin's care (validated below, once the responsible admin is
+        # known). It replaces the single organization: an account is either
+        # bound to one organization the old way, linked to a selection, or —
+        # with neither — reaches the whole care list.
+        staff_links = _clean_customer_ids(b.get("customer_ids"))
+        if staff_links:
+            customer_id = None
     else:  # admin — only the master may create one, and it is always a tenant admin.
         # The tenant admin may deliberately be left UNLINKED: after first login
         # they create their own organization (auto-added to their care list),
@@ -3321,6 +3549,12 @@ def create_user():
         if not (set(peer_scope) & set(scope)):
             c.close()
             return jsonify({"error": "That tenant admin does not care for any organization you manage"}), 403
+    # Linked organizations: each must be on the actor's care list and under the
+    # linked tenant admin's care (a staff account never reaches beyond its admin).
+    err_r, code_r = validate_staff_customers(c, u, scope, staff_links, ra_id)
+    if err_r:
+        c.close()
+        return err_r, code_r
     if (b["email"] or "").strip().lower() == FORMER_USER_EMAIL:
         c.close()
         return jsonify({"error": "That email is reserved for the system placeholder account"}), 400
@@ -3333,10 +3567,14 @@ def create_user():
         (b["name"].strip(), b["email"].strip().lower(), b.get("phone", ""), hash_password(b["password"]),
          role, customer_id, location_id, department_id, ra_id, now()),
     )
+    new_id = cur.lastrowid
+    if staff_links:
+        _set_staff_links(c, new_id, staff_links)
     c.commit()
-    row = c.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
+    row = c.execute("SELECT * FROM users WHERE id=?", (new_id,)).fetchone()
+    out = public_user(row, c)
     c.close()
-    return jsonify(public_user(row)), 201
+    return jsonify(out), 201
 
 
 @app.patch("/api/users/<int:uid>")
@@ -3364,6 +3602,23 @@ def update_user(uid):
             c.close()
             return jsonify({"error": "The Master System Admin account cannot be disabled"}), 403
 
+    # Explicit organization links for a staff account (`customer_ids`, a list).
+    # A non-empty selection replaces any single organization binding — the
+    # account is then linked to those organizations only; an empty list clears
+    # the selection so the account reaches its tenant admin's whole care list.
+    # For admin accounts `customer_ids` keeps its meaning of "care list" below.
+    resulting_role = b.get("role", existing["role"])
+    staff_links = None
+    if resulting_role in STAFF_ROLES and "customer_ids" in b:
+        staff_links = _clean_customer_ids(b.get("customer_ids"))
+        if staff_links is None:
+            c.close()
+            return jsonify({"error": "customer_ids must be a list of organization ids"}), 400
+        if staff_links:
+            b = dict(b)
+            b["customer_id"] = None
+
+    scope = None
     if u["role"] == "admin" and not is_master_admin(u):
         # Tenant admins cannot touch admin accounts, nor anyone outside their care list.
         if existing["role"] == "admin":
@@ -3441,6 +3696,21 @@ def update_user(uid):
     if err_r:
         c.close()
         return err_r, code_r
+    # A tenant admin may only place a customer-less account under themselves or
+    # a peer who shares an organization with them (same rule as on create).
+    if scope is not None and not new_customer_id and ra_id and ra_id != u["id"] \
+            and ra_id != existing["responsible_admin_id"]:
+        peer = c.execute("SELECT * FROM users WHERE id=?", (ra_id,)).fetchone()
+        peer_scope = _admin_scope_ids(c, ra_id, peer) if peer else []
+        if not (set(peer_scope) & set(scope)):
+            c.close()
+            return jsonify({"error": "That tenant admin does not care for any organization you manage"}), 403
+    # Linked organizations must be on the actor's care list and under the
+    # (resulting) linked tenant admin's care.
+    err_r, code_r = validate_staff_customers(c, u, scope, staff_links, ra_id)
+    if err_r:
+        c.close()
+        return err_r, code_r
 
     if "role" in b and b["role"] not in ("admin", "engineer", "application", "customer"):
         c.close()
@@ -3474,10 +3744,21 @@ def update_user(uid):
         c.execute(f"UPDATE users SET {', '.join(fields)} WHERE id=?", params)
         c.commit()
     row = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    # Keep the organization links coherent with the row: a new selection
+    # replaces the old one; a single-organization binding or a move to a
+    # non-staff role drops any explicit selection (it would be dead anyway).
+    if row:
+        if staff_links is not None:
+            _set_staff_links(c, uid, staff_links)
+        elif row["role"] not in STAFF_ROLES or (row["customer_id"] and "customer_id" in b):
+            _set_staff_links(c, uid, [])
+        c.commit()
     out = public_user(row, c)
     if row and row["customer_id"]:
         cu = c.execute("SELECT name FROM customers WHERE id=?", (row["customer_id"],)).fetchone()
         out["customer_name"] = cu["name"] if cu else None
+    out["customer_names"] = [_name_of(c, "customers", cid) or "?" for cid in out.get("customer_ids") or []] \
+        if row and row["role"] in STAFF_ROLES else []
     out["location_name"] = _name_of(c, "locations", row["location_id"]) if row else None
     out["department_name"] = _name_of(c, "departments", row["department_id"]) if row else None
     out["responsible_admin_name"] = _responsible_admin_name(c, row["responsible_admin_id"]) if row else None
@@ -3510,7 +3791,10 @@ def update_user(uid):
 
 @app.delete("/api/users/<int:uid>")
 def delete_user(uid):
-    u, err, code = require_role("admin")
+    # Deleting an account — a customer, an engineer/application or a tenant
+    # admin — is the master's alone. A tenant admin may still create, edit and
+    # disable (active=0) the accounts under their care, but never remove them.
+    u, err, code = require_master()
     if err:
         return err, code
     if uid == u["id"]:
@@ -3523,23 +3807,14 @@ def delete_user(uid):
     if (existing["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL:
         c.close()
         return jsonify({"error": "The Master System Admin account cannot be deleted"}), 403
-    if is_tenant_admin(u):
-        if existing["role"] == "admin":
-            c.close()
-            return jsonify({"error": "Only the master administrator can manage admin accounts"}), 403
-        err_t, code_t = tenant_guard(u, existing["customer_id"], c)
-        if err_t:
-            c.close()
-            return err_t, code_t
     email = (existing["email"] or "").strip().lower()
     if email == FORMER_USER_EMAIL:
         c.close()
         return jsonify({"error": "The 'Former user' placeholder is a system account and cannot be deleted"}), 400
-    # The master may delete ANY user (tenant admins: any non-admin in their
-    # scope). Deleting never cascades: every record that references the user is
-    # UNLINKED (nullable reference columns set to NULL) — tickets, equipment,
-    # PM schedules, care lists and history are all kept; immutable history
-    # references move to the "Former user" placeholder.
+    # The master may delete ANY user. Deleting never cascades: every record
+    # that references the user is UNLINKED (nullable reference columns set to
+    # NULL) — tickets, equipment, PM schedules, care lists and history are all
+    # kept; immutable history references move to the "Former user" placeholder.
     former = c.execute("SELECT id FROM users WHERE lower(email)=?", (FORMER_USER_EMAIL,)).fetchone()
     if former:
         former_id = former["id"]
@@ -3569,6 +3844,7 @@ def delete_user(uid):
     c.execute("DELETE FROM push_subscriptions WHERE user_id=?", (uid,))
     c.execute("DELETE FROM app_devices WHERE user_id=?", (uid,))
     c.execute("DELETE FROM admin_customer_links WHERE admin_id=?", (uid,))
+    c.execute("DELETE FROM staff_customer_links WHERE user_id=?", (uid,))
     c.execute("DELETE FROM users WHERE id=?", (uid,))
     c.commit()
     c.close()
@@ -3595,10 +3871,11 @@ def dashboard():
             cust_scopes.append(("department_id", u["department_id"]))
     else:
         scope = tenant_scope(u, c)
-        if scope:
-            cust_scopes.append(("customer_id", scope))
+        if scope is not None:
+            # an EMPTY care list counts nothing, never everything
+            cust_scopes.append(("customer_id", list(scope)))
     total_cust = 1 if (u["role"] == "customer") else (
-        len(scope) if scope else c.execute("SELECT COUNT(*) n FROM customers").fetchone()["n"])
+        len(scope) if scope is not None else c.execute("SELECT COUNT(*) n FROM customers").fetchone()["n"])
 
     def scoped(sql, params=None, cols=None):
         """Append customer-scope conditions (as WHERE/AND) before any
@@ -3613,6 +3890,9 @@ def dashboard():
         for key, val in cust_scopes:
             col = cols.get(key, key)
             if isinstance(val, (list, tuple)):
+                if not val:
+                    conds.append("0=1")
+                    continue
                 marks = ", ".join("?" for _ in val)
                 conds.append(f"{col} IN ({marks})")
                 params.extend(val)
@@ -3681,14 +3961,15 @@ def dashboard():
                 "SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND (next_due_at IS NULL OR next_due_at <= ?)",
                 [now()]).fetchone()["n"]
             pm_total = c.execute("SELECT COUNT(*) n FROM pm_schedules WHERE active=1").fetchone()["n"]
-    elif scope:
-        marks = ", ".join("?" for _ in scope)
+    elif scope is not None:
+        # scoped staff — an EMPTY care list counts nothing, never everything
+        sw, sp = scope_where(scope, "customer_id")
         pm_due = c.execute(
-            f"SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND customer_id IN ({marks}) AND (next_due_at IS NULL OR next_due_at <= ?)",
-            list(scope) + [now()]).fetchone()["n"]
+            f"SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND {sw} AND (next_due_at IS NULL OR next_due_at <= ?)",
+            list(sp) + [now()]).fetchone()["n"]
         pm_total = c.execute(
-            f"SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND customer_id IN ({marks})",
-            list(scope)).fetchone()["n"]
+            f"SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND {sw}",
+            list(sp)).fetchone()["n"]
     else:
         pm_due = c.execute(
             "SELECT COUNT(*) n FROM pm_schedules WHERE active=1 AND (next_due_at IS NULL OR next_due_at <= ?)",
@@ -3996,12 +4277,9 @@ def export_csv():
     import csv as csv_mod
     c = conn()
     out = ""
-    scope = tenant_scope(u, c)
-    where_sql, where_params = "", []
-    if scope:
-        marks = ", ".join("?" for _ in scope)
-        where_sql = f" WHERE customer_id IN ({marks})"
-        where_params = list(scope)
+    # None = unscoped; an EMPTY care list exports nothing, never everything
+    sw, where_params = scope_where(tenant_scope(u, c), "customer_id")
+    where_sql = f" WHERE {sw}" if sw else ""
     if entity == "breakdowns":
         rows = c.execute(
             "SELECT * FROM breakdowns" + where_sql + " ORDER BY created_at DESC",
@@ -4107,12 +4385,11 @@ def trend_report_pdf():
 
     def scope(sql, params=None, col="customer_id"):
         params = list(params or [])
-        if not cust_scope:
+        if cust_scope is None:
             return sql, params
         if isinstance(cust_scope, (list, tuple)):
-            marks = ", ".join("?" for _ in cust_scope)
-            cond = f"{col} IN ({marks})"
-            extra = list(cust_scope)
+            # an EMPTY care list reports on nothing, never on everything
+            cond, extra = scope_where(cust_scope, col)
         else:
             cond = f"{col} = ?"
             extra = [cust_scope]
@@ -4198,11 +4475,11 @@ def list_pms():
             where.append("p.customer_id=?")
             params.append(u["customer_id"])
     else:
-        scope = tenant_scope(u, c)
-        if scope:
-            marks = ", ".join("?" for _ in scope)
-            where.append(f"p.customer_id IN ({marks})")
-            params.extend(scope)
+        # None = unscoped; an EMPTY care list sees nothing, never everything
+        sw, sp = scope_where(tenant_scope(u, c), "p.customer_id")
+        if sw:
+            where.append(sw)
+            params.extend(sp)
     mine = request.args.get("mine")
     if mine and is_tech_user(u):
         where.append("(p.assigned_to=? OR p.assigned_to IS NULL)")
@@ -4420,12 +4697,9 @@ def list_portal_links():
     if err:
         return err, code
     c = conn()
-    where, params = "", []
-    scope = tenant_scope(u, c)
-    if scope:
-        marks = ", ".join("?" for _ in scope)
-        where = f" WHERE pl.customer_id IN ({marks})"
-        params = list(scope)
+    # None = unscoped; an EMPTY care list sees nothing, never everything
+    sw, params = scope_where(tenant_scope(u, c), "pl.customer_id")
+    where = f" WHERE {sw}" if sw else ""
     rows = c.execute(
         "SELECT pl.*, cu.name AS customer_name, e.name AS equipment_name, e.model AS equipment_model, e.serial_number AS equipment_serial "
         "FROM portal_links pl JOIN customers cu ON cu.id=pl.customer_id "
@@ -4871,7 +5145,7 @@ def portal_events(token):
 # --------------------------------------------------------------------------
 # Version check
 # --------------------------------------------------------------------------
-APP_VERSION = "49"
+APP_VERSION = "50"
 
 @app.get("/api/version")
 def api_version():
