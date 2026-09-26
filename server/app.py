@@ -1498,14 +1498,23 @@ def list_locations():
         return err, code
     c = conn()
     where, params = [], []
-    scoped_where, scoped_params = customer_scope_filter(c, u, "l.customer_id")
-    if scoped_where:
-        where.append(scoped_where)
-        params += scoped_params
-    cust = request.args.get("customer_id")
-    if cust:
-        where.append("l.customer_id=?")
-        params.append(cust)
+    if u["role"] == "customer":
+        if u.get("customer_id"):
+            where.append("l.customer_id=?")
+            params.append(u["customer_id"])
+        if u.get("location_id"):
+            where.append("l.id=?")
+            params.append(u["location_id"])
+        # department implies location, but location filter already covers
+    else:
+        scoped_where, scoped_params = customer_scope_filter(c, u, "l.customer_id")
+        if scoped_where:
+            where.append(scoped_where)
+            params += scoped_params
+        cust = request.args.get("customer_id")
+        if cust:
+            where.append("l.customer_id=?")
+            params.append(cust)
     q = ("SELECT l.*, cu.name AS customer_name FROM locations l JOIN customers cu ON cu.id=l.customer_id")
     if where:
         q += " WHERE " + " AND ".join(where)
@@ -1634,15 +1643,26 @@ def list_departments():
         return err, code
     c = conn()
     where, params = [], []
-    scoped_where, scoped_params = customer_scope_filter(c, u, "d.customer_id")
-    if scoped_where:
-        where.append(scoped_where)
-        params += scoped_params
-    for f in ("customer_id", "location_id"):
-        v = request.args.get(f)
-        if v:
-            where.append(f"d.{f}=?")
-            params.append(v)
+    if u["role"] == "customer":
+        if u.get("customer_id"):
+            where.append("d.customer_id=?")
+            params.append(u["customer_id"])
+        if u.get("location_id"):
+            where.append("d.location_id=?")
+            params.append(u["location_id"])
+        if u.get("department_id"):
+            where.append("d.id=?")
+            params.append(u["department_id"])
+    else:
+        scoped_where, scoped_params = customer_scope_filter(c, u, "d.customer_id")
+        if scoped_where:
+            where.append(scoped_where)
+            params += scoped_params
+        for f in ("customer_id", "location_id"):
+            v = request.args.get(f)
+            if v:
+                where.append(f"d.{f}=?")
+                params.append(v)
     q = ("SELECT d.*, cu.name AS customer_name, l.name AS location_name "
          "FROM departments d JOIN customers cu ON cu.id=d.customer_id JOIN locations l ON l.id=d.location_id")
     if where:
