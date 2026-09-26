@@ -2393,7 +2393,7 @@ async function adminsForCustomer(customerId) {
 // tenant admin yet; tenant staff are always defaulted by the backend.
 function respAdminOpts(admins, selectedId, allowNone) {
   return (allowNone ? `<option value="">— None / not assigned —</option>` : "")
-    + admins.map((a) => `<option value="${a.id}" ${String(selectedId) === String(a.id) ? "selected" : ""}>${esc(a.name)} · ${esc(a.email)}</option>`).join("");
+    + admins.map((a) => `<option value="${a.id}" ${String(selectedId) === String(a.id) ? "selected" : ""}>${esc(a.name)}</option>`).join("");
 }
 
 async function onRespCustomerPick(customerSelId, respSelId) {
@@ -2683,7 +2683,7 @@ async function openUserEditor(edit, id) {
             .map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("")}
         </select></label>
       <div id="uCustomerFields" style="${showCustFields ? "" : "display:none"}">
-        <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked organization (optional — leave empty for LabSynch-wide)" : (tenantAdmin && !startCust ? "Linked organization (optional — leave empty to place them under tenant admin care)" : "Linked organization")}</span>
+        <label class="field" id="uCustomerField"><span id="uCustomerLabel">${master && !startCust ? "Linked organization (optional — leave empty for LabSynch-wide)" : (tenantAdmin && !startCust ? "Linked organization (optional — leave empty to place them under tenant admin care)" : "Linked organization")}</span>
           <select id="uCustomer" onchange="onUserCustPick()">
             ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabSynch-wide (no customer) —</option>` : ""}
             ${tenantAdmin ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— Under tenant admin care (no single organization) —</option>` : ""}
@@ -2719,11 +2719,13 @@ function toggleCustomerSelect() {
   const role = $("#uRole").value;
   const isCustRole = role === "customer";
   const isTenantAdminRole = role === "admin";
+  const isStaff = !isCustRole && !isTenantAdminRole;
   if (isMaster()) {
-    // customer accounts always need the full customer/location/department picker;
-    // a tenant admin MAY stay unlinked — after first login they create their own
-    // organizations, which land in their care list automatically.
-    $("#uCustomerFields").style.display = (isCustRole || isTenantAdminRole) ? "" : "none";
+    // Master: customer and tenant admin need organization picker.
+    // Engineer/Application should NOT have organization — only linked tenant admin (optional).
+    $("#uCustomerFields").style.display = "";
+    const custField = $("#uCustomerField");
+    if (custField) custField.style.display = isStaff ? "none" : "";
     const lbl = $("#uCustomerLabel");
     if (lbl) lbl.textContent = isTenantAdminRole
       ? "Linked organization (optional — they create their own after login)"
@@ -2732,12 +2734,28 @@ function toggleCustomerSelect() {
     if (emptyOpt) emptyOpt.textContent = isTenantAdminRole
       ? "— Not linked yet (they create their own later) —"
       : "— LabSynch-wide (no customer) —";
+    const respFieldM = $("#uRespAdminField");
+    if (respFieldM) {
+      if (isStaff) {
+        respFieldM.style.display = "";
+        if (!respFieldM.querySelector("select")?.innerHTML?.trim()) {
+          tenantAdminPeers().then((admins) => {
+            const sel = $("#uRespAdmin");
+            if (sel) sel.innerHTML = respAdminOpts(admins, null, true);
+          });
+        }
+      } else if (isCustRole) {
+        // keep existing logic via onUserCustPick
+      } else {
+        respFieldM.style.display = isTenantAdminRole ? "none" : "";
+      }
+    }
   } else {
-    // Tenant staff can create for any organization in their care list (which the
-    // backend scopes /api/customers to). Customer-role accounts MUST name one, so
-    // default those to the admin's primary organization. Staff accounts may stay
-    // empty — that places them under the linked tenant admin's care.
+    // Tenant admin: customer accounts need organization + location.
+    // Engineer/Application should NOT have organization selection — only linked tenant admin.
     $("#uCustomerFields").style.display = "";
+    const custField = $("#uCustomerField");
+    if (custField) custField.style.display = isStaff ? "none" : "";
     const sel = $("#uCustomer");
     if (isCustRole && sel && !sel.value && state.user && state.user.customer_id) {
       sel.value = String(state.user.customer_id);
@@ -2746,14 +2764,17 @@ function toggleCustomerSelect() {
     if (lbl && !isMaster()) lbl.textContent = isCustRole
       ? "Linked organization"
       : "Linked organization (optional — leave empty to place them under tenant admin care)";
-    // The linked-tenant-admin choice only matters for staff accounts; a customer
-    // account's admin follows from its organization.
     const respField = $("#uRespAdminField");
     if (respField && !isMaster()) respField.style.display = isCustRole ? "none" : "";
   }
-  $("#uLocationField").style.display = isCustRole ? "" : "none";
+  $("#uLocationField").style.display = (function(){
+    const r = $("#uRole").value;
+    return r === "customer" ? "" : "none";
+  })();
   if ($("#uDepartmentField")) $("#uDepartmentField").style.display = "none";
-  onUserCustPick();
+  if ($("#uCustomerField") && $("#uCustomerField").style.display !== "none") {
+    onUserCustPick();
+  }
 }
 
 function onUserCustPick() {
