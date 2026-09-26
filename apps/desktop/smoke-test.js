@@ -245,10 +245,11 @@ Module._load = function (request, parent, isMain) {
   check("bubble-preload.js ships in the app dir", fs.existsSync(bubblePreload));
 
   // Simulate the 1.1.0 packaging bug: bubble files absent from the install.
-  const stash = path.join(tmp, "stash");
-  fs.mkdirSync(stash, { recursive: true });
-  const b1 = path.join(stash, "bubble.html");
-  const b2 = path.join(stash, "bubble-preload.js");
+  // Stash them in place (same directory) — moving them to os.tmpdir() fails
+  // with EXDEV on CI runners where the repo and temp are on different drives.
+  const b1 = bubbleHtml + ".hidden";
+  const b2 = bubblePreload + ".hidden";
+  for (const f of [b1, b2]) { try { fs.rmSync(f, { force: true }); } catch (e) {} }
   fs.renameSync(bubbleHtml, b1);
   fs.renameSync(bubblePreload, b2);
   try {
@@ -259,8 +260,13 @@ Module._load = function (request, parent, isMain) {
     check("a sound still plays when the bubble cannot load", soundPlayed.length > 0,
       "without the fallback the alert would be completely silent");
   } finally {
-    fs.renameSync(b1, bubbleHtml);
-    fs.renameSync(b2, bubblePreload);
+    // Always put them back, and never let a restore error mask the real one or
+    // leave stray *.hidden files behind in the working tree.
+    for (const [from, to] of [[b1, bubbleHtml], [b2, bubblePreload]]) {
+      try { if (fs.existsSync(from)) fs.renameSync(from, to); } catch (e) {
+        console.error("  ! could not restore " + to + ": " + e.message);
+      }
+    }
   }
   check("bubble files restored", fs.existsSync(bubbleHtml) && fs.existsSync(bubblePreload));
 
