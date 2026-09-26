@@ -104,6 +104,24 @@ def status_cell(status):
     return t
 
 
+def _log_table(comments):
+    """Two-column who-said-what log, shared by both single-ticket reports."""
+    rows = [[Paragraph(f'<b>{c.get("user_name", "")}</b><br/>'
+                       f'<font size="7" color="#64748B">{c.get("created_at", "")}</font>', BODY),
+             Paragraph(c.get("text", "") or "", BODY)] for c in comments]
+    t = Table(rows, colWidths=[38 * mm, 126 * mm])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, BG]),
+        ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    return t
+
+
 def service_report(complaint, breakdowns, comments, photos):
     """Build a single-ticket service report PDF and return raw bytes.
 
@@ -164,22 +182,7 @@ def service_report(complaint, breakdowns, comments, photos):
 
     # comments
     story.append(Paragraph("Conversation log", H2))
-    if comments:
-        rows = [[Paragraph(f'<b>{c.get("user_name", "")}</b><br/><font size="7" color="#64748B">{c.get("created_at", "")}</font>', BODY),
-                 Paragraph(c.get("text", ""), BODY)] for c in comments]
-        t = Table(rows, colWidths=[38 * mm, 126 * mm])
-        t.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, BG]),
-            ("GRID", (0, 0), (-1, -1), 0.4, LINE),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ]))
-        story.append(t)
-    else:
-        story.append(Paragraph("No comments.", BODY))
+    story.append(_log_table(comments) if comments else Paragraph("No comments.", BODY))
 
     # attached photos (thumbnail row)
     if photos:
@@ -202,6 +205,97 @@ def service_report(complaint, breakdowns, comments, photos):
                 ("RIGHTPADDING", (0, 0), (-1, -1), 2),
             ]))
             story.append(row)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def breakdown_report(breakdown, comments, source_complaint=None):
+    """Build a single-breakdown service report PDF and return raw bytes.
+
+    The breakdown counterpart of service_report(): the same LabCare letterhead,
+    the same summary block and log table, then the fault, root cause,
+    resolution and work log for this one work order.
+
+    Breakdown tickets carry no file attachments — that function was replaced by
+    this PDF — so, unlike the complaint report, there is no attached-photos row.
+    """
+    buf = io.BytesIO()
+    doc = init_doc(buf, f"Service Report {breakdown.get('code', '')}")
+
+    equipment = breakdown.get("equipment_name") or "General"
+    location = breakdown.get("location_name") or breakdown.get("department_name")
+
+    accepted = breakdown.get("accepted_by_name")
+    if accepted and breakdown.get("accepted_at"):
+        accepted = f"{accepted} · {breakdown['accepted_at']}"
+
+    # Optional rows are omitted rather than printed as a bare em-dash.
+    pairs = [
+        ("Report no.", breakdown.get("code")),
+        ("Date issued", now_dt().strftime("%d %b %Y %H:%M (MYT)")),
+        ("Customer", breakdown.get("customer_name")),
+    ]
+    if location:
+        pairs.append(("Location/Department", location))
+    pairs.append(("Equipment", equipment))
+    if breakdown.get("equipment_serial"):
+        pairs.append(("Serial number", breakdown["equipment_serial"]))
+    pairs += [
+        ("Priority", (breakdown.get("priority") or "").title()),
+        ("Status", (breakdown.get("status") or "").replace("_", " ").title()),
+        ("Reported by", breakdown.get("reported_by_name")),
+    ]
+    if breakdown.get("reporter_name"):
+        pairs.append(("Reporter", breakdown["reporter_name"]))
+    if breakdown.get("reporter_phone"):
+        pairs.append(("Contact", breakdown["reporter_phone"]))
+    pairs.append(("Assigned to", breakdown.get("assigned_to_name") or "Unassigned"))
+    if accepted:
+        pairs.append(("Accepted by", accepted))
+    if breakdown.get("accept_reply"):
+        pairs.append(("Reply to sender", f"“{breakdown['accept_reply']}”"))
+    if breakdown.get("responsible_admin_name"):
+        pairs.append(("Tenant admin in charge", breakdown["responsible_admin_name"]))
+    pairs += [
+        ("Opened", breakdown.get("created_at")),
+        ("Resolved", breakdown.get("resolved_at") or "—"),
+    ]
+    if breakdown.get("closed_by_name"):
+        pairs.append(("Resolved by", breakdown["closed_by_name"]))
+
+    story = [
+        Paragraph(f"Service Report — {breakdown.get('code', '')}", H1),
+        Paragraph(f"Equipment breakdown · {equipment}", SUB),
+        Spacer(1, 4),
+        HRFlowable(width="100%", thickness=1, color=BRAND),
+        Spacer(1, 10),
+        _kv_table(pairs),
+        Spacer(1, 14),
+        Paragraph("Fault description", H2),
+        Paragraph(breakdown.get("fault_description") or "No fault description provided.", BODY),
+    ]
+
+    # Where this work order came from, when it was raised off a complaint.
+    if source_complaint:
+        story.append(Paragraph("Source complaint", H2))
+        story.append(Paragraph(
+            f'{source_complaint.get("code", "")} — {source_complaint.get("subject", "")}', BODY))
+
+    if breakdown.get("root_cause"):
+        story.append(Paragraph("Root cause", H2))
+        story.append(Paragraph(breakdown["root_cause"], BODY))
+
+    if breakdown.get("resolution_notes"):
+        story.append(Paragraph("Resolution notes", H2))
+        story.append(Paragraph(breakdown["resolution_notes"], BODY))
+    elif (breakdown.get("status") or "") == "resolved":
+        story.append(Paragraph("Resolution notes", H2))
+        story.append(Paragraph("Marked resolved with no notes recorded.", BODY))
+
+    story.append(Paragraph("Work log", H2))
+    story.append(_log_table(comments) if comments
+                 else Paragraph("No work log entries.", BODY))
 
     doc.build(story)
     return buf.getvalue()

@@ -1018,7 +1018,8 @@ async function viewBreakdownDetail(v) {
     const b = await API.get("/api/breakdowns/" + id);
     state.breakdownDetail = b;
     v.innerHTML = breakdownDetailHtml(b);
-    loadPhotos("breakdown", id);
+    // No loadPhotos() here: breakdown tickets no longer take attachments —
+    // they offer a Service report (PDF) instead, rendered by the template.
     loadHistory("breakdown", id);
   } catch (e) {
     v.innerHTML = `<div class="empty"><div class="e-ico">⚠️</div><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
@@ -1078,9 +1079,6 @@ function breakdownDetailHtml(b) {
       </div>` : ""}
     </div>
 
-    <div class="section-title">Photos &amp; files</div>
-    <div class="card" id="photosBox"><div class="empty" style="padding:12px"><div class="spinner" style="margin:0 auto"></div></div></div>
-
     <div class="section-title">History</div>
     <div class="card" id="historyBox"><div class="empty" style="padding:12px"><div class="spinner" style="margin:0 auto"></div></div></div>
 
@@ -1090,6 +1088,13 @@ function breakdownDetailHtml(b) {
       <div style="display:flex;gap:8px;margin-top:12px">
         <input id="commentInput" placeholder="Add an update…" onkeydown="if(event.key==='Enter')addBrokComment()">
         <button class="btn btn-primary btn-sm" onclick="addBrokComment()">Send</button>
+      </div>
+    </div>
+
+    <div class="section-title">Report</div>
+    <div class="card">
+      <div class="action-panel">
+        <button class="btn btn-ghost btn-sm" onclick="downloadReport('/api/breakdowns/${b.id}/report.pdf')">📄 Service report (PDF)</button>
       </div>
     </div>`;
 }

@@ -424,6 +424,13 @@ def _sqlite_migrate(c):
     c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_equipment_serial_global ON equipment(serial_number) WHERE serial_number IS NOT NULL AND serial_number != ''")
 
+    # Breakdown tickets no longer support file attachments — they get a Service
+    # Report PDF instead, the same function a complaint has. Purge anything
+    # uploaded before that change so no file is left stranded where the UI can
+    # neither show nor remove it. Idempotent: a no-op once the rows are gone.
+    # The audit trail ("Added file" history entries) is deliberately kept.
+    c.execute("DELETE FROM attachments WHERE entity_type='breakdown'")
+
     _sqlite_migrate_roles(c)
 
 
@@ -1016,6 +1023,12 @@ def _pg_migrate(c):
     # does not fail when multiple equipment are registered without serial numbers.
     c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_equipment_serial_global ON equipment(serial_number) WHERE serial_number IS NOT NULL AND serial_number != ''")
+    # Breakdown tickets no longer support file attachments — they get a Service
+    # Report PDF instead, the same function a complaint has. Purge anything
+    # uploaded before that change so no file is left stranded where the UI can
+    # neither show nor remove it. Idempotent: a no-op once the rows are gone.
+    # The audit trail ("Added file" history entries) is deliberately kept.
+    c.execute("DELETE FROM attachments WHERE entity_type='breakdown'")
 
 
 

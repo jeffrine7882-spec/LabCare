@@ -111,6 +111,14 @@ check("upload attachment", r.status_code == 201, aid)
 r = c.get(f"/api/attachments/{aid}/file", headers={"Authorization": "Bearer " + tok})
 check("download attachment (bytes equal)", r.status_code == 200 and r.data == png)
 
+# 7b. breakdown tickets no longer take attachments — they get a Service Report
+# PDF instead (see the breakdown pdf check below). Rejected at the API, not just
+# hidden in the UI.
+r = j("POST", "/api/attachments", None, tok,
+      raw={"entity_type": "breakdown", "entity_id": str(bid), "file": (io.BytesIO(png), "shot.png")})
+check("breakdown attachment rejected (function removed)", r.status_code == 400,
+      (r.get_json() or {}).get("error"))
+
 # 8. portal link + public submission (complaint + breakdown kinds)
 r = j("POST", "/api/portal-links", {"customer_id": cid, "equipment_id": eid, "label": "QR"}, tok)
 token = r.get_json().get("token") if r.status_code == 201 else None
@@ -148,6 +156,9 @@ r = j("GET", "/api/export.csv?entity=complaint", None, tok)
 check("export csv", r.status_code == 200)
 r = c.get(f"/api/complaints/{cpid}/report.pdf", headers={"Authorization": "Bearer " + tok})
 check("complaint pdf", r.status_code == 200 and r.data[:4] == b"%PDF", len(r.data))
+r = c.get(f"/api/breakdowns/{bid}/report.pdf", headers={"Authorization": "Bearer " + tok})
+check("breakdown pdf (service report, replaces attachments)",
+      r.status_code == 200 and r.data[:4] == b"%PDF", len(r.data))
 r = c.get("/api/reports/trend.pdf", headers={"Authorization": "Bearer " + tok})
 check("trend pdf", r.status_code == 200 and r.data[:4] == b"%PDF", len(r.data))
 

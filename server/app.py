@@ -3342,13 +3342,18 @@ def upload_attachment():
     eid = request.form.get("entity_id")
     if entity not in ("complaint", "breakdown") or not eid:
         return jsonify({"error": "Invalid entity"}), 400
+    # Breakdown tickets no longer support attachments: they get a Service Report
+    # PDF instead (GET /api/breakdowns/<id>/report.pdf), the same function a
+    # complaint has. Rejected here rather than only hidden in the UI, so no
+    # client — including a cached older one — can attach a file that nothing
+    # would ever display.
+    if entity == "breakdown":
+        return jsonify({"error": "Attachments are not supported on breakdown tickets. "
+                                 "Use the Service report (PDF) on the ticket instead."}), 400
     eid = int(eid)
     # authorisation: scope the actor to the ticket (customer, tenant staff, or master)
     c = conn()
-    if entity == "complaint":
-        row = c.execute("SELECT customer_id, location_id, department_id FROM complaints WHERE id=?", (eid,)).fetchone()
-    else:
-        row = c.execute("SELECT customer_id, location_id, department_id FROM breakdowns WHERE id=?", (eid,)).fetchone()
+    row = c.execute("SELECT customer_id, location_id, department_id FROM complaints WHERE id=?", (eid,)).fetchone()
     c.close()
     if not row or not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
         return jsonify({"error": "Not authorised"}), 403
@@ -3399,29 +3404,17 @@ def upload_attachment():
 
     audit(entity, eid, u, "attachment", f"Added {f.filename[:120]}")
 
-    # notify followers
-    if entity == "complaint":
-        rc = conn()
-        raw = rc.execute("SELECT * FROM complaints WHERE id=?", (eid,)).fetchone()
-        if raw:
-            rec = complaint_payload(rc, raw)
-            rc.close()
-            ping_followers("complaint", u["id"], rec,
-                           f"{u['name']} attached a file to complaint {rec['code']}",
-                           lambda r: email_mod.email_comment("complaint", r, rec, u["name"], "📎 Attached a file."))
-        else:
-            rc.close()
+    # notify followers (only complaints take attachments now)
+    rc = conn()
+    raw = rc.execute("SELECT * FROM complaints WHERE id=?", (eid,)).fetchone()
+    if raw:
+        rec = complaint_payload(rc, raw)
+        rc.close()
+        ping_followers("complaint", u["id"], rec,
+                       f"{u['name']} attached a file to complaint {rec['code']}",
+                       lambda r: email_mod.email_comment("complaint", r, rec, u["name"], "📎 Attached a file."))
     else:
-        rc = conn()
-        raw = rc.execute("SELECT * FROM breakdowns WHERE id=?", (eid,)).fetchone()
-        if raw:
-            rec = breakdown_payload(rc, raw)
-            rc.close()
-            ping_followers("breakdown", u["id"], rec,
-                           f"{u['name']} attached a file to breakdown {rec['code']}",
-                           lambda r: email_mod.email_comment("breakdown", r, rec, u["name"], "📎 Attached a file."))
-        else:
-            rc.close()
+        rc.close()
     return jsonify(d), 201
 
 
@@ -3599,6 +3592,39 @@ def complaint_report_pdf(cid):
     pdf = report_mod.service_report(comp, breakdowns, comments, photos)
     return Response(pdf, mimetype="application/pdf", headers={
         "Content-Disposition": f'inline; filename="service_report_{comp["code"]}.pdf"'})
+
+
+@app.get("/api/breakdowns/<int:bid>/report.pdf")
+def breakdown_report_pdf(bid):
+    """Service report PDF for a single breakdown ticket — the breakdown
+    counterpart of complaint_report_pdf(). Breakdown tickets no longer take
+    file attachments, so this report is what the ticket offers instead."""
+    u, err, code = require_role("admin", "engineer", "application", "customer")
+    if err:
+        return err, code
+    c = conn()
+    row = c.execute("SELECT * FROM breakdowns WHERE id=?", (bid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
+    brk = breakdown_payload(c, row)
+    comments = rows_to_dicts(c.execute(
+        "SELECT cm.*, u.name AS user_name FROM comments cm JOIN users u ON u.id=cm.user_id "
+        "WHERE cm.entity_type='breakdown' AND cm.entity_id=? ORDER BY cm.created_at", (bid,)).fetchall())
+    # Name the complaint this work order was raised from, if there is one.
+    src = None
+    if row["complaint_id"]:
+        crow = c.execute("SELECT code, subject FROM complaints WHERE id=?",
+                         (row["complaint_id"],)).fetchone()
+        src = dict(crow) if crow else None
+    c.close()
+
+    pdf = report_mod.breakdown_report(brk, comments, src)
+    return Response(pdf, mimetype="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="service_report_{brk["code"]}.pdf"'})
 
 
 @app.get("/api/reports/trend.pdf")
