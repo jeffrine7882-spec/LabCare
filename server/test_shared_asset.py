@@ -312,7 +312,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
         self.assertEqual(user_info["customer_id"], cust_id)
         self.assertEqual(user_info["location_id"], loc_id)
 
-        # 6. Another user signing up with same organisation name reuses existing customer
+        # 6. Another user signing up with same organisation name creates a NEW customer (rule: duplicate org names allowed, differentiated by location)
         res2 = self.client.post("/api/signup", json={
             "name": "Dr. Diana",
             "email": "diana@novabiotech.test",
@@ -325,9 +325,14 @@ class SharedAssetAndLocationTest(unittest.TestCase):
         self.assertEqual(res2.status_code, 201)
         onboarding_list2 = self.client.get("/api/onboarding").get_json()
         app_item2 = next(a for a in onboarding_list2 if a["email"] == "diana@novabiotech.test")
-        self.assertEqual(app_item2["customer_id"], cust_id)
+        # Should be a different customer id, same name, different location
+        self.assertNotEqual(app_item2["customer_id"], cust_id)
         self.assertEqual(app_item2["customer_name"], "Nova Biotech Lab")
         self.assertEqual(app_item2["location_name"], "Pathology Suite")
+        # Verify both orgs exist with same name but different ids
+        all_custs = self.client.get("/api/lookup/customers").get_json()
+        nova_orgs = [c for c in all_custs if c["name"] == "Nova Biotech Lab"]
+        self.assertEqual(len(nova_orgs), 2)
 
         # 7. Signup with new customer without specifying location defaults to Main Lab
         res3 = self.client.post("/api/signup", json={

@@ -311,8 +311,12 @@ class PendingCareTest(unittest.TestCase):
         self.assertEqual(self.pending_ids(self.t1), [cid])
 
     def test_existing_organization_does_not_reopen_a_decision(self):
-        """Only a NEWLY created organization is offered — not one that exists."""
-        # An existing organization still needs a location/department chosen.
+        """Only a NEWLY created organization is offered — not one that exists.
+
+        Updated rule: duplicate organization names are now allowed and create a NEW org
+        (differentiated by location), so they DO trigger pending care.
+        """
+        # An existing organization with existing customer_id still does NOT trigger pending care
         r = self.signup(email="existing@joiner.test", customer_id=self.org_a,
                         new_location_name="Main Lab")
         self.assertEqual(r.status_code, 201, r.get_json())
@@ -320,12 +324,20 @@ class PendingCareTest(unittest.TestCase):
         self.assertEqual(self.pending_ids(self.t1), [])
         self.assertEqual(self.care_notifications(self.t2), [])
 
-        # Same by name: an existing organization is reused, not re-offered.
+        # Same by name: now creates a NEW organization (duplicate name allowed), so pending care IS triggered
         r2 = self.signup(email="byname@joiner.test", new_customer_name="Org A",
                          new_location_name="Annexe Lab")
         self.assertEqual(r2.status_code, 201, r2.get_json())
-        self.assertEqual(self.pending_flag(self.org_a), 0)
-        self.assertEqual(self.pending_ids(self.t1), [])
+        # Find the newest Org A (duplicate name allowed)
+        c = conn()
+        rows = c.execute("SELECT id FROM customers WHERE name=? ORDER BY id DESC", ("Org A",)).fetchall()
+        c.close()
+        # There should be at least 2 orgs named Org A now (original + new)
+        self.assertGreaterEqual(len(rows), 2)
+        new_org_id = rows[0]["id"]
+        self.assertNotEqual(new_org_id, self.org_a)
+        pending = self.pending_ids(self.t1)
+        self.assertIn(new_org_id, pending)
 
     def test_non_admin_roles_cannot_see_or_settle_it(self):
         cid = self.new_org_signup()
