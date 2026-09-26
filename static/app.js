@@ -2299,7 +2299,6 @@ async function openEquipmentEditor(edit) {
   let catNames = cats.map((x) => x.name);
   if (currentCat && !catNames.includes(currentCat)) catNames.push(currentCat);
   const defEqCust = (e && e.customer_id) || (isTech() && (state.customers || []).length ? state.customers[0].id : "");
-  const eqRespAdmins = isTech() && defEqCust ? await adminsForCustomer(defEqCust) : [];
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit equipment" : "Add equipment"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
@@ -2309,11 +2308,6 @@ async function openEquipmentEditor(edit) {
         <select id="eqCustomer" onchange="onCustPick('eqCustomer')">
           ${(state.customers || []).map((x) => `<option value="${x.id}" ${e && e.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
-      ${isUnboundStaff() ? `
-      <label class="field" id="eqRespAdminField" style="${defEqCust ? "" : "display:none"}"><span>Responsible tenant admin</span>
-        <select id="eqRespAdmin">
-          ${respAdminOpts(eqRespAdmins, e && e.responsible_admin_id, true)}
-        </select></label>` : ""}
       <div class="section-label">Location/Department</div>
       <label class="field"><span>Location/Department *</span>
         <select id="eqLocation" onchange="onLocPick('eqLocation')">
@@ -2439,7 +2433,6 @@ function onCustPick(custSelId) {
     $("#eqDepartment").innerHTML = deptOpts(state.departments || [], null, null);
     $("#eqDepartment").value = "";
   }
-  if ($("#eqRespAdmin")) onRespCustomerPick(custSelId, "eqRespAdmin");
 }
 
 function onLocPick(locSelId) {
@@ -2562,7 +2555,6 @@ async function saveEquipment(id) {
     notes: $("#eqNotes").value.trim(),
   };
   if (isTech()) body.customer_id = $("#eqCustomer").value;
-  if (isTech() && isUnboundStaff() && $("#eqRespAdmin")) body.responsible_admin_id = $("#eqRespAdmin").value || null;
   if (!body.name) { toast("Equipment name is required", "error"); return; }
   if (isTech() && !body.customer_id) { toast("Organization is required", "error"); return; }
   if (isTech() && !body.location_id) { toast("Location/department is required", "error"); return; }
