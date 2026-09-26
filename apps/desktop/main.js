@@ -1,12 +1,12 @@
 /*
- * LabCare Alerts — Windows desktop tray app.
+ * LabSynch Alerts — Windows desktop tray app.
  *
  * Sits in the system tray, auto-starts with Windows, and rings (sound +
- * native notification) for every new LabCare bell notification. It polls the
+ * native notification) for every new LabSynch bell notification. It polls the
  * same lightweight /api/notifications/ping the web app uses, so enabling
  * "Desktop alerts" in the web app is NOT required — this app works on its own.
  *
- * It also *is* a doorway to the LabCare web app: the "Site" tab opens
+ * It also *is* a doorway to the LabSynch web app: the "Site" tab opens
  * https://labcare.insforge.site inside the app (already signed in when this
  * app holds a token), the tray menu and every alert bubble/notification open
  * it too, and nothing in here is allowed to leave the user on a blank window —
@@ -17,7 +17,7 @@ const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, ipcMain, shel
 const path = require("path");
 const fs = require("fs");
 
-// The LabCare web app — every "go to LabCare" action lands here.
+// The LabSynch web app — every "go to LabSynch" action lands here.
 const SITE_URL = "https://labcare.insforge.site/";
 const API_BASE = SITE_URL.replace(/\/+$/, "");
 const SITE_ORIGIN = new URL(SITE_URL).origin;
@@ -112,7 +112,7 @@ function createTray() {
   const iconFile = assetPath("tray.png");
   const icon = iconFile ? nativeImage.createFromPath(iconFile) : nativeImage.createEmpty();
   tray = new Tray(icon);
-  tray.setToolTip("LabCare Alerts");
+  tray.setToolTip("LabSynch Alerts");
   refreshMenu();
   tray.on("click", () => showWindow());
 }
@@ -121,7 +121,7 @@ function refreshMenu() {
   if (!tray) return;
   try {
     const menu = Menu.buildFromTemplate([
-      { label: "Open LabCare site", click: () => openWebApp() },
+      { label: "Open LabSynch site", click: () => openWebApp() },
       { label: "Open Alerts window", click: () => showWindow() },
       { type: "separator" },
       {
@@ -149,7 +149,7 @@ function createWindow() {
     height: 620,
     resizable: false,
     show: false,
-    title: "LabCare Alerts",
+    title: "LabSynch Alerts",
     backgroundColor: "#f3f5f9",
     icon: assetPath("icon.png") || undefined,
     webPreferences: {
@@ -170,10 +170,10 @@ function createWindow() {
   }, 2500);
 
   // Never leave the user on a blank window: any load/render failure falls back
-  // to an explanatory page that still links to the LabCare site.
+  // to an explanatory page that still links to the LabSynch site.
   win.webContents.on("did-fail-load", (e, code, desc, url, isMainFrame) => {
     if (!isMainFrame || code === -3) return; // -3 = aborted (harmless)
-    showLoadFailure(win, "LabCare Alerts couldn't open", desc || ("error " + code));
+    showLoadFailure(win, "LabSynch Alerts couldn't open", desc || ("error " + code));
   });
   win.webContents.on("render-process-gone", () => reloadAppUi());
   win.webContents.on("unresponsive", () => reloadAppUi());
@@ -207,7 +207,7 @@ function loadAppUi() {
   if (ok) {
     win.loadFile(page).catch(() => win.loadURL(SITE_URL).catch(() => {}));
   } else {
-    // Last resort: show the LabCare site itself rather than a blank window.
+    // Last resort: show the LabSynch site itself rather than a blank window.
     win.loadURL(SITE_URL).catch(() => {});
   }
 }
@@ -250,7 +250,7 @@ function signOut() {
   showWindow();
 }
 
-// ---- LabCare site window (the "Site" tab) ----------------------------------
+// ---- LabSynch site window (the "Site" tab) ----------------------------------
 /**
  * Mirror this app's token into the site's own session before loading it. The
  * server accepts the HttpOnly `labcare_token` cookie, and the web app always
@@ -297,7 +297,7 @@ function isSiteUrl(url) {
   try { return new URL(url).origin === SITE_ORIGIN; } catch (e) { return false; }
 }
 
-/** Open (or re-focus) the LabCare web app inside this app. */
+/** Open (or re-focus) the LabSynch web app inside this app. */
 async function openSite(targetUrl) {
   const url = (typeof targetUrl === "string" && /^https?:/i.test(targetUrl)) ? targetUrl : SITE_URL;
   await syncSiteSession();
@@ -317,7 +317,7 @@ async function openSite(targetUrl) {
     height: 840,
     minWidth: 380,
     minHeight: 560,
-    title: "LabCare",
+    title: "LabSynch",
     show: false,
     backgroundColor: "#f3f5f9",
     autoHideMenuBar: true,
@@ -342,7 +342,7 @@ async function openSite(targetUrl) {
   // Never strand the user on a blank page: explain + offer the browser.
   siteWin.webContents.on("did-fail-load", (e, code, desc, failedUrl, isMainFrame) => {
     if (!isMainFrame || code === -3) return;
-    showLoadFailure(siteWin, "The LabCare site didn't open", desc || ("error " + code), failedUrl);
+    showLoadFailure(siteWin, "The LabSynch site didn't open", desc || ("error " + code), failedUrl);
   });
   siteWin.webContents.on("render-process-gone", () => {
     try { siteWin && !siteWin.isDestroyed() && siteWin.loadURL(SITE_URL).catch(() => {}); } catch (e) {}
@@ -369,7 +369,7 @@ function openSiteInBrowser() {
   try { shell.openExternal(SITE_URL); } catch (e) {}
 }
 
-/** Every "open LabCare" click: in-app site window, browser as the fallback. */
+/** Every "open LabSynch" click: in-app site window, browser as the fallback. */
 function openWebApp(targetUrl) {
   try {
     const p = openSite(targetUrl);
@@ -390,7 +390,7 @@ function routeExternal(url) {
 // ---- "it didn't load" fallback page ---------------------------------------
 /**
  * Written to userData (top-level data: URLs are blocked by Chromium) so a
- * failed load still shows a real page with a working path to the LabCare site.
+ * failed load still shows a real page with a working path to the LabSynch site.
  */
 function showLoadFailure(target, title, message, retryUrl) {
   try {
@@ -400,23 +400,24 @@ function showLoadFailure(target, title, message, retryUrl) {
     const file = path.join(dir, "load-error.html");
     const retry = (typeof retryUrl === "string" && /^https?:/i.test(retryUrl)) ? retryUrl : SITE_URL;
     fs.writeFileSync(file, `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>LabCare</title>
+<html lang="en"><head><meta charset="utf-8"><title>LabSynch</title>
 <style>
   * { box-sizing: border-box; }
   body { margin:0; background:#f3f5f9; color:#111827;
          font:15px/1.55 -apple-system,"Segoe UI",Roboto,sans-serif; }
   .box { max-width:520px; margin:0 auto; padding:44px 26px; text-align:center; }
-  .logo { font-size:40px; }
-  h1 { font-size:20px; margin:12px 0 6px; color:#0f766e; }
+  .logo { font-size:40px; display:flex; justify-content:center; }
+  .logo img { width:64px; height:64px; border-radius:14px; }
+  h1 { font-size:20px; margin:12px 0 6px; color:#b91c1c; }
   p { color:#6b7280; font-size:14px; margin:0 0 20px; word-break:break-word; }
   a.btn { display:block; padding:13px; border-radius:12px; font-weight:700;
           font-size:14px; text-decoration:none; margin-bottom:10px; }
-  a.primary { background:#0f766e; color:#fff; }
-  a.ghost { background:#e2f2f0; color:#115e59; }
+  a.primary { background:#b91c1c; color:#fff; }
+  a.ghost { background:#fee2e2; color:#7f1d1d; }
   .url { font-size:12px; color:#94a3b8; margin-top:14px; word-break:break-all; }
 </style></head>
 <body><div class="box">
-  <div class="logo">🔬</div>
+  <div class="logo"></div>
   <h1>${esc(title)}</h1>
   <p>${esc(message)}<br>Check your internet connection, then try again.</p>
   <a class="btn primary" href="${esc(SITE_URL)}">Retry</a>
@@ -453,7 +454,7 @@ function createBubble() {
     show: false,
     alwaysOnTop: true,
     skipTaskbar: true,
-    focusable: false,           // never steal focus from whatever the user is doing
+    focusable: false,           // never s#b91c1c focus from whatever the user is doing
     transparent: true,          // lets the rounded-corner bubble look work
     backgroundColor: "#00000000",
     webPreferences: {
@@ -526,7 +527,7 @@ async function pollOnce() {
       lastNotifId = latest.id;
       savePrefs();
       if (body.unread > 0) {
-        ring(latest.text || "New LabCare alert");
+        ring(latest.text || "New LabSynch alert");
       }
     }
   } catch (e) {}
@@ -539,7 +540,7 @@ function ring(text) {
   try {
     if (Notification.isSupported()) {
       const n = new Notification({
-        title: "LabCare",
+        title: "LabSynch",
         body: String(text).slice(0, 180),
         icon: assetPath("icon.png") || undefined,
       });
@@ -552,8 +553,8 @@ function ring(text) {
   // 4. flash tray tooltip
   try {
     if (tray) {
-      tray.setToolTip("LabCare — new alert");
-      setTimeout(() => { try { tray && tray.setToolTip("LabCare Alerts"); } catch (e) {} }, 8000);
+      tray.setToolTip("LabSynch — new alert");
+      setTimeout(() => { try { tray && tray.setToolTip("LabSynch Alerts"); } catch (e) {} }, 8000);
     }
   } catch (e) {}
 }
@@ -627,7 +628,7 @@ ipcMain.handle("auth:signIn", async (evt, credentials) => {
     syncSiteSession(); // so the Site tab opens signed in straight away
     return { ok: true, name };
   } catch (e) {
-    return { ok: false, pending: false, error: "Cannot reach the LabCare server." };
+    return { ok: false, pending: false, error: "Cannot reach the LabSynch server." };
   }
 });
 
@@ -673,7 +674,7 @@ ipcMain.handle("notif:list", async () => {
       created_at: n.created_at || "",
     })) };
   } catch (e) {
-    return { ok: false, error: "Cannot reach the LabCare server." };
+    return { ok: false, error: "Cannot reach the LabSynch server." };
   }
 });
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# LabCare — one-command InsForge redeploy helper.
+# LabSynch — one-command InsForge redeploy helper.
 #
 # Usage:
 #   ./deploy.sh            deploy the backend (InsForge compute container)

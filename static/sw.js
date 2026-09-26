@@ -1,4 +1,4 @@
-/* LabCare service worker — receives Web Push notifications so alert bells
+/* LabSynch service worker — receives Web Push notifications so alert bells
    ring at the OS/browser level even when the app, the tab, or the browser
    window is closed.
 
@@ -26,7 +26,7 @@ self.addEventListener("push", (event) => {
   } catch (e) {
     try { data = { body: event.data ? event.data.text() : "" }; } catch (e2) {}
   }
-  const title = data.title || "LabCare";
+  const title = data.title || "LabSynch";
   const options = {
     body: (data.body || "New alert").slice(0, 200),
     icon: data.icon || "/icons/icon-192.png",

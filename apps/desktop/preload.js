@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld("labcare", {
   getSound: () => ipcRenderer.invoke("sound:get"),
   setSound: (id) => ipcRenderer.invoke("sound:set", id),
   testSound: (id) => ipcRenderer.invoke("sound:test", id),
-  // --- the LabCare web app -------------------------------------------------
+  // --- the LabSynch web app -------------------------------------------------
   // The site URL is also exposed so the UI can render a real <a> fallback that
   // works even if an IPC call fails — the window must never be a dead end.
   openSite: (url) => ipcRenderer.invoke("site:open", url),

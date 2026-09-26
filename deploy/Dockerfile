@@ -1,4 +1,4 @@
-# LabCare backend — production image (Flask + Waitress + SQLite)
+# LabSynch backend — production image (Flask + Waitress + SQLite)
 #
 #   BUILD
 #     docker build -t labcare-backend -f deploy/Dockerfile .

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /*
- * Packaging guard for the LabCare Windows installer.
+ * Packaging guard for the LabSynch Windows installer.
  *
  * Why this exists: electron-builder's `build.files` is an *allowlist*. The
  * 1.1.0 installer shipped without `bubble.html` / `bubble-preload.js`, so the
- * alert bubble — the thing that links an alert to the LabCare site — rendered
+ * alert bubble — the thing that links an alert to the LabSynch site — rendered
  * blank in the installed app while working fine from source. Nothing else
  * caught it, because `npm start` reads the files straight off disk.
  *

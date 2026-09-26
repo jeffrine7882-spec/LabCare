@@ -1,4 +1,4 @@
-# LabCare native apps
+# LabSynch native apps
 
 | App | Installer | Where |
 |---|---|---|
@@ -6,10 +6,10 @@
 | **Windows** | `LabCare-Alerts-Setup-1.1.0.exe` | `../Release/windows/` |
 
 Both sign in with the **same account as the web app**
-(`https://labcare.insforge.site`) and ring the LabCare chime + show a
+(`https://labcare.insforge.site`) and ring the LabSynch chime + show a
 notification for every new bell alert.
 
-- **Android** (`android/`): opens the **LabCare site itself** in its Site tab
+- **Android** (`android/`): opens the **LabSynch site itself** in its Site tab
   (signed in with your account), plus a foreground alert relay that polls the
   bell every 10 s, rings + vibrates + notifies even with the screen off, and
   auto-starts after a reboot. APK is self-signed (allow "install unknown apps").

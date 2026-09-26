@@ -1,6 +1,6 @@
-"""LabCare — native app push (Firebase Cloud Messaging v1).
+"""LabSynch — native app push (Firebase Cloud Messaging v1).
 
-Sends to the LabCare mobile app so a phone rings even when the browser is
+Sends to the LabSynch mobile app so a phone rings even when the browser is
 closed or the phone is locked. FCM v1 carries both Android and iOS tokens,
 so one channel covers every device.
 
@@ -150,7 +150,7 @@ def send_app_push(user_id, text, entity_type="", entity_id=None):
     message = {
         "message": {
             "notification": {
-                "title": "LabCare",
+                "title": "LabSynch",
                 "body": (text or "")[:180],
             },
             "android": {"priority": "high"},

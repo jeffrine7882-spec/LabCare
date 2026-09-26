@@ -1,4 +1,4 @@
-"""LabCare — REST API (Flask)."""
+"""LabSynch — REST API (Flask)."""
 import os
 import sys
 import json
@@ -237,7 +237,7 @@ def tenant_scope(u, c):
         # No organization of their own: they were placed under a tenant admin's
         # care, so they inherit exactly that admin's care list. Deliberately NOT
         # unscoped — otherwise a tenant admin could mint an account that sees
-        # every organization on the system. The master's own LabCare-wide staff
+        # every organization on the system. The master's own LabSynch-wide staff
         # have no link (or are linked to the master) and stay unscoped.
         ra = u.get("responsible_admin_id")
         if ra:
@@ -262,7 +262,7 @@ def customer_scope_filter(c, u, col="customer_id"):
     * Engineer with no organization -> the care list of the tenant admin they
       are linked to (empty list = they see nothing, never everything).
     * Tenant admin -> every organization in their care list.
-    * Master / LabCare-wide engineer -> no restriction ("", []).
+    * Master / LabSynch-wide engineer -> no restriction ("", []).
     """
     role = u.get("role")
     if role == "customer":
@@ -307,10 +307,22 @@ def require_master():
 def tenant_guard(u, customer_id, c=None):
     """Reject tenant-scoped staff touching a customer outside their care list.
     Returns (error_json, code) or (None, None)."""
+    # Normalize customer_id to int for comparison (frontend sends string)
+    try:
+        cid_int = int(customer_id) if customer_id is not None and str(customer_id).strip() != "" else None
+    except (ValueError, TypeError):
+        cid_int = None
+    # For non-admin roles, compare against their bound customer
     if u.get("role") != "admin":
         bound = scoped_customer_id(u)
-        if bound and customer_id != bound:
+        # Normalize bound too
+        try:
+            bound_int = int(bound) if bound is not None else None
+        except (ValueError, TypeError):
+            bound_int = bound
+        if bound_int is not None and cid_int is not None and cid_int != bound_int:
             return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
+        # If bound is None (unscoped engineer), allow
         return None, None
     if is_master_admin(u):
         return None, None
@@ -319,8 +331,39 @@ def tenant_guard(u, customer_id, c=None):
         c = conn()
     try:
         scope = tenant_scope(u, c)
-        if customer_id not in (scope or []):
-            return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
+        # Normalize scope to ints
+        scope_ints = []
+        if scope:
+            for s in scope:
+                try:
+                    scope_ints.append(int(s))
+                except (ValueError, TypeError):
+                    scope_ints.append(s)
+        # Check both original and int version for safety
+        if scope_ints:
+            if cid_int is not None and cid_int not in scope_ints and customer_id not in scope_ints and str(customer_id) not in [str(x) for x in scope_ints]:
+                # Also check original scope for backward compat
+                if customer_id not in (scope or []) and cid_int not in (scope or []):
+                    return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
+        else:
+            # Empty scope -> tenant admin with no orgs yet
+            if cid_int is not None:
+                # Allow if they are trying to create first org? No, locations require existing org, so block
+                # But we check scope empty -> they have nothing, so any customer_id is not allowed
+                # However we already handled scope empty case below
+                pass
+            if not scope:
+                # If scope is empty list, they have no organizations yet -> cannot create location for any org
+                # But if scope is None (master), we already returned
+                # For empty list, block any attempt
+                if scope == []:
+                    return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
+        # Final check with original scope for safety
+        if scope is not None and scope != []:
+            if customer_id not in scope and (cid_int not in scope if cid_int is not None else True):
+                # If still not found, try string comparison
+                if str(customer_id) not in [str(x) for x in scope]:
+                    return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
         return None, None
     finally:
         if own:
@@ -353,13 +396,13 @@ def validate_responsible_admin(c, customer_id, responsible_admin_id, customerles
     """Validate an explicit "responsible tenant admin" for a record.
 
     The value must be an active account with role=admin, and that admin must be
-    linked to the record's customer (primary or care list) — or be LabCare-wide
+    linked to the record's customer (primary or care list) — or be LabSynch-wide
     when the record itself is customer-less.
 
     `customerless_user` relaxes that last rule for USER ACCOUNTS only: a staff
     account with no organization is placed under a tenant admin's care, so a
     bound tenant admin is exactly the right link (their care list becomes the
-    account's scope). Tickets and equipment keep the strict LabCare-wide rule.
+    account's scope). Tickets and equipment keep the strict LabSynch-wide rule.
     Returns (error_json, code) on failure, or (None, None) when valid/empty."""
     if responsible_admin_id in (None, "", 0, "0"):
         return None, None
@@ -372,7 +415,7 @@ def validate_responsible_admin(c, customer_id, responsible_admin_id, customerles
         return jsonify({"error": "Responsible account must be an administrator"}), 400
     if customer_id is None:
         if row["customer_id"] is not None and not customerless_user:
-            return jsonify({"error": "A LabCare-wide record needs a LabCare-wide administrator"}), 400
+            return jsonify({"error": "A LabSynch-wide record needs a LabSynch-wide administrator"}), 400
     else:
         admin_custs = _admin_scope_ids(c, row["id"], row)
         if customer_id not in admin_custs:
@@ -455,13 +498,20 @@ def public_user(u, c=None):
     return u
 
 
+def _user_contact(c, user_id):
+    if not user_id:
+        return None
+    row = c.execute("SELECT name, phone, email FROM users WHERE id=?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def complaint_payload(c, row):
     d = dict(row)
     cust = c.execute("SELECT name FROM customers WHERE id=?", (d["customer_id"],)).fetchone()
     eq = c.execute("SELECT name, model, serial_number FROM equipment WHERE id=?",
                    (d["equipment_id"],)).fetchone() if d.get("equipment_id") else None
-    creator = c.execute("SELECT name FROM users WHERE id=?", (d["created_by"],)).fetchone()
-    assignee = c.execute("SELECT name FROM users WHERE id=?", (d["assigned_to"],)).fetchone() if d.get("assigned_to") else None
+    creator = _user_contact(c, d.get("created_by"))
+    assignee = _user_contact(c, d.get("assigned_to"))
     d["customer_name"] = cust["name"] if cust else None
     d["location_name"] = _name_of(c, "locations", d.get("location_id"))
     d["department_name"] = _name_of(c, "departments", d.get("department_id"))
@@ -469,15 +519,23 @@ def complaint_payload(c, row):
     d["equipment_serial"] = eq["serial_number"] if eq else None
     d["equipment_model"] = eq["model"] if eq else None
     d["created_by_name"] = creator["name"] if creator else None
+    d["created_by_phone"] = (creator.get("phone") or "") if creator else ""
+    d["created_by_email"] = (creator.get("email") or "") if creator else ""
     d["assigned_to_name"] = assignee["name"] if assignee else None
+    d["assigned_to_phone"] = (assignee.get("phone") or "") if assignee else ""
     # portal submissions record who actually reported the issue
     d["reporter_name"] = d.get("reporter_name") or ""
     d["reporter_phone"] = d.get("reporter_phone") or ""
     d["responsible_admin_name"] = _responsible_admin_name(c, d.get("responsible_admin_id"))
-    closer = c.execute("SELECT name FROM users WHERE id=?", (d["closed_by"],)).fetchone() if d.get("closed_by") else None
+    ra = _user_contact(c, d.get("responsible_admin_id"))
+    d["responsible_admin_phone"] = (ra.get("phone") or "") if ra else ""
+    closer = _user_contact(c, d.get("closed_by"))
     d["closed_by_name"] = closer["name"] if closer else None
-    acceptor = c.execute("SELECT name FROM users WHERE id=?", (d["accepted_by"],)).fetchone() if d.get("accepted_by") else None
+    d["closed_by_phone"] = (closer.get("phone") or "") if closer else ""
+    acceptor = _user_contact(c, d.get("accepted_by"))
     d["accepted_by_name"] = acceptor["name"] if acceptor else None
+    d["accepted_by_phone"] = (acceptor.get("phone") or "") if acceptor else ""
+    d["accepted_by_email"] = (acceptor.get("email") or "") if acceptor else ""
     return d
 
 
@@ -486,8 +544,8 @@ def breakdown_payload(c, row):
     cust = c.execute("SELECT name FROM customers WHERE id=?", (d["customer_id"],)).fetchone()
     eq = c.execute("SELECT name, model, serial_number FROM equipment WHERE id=?",
                    (d["equipment_id"],)).fetchone() if d.get("equipment_id") else None
-    reporter = c.execute("SELECT name FROM users WHERE id=?", (d["reported_by"],)).fetchone()
-    assignee = c.execute("SELECT name FROM users WHERE id=?", (d["assigned_to"],)).fetchone() if d.get("assigned_to") else None
+    reporter = _user_contact(c, d.get("reported_by"))
+    assignee = _user_contact(c, d.get("assigned_to"))
     d["customer_name"] = cust["name"] if cust else None
     d["location_name"] = _name_of(c, "locations", d.get("location_id"))
     d["department_name"] = _name_of(c, "departments", d.get("department_id"))
@@ -495,14 +553,22 @@ def breakdown_payload(c, row):
     d["equipment_serial"] = eq["serial_number"] if eq else None
     d["equipment_model"] = eq["model"] if eq else None
     d["reported_by_name"] = reporter["name"] if reporter else None
+    d["reported_by_phone"] = (reporter.get("phone") or "") if reporter else ""
+    d["reported_by_email"] = (reporter.get("email") or "") if reporter else ""
     d["assigned_to_name"] = assignee["name"] if assignee else None
+    d["assigned_to_phone"] = (assignee.get("phone") or "") if assignee else ""
     d["reporter_name"] = d.get("reporter_name") or ""
     d["reporter_phone"] = d.get("reporter_phone") or ""
-    acceptor = c.execute("SELECT name FROM users WHERE id=?", (d["accepted_by"],)).fetchone() if d.get("accepted_by") else None
+    acceptor = _user_contact(c, d.get("accepted_by"))
     d["accepted_by_name"] = acceptor["name"] if acceptor else None
+    d["accepted_by_phone"] = (acceptor.get("phone") or "") if acceptor else ""
+    d["accepted_by_email"] = (acceptor.get("email") or "") if acceptor else ""
     d["responsible_admin_name"] = _responsible_admin_name(c, d.get("responsible_admin_id"))
-    closer = c.execute("SELECT name FROM users WHERE id=?", (d["closed_by"],)).fetchone() if d.get("closed_by") else None
+    ra = _user_contact(c, d.get("responsible_admin_id"))
+    d["responsible_admin_phone"] = (ra.get("phone") or "") if ra else ""
+    closer = _user_contact(c, d.get("closed_by"))
     d["closed_by_name"] = closer["name"] if closer else None
+    d["closed_by_phone"] = (closer.get("phone") or "") if closer else ""
     return d
 
 
@@ -1109,20 +1175,16 @@ def signup():
     new_org_created = False
     if role == "customer":
         if new_cust_name:
-            existing_cust = c.execute(
-                "SELECT id FROM customers WHERE lower(name)=?",
-                (new_cust_name.lower(),)
-            ).fetchone()
-            if existing_cust:
-                customer_id = existing_cust["id"]
-            else:
-                cur_cust = c.execute(
-                    "INSERT INTO customers (name,contact_name,email,phone,address,city,pending_care,created_at) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
-                    (new_cust_name, name, email, phone, "", "", 1, now()),
-                )
-                customer_id = cur_cust.lastrowid
-                new_org_created = True
+            # Rule: multiple customers can be added under same organization name or location.
+            # Always create a new organization entry when user types a new name, even if same name exists.
+            # Differentiation is by Organization + Location, not just name.
+            cur_cust = c.execute(
+                "INSERT INTO customers (name,contact_name,email,phone,address,city,pending_care,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (new_cust_name, name, email, phone, "", "", 1, now()),
+            )
+            customer_id = cur_cust.lastrowid
+            new_org_created = True
             if location_id and not new_loc_name:
                 ref_loc = c.execute("SELECT name FROM locations WHERE id=?", (location_id,)).fetchone()
                 if ref_loc:
@@ -1436,14 +1498,23 @@ def list_locations():
         return err, code
     c = conn()
     where, params = [], []
-    scoped_where, scoped_params = customer_scope_filter(c, u, "l.customer_id")
-    if scoped_where:
-        where.append(scoped_where)
-        params += scoped_params
-    cust = request.args.get("customer_id")
-    if cust:
-        where.append("l.customer_id=?")
-        params.append(cust)
+    if u["role"] == "customer":
+        if u.get("customer_id"):
+            where.append("l.customer_id=?")
+            params.append(u["customer_id"])
+        if u.get("location_id"):
+            where.append("l.id=?")
+            params.append(u["location_id"])
+        # department implies location, but location filter already covers
+    else:
+        scoped_where, scoped_params = customer_scope_filter(c, u, "l.customer_id")
+        if scoped_where:
+            where.append(scoped_where)
+            params += scoped_params
+        cust = request.args.get("customer_id")
+        if cust:
+            where.append("l.customer_id=?")
+            params.append(cust)
     q = ("SELECT l.*, cu.name AS customer_name FROM locations l JOIN customers cu ON cu.id=l.customer_id")
     if where:
         q += " WHERE " + " AND ".join(where)
@@ -1462,20 +1533,25 @@ def create_location():
     b = get_body()
     if not (b.get("name") or "").strip() or not b.get("customer_id"):
         return jsonify({"error": "Location/department name and organization are required"}), 400
-    err_t, code_t = tenant_guard(u, b["customer_id"])
+    # Normalize customer_id to int (frontend sends string)
+    try:
+        cust_id = int(b["customer_id"])
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid organization id"}), 400
+    err_t, code_t = tenant_guard(u, cust_id)
     if err_t:
         return err_t, code_t
     c = conn()
     name = b["name"].strip()
     cur = c.execute(
         "INSERT INTO locations (customer_id,name,address,city,created_at) VALUES (?,?,?,?,?)",
-        (b["customer_id"], name, b.get("address", ""), b.get("city", ""), now()),
+        (cust_id, name, b.get("address", ""), b.get("city", ""), now()),
     )
     loc_id = cur.lastrowid
     # Location and department are the same: automatically create corresponding department
     c.execute(
         "INSERT INTO departments (customer_id,location_id,name,created_at) VALUES (?,?,?,?)",
-        (b["customer_id"], loc_id, name, now()),
+        (cust_id, loc_id, name, now()),
     )
     c.commit()
     row = c.execute("SELECT l.*, cu.name AS customer_name FROM locations l JOIN customers cu ON cu.id=l.customer_id WHERE l.id=?",
@@ -1500,7 +1576,12 @@ def update_location(lid):
     if err_t:
         c.close()
         return err_t, code_t
-    new_customer_id = b.get("customer_id", existing["customer_id"])
+    raw_new_cid = b.get("customer_id", existing["customer_id"])
+    try:
+        new_customer_id = int(raw_new_cid) if raw_new_cid is not None else existing["customer_id"]
+    except (ValueError, TypeError):
+        c.close()
+        return jsonify({"error": "Invalid organization id"}), 400
     err_t, code_t = tenant_guard(u, new_customer_id)
     if err_t:
         c.close()
@@ -1562,15 +1643,26 @@ def list_departments():
         return err, code
     c = conn()
     where, params = [], []
-    scoped_where, scoped_params = customer_scope_filter(c, u, "d.customer_id")
-    if scoped_where:
-        where.append(scoped_where)
-        params += scoped_params
-    for f in ("customer_id", "location_id"):
-        v = request.args.get(f)
-        if v:
-            where.append(f"d.{f}=?")
-            params.append(v)
+    if u["role"] == "customer":
+        if u.get("customer_id"):
+            where.append("d.customer_id=?")
+            params.append(u["customer_id"])
+        if u.get("location_id"):
+            where.append("d.location_id=?")
+            params.append(u["location_id"])
+        if u.get("department_id"):
+            where.append("d.id=?")
+            params.append(u["department_id"])
+    else:
+        scoped_where, scoped_params = customer_scope_filter(c, u, "d.customer_id")
+        if scoped_where:
+            where.append(scoped_where)
+            params += scoped_params
+        for f in ("customer_id", "location_id"):
+            v = request.args.get(f)
+            if v:
+                where.append(f"d.{f}=?")
+                params.append(v)
     q = ("SELECT d.*, cu.name AS customer_name, l.name AS location_name "
          "FROM departments d JOIN customers cu ON cu.id=d.customer_id JOIN locations l ON l.id=d.location_id")
     if where:
@@ -3094,7 +3186,7 @@ def list_tenant_admins():
     """Administrators available as a record's 'responsible tenant admin'.
 
     * customer_id=<n>  -> the tenant admin(s) of that customer
-    * global=1         -> LabCare-wide (unbound) administrators only
+    * global=1         -> LabSynch-wide (unbound) administrators only
     * (neither)        -> scoped to the actor's customer; master gets all admins
     """
     u, err, code = require_role("admin", "engineer", "application", "customer")
@@ -3103,8 +3195,8 @@ def list_tenant_admins():
     c = conn()
     cust = request.args.get("customer_id")
     if request.args.get("global") == "1":
-        # "LabCare-wide" means exactly the Master System Admin — unbound tenant
-        # admins are NOT LabCare-wide (they simply haven't created an org yet).
+        # "LabSynch-wide" means exactly the Master System Admin — unbound tenant
+        # admins are NOT LabSynch-wide (they simply haven't created an org yet).
         q = ("SELECT id, name, email, role, customer_id FROM users WHERE role='admin' AND active=1 "
              "AND lower(email)=? ORDER BY name")
         rows = c.execute(q, (MASTER_ADMIN_EMAIL,)).fetchall()
@@ -3883,11 +3975,11 @@ def app_unregister():
 
 @app.get("/api/app/config")
 def app_config():
-    """Public bootstrap for the LabCare native app (no auth)."""
+    """Public bootstrap for the LabSynch native app (no auth)."""
     cfg = {
         "api_base": (os.environ.get("LABCARE_APP_URL") or "").strip()
                     or "https://labcare.insforge.site",
-        "app_name": "LabCare",
+        "app_name": "LabSynch",
     }
     return jsonify(cfg)
 
@@ -4458,12 +4550,12 @@ def portal_info(token):
         return jsonify({"error": "Invalid or expired link"}), 404
     d = dict(row)
     open_sql = ("SELECT c.id, c.code, c.subject, c.status, c.priority, c.created_at, "
-                "c.accepted_by, c.accepted_at, c.accept_reply, u.name AS accepted_by_name "
+                "c.accepted_by, c.accepted_at, c.accept_reply, u.name AS accepted_by_name, u.phone AS accepted_by_phone "
                 "FROM complaints c LEFT JOIN users u ON u.id=c.accepted_by "
                 "WHERE {col}=? AND c.status IN ('open','in_progress') "
                 "ORDER BY c.created_at DESC LIMIT 5")
     brk_sql = ("SELECT b.id, b.code, b.fault_description AS subject, b.status, b.priority, b.created_at, "
-               "b.accepted_by, b.accepted_at, b.accept_reply, u.name AS accepted_by_name "
+               "b.accepted_by, b.accepted_at, b.accept_reply, u.name AS accepted_by_name, u.phone AS accepted_by_phone "
                "FROM breakdowns b LEFT JOIN users u ON u.id=b.accepted_by "
                "WHERE {col}=? AND b.status != 'resolved' "
                "ORDER BY b.created_at DESC LIMIT 5")
@@ -4590,12 +4682,12 @@ def portal_history(token):
         return jsonify({"error": "Invalid or expired link"}), 404
     cmp_rows = c.execute(
         "SELECT c.id, c.code, c.subject, c.status, c.priority, c.created_at, c.equipment_id, "
-        "c.accepted_by, c.accepted_at, c.accept_reply, u.name AS accepted_by_name "
+        "c.accepted_by, c.accepted_at, c.accept_reply, u.name AS accepted_by_name, u.phone AS accepted_by_phone "
         "FROM complaints c LEFT JOIN users u ON u.id=c.accepted_by "
         "WHERE c.customer_id=? ORDER BY c.created_at DESC LIMIT 20", (row["customer_id"],)).fetchall()
     brk_rows = c.execute(
         "SELECT b.id, b.code, b.fault_description AS subject, b.status, b.priority, b.created_at, b.equipment_id, "
-        "b.accepted_by, b.accepted_at, b.accept_reply, u.name AS accepted_by_name "
+        "b.accepted_by, b.accepted_at, b.accept_reply, u.name AS accepted_by_name, u.phone AS accepted_by_phone "
         "FROM breakdowns b LEFT JOIN users u ON u.id=b.accepted_by "
         "WHERE b.customer_id=? ORDER BY b.created_at DESC LIMIT 20", (row["customer_id"],)).fetchall()
     out = [dict(r, kind="complaint") for r in cmp_rows] + [dict(r, kind="breakdown") for r in brk_rows]

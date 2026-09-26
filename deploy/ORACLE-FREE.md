@@ -1,7 +1,7 @@
-# LabCare on Oracle Cloud — Always Free ($0/mo, Singapore)
+# LabSynch on Oracle Cloud — Always Free ($0/mo, Singapore)
 
-Run the LabCare backend + SQLite for **free, forever** on Oracle Cloud's
-Always Free tier. Oracle is the best free option for LabCare because it has
+Run the LabSynch backend + SQLite for **free, forever** on Oracle Cloud's
+Always Free tier. Oracle is the best free option for LabSynch because it has
 **Singapore** regions (~20–40 ms from Penang, vs. GCP's US-only ~200 ms) and a
 huge allowance: **200 GB block storage** + 10 TB/month egress. No code changes;
 SQLite runs on a real local disk.
@@ -27,7 +27,7 @@ SQLite runs on a real local disk.
 | Egress | 10 TB/month |
 | Static IP | 1 reserved public IPv4 free |
 
-For LabCare, a single **A1 1 OCPU / 6 GB** instance is already many times more
+For LabSynch, a single **A1 1 OCPU / 6 GB** instance is already many times more
 than the app needs (Flask+Waitress+SQLite idles around ~150 MB). Picking 1/6
 instead of 2/12 also keeps utilisation % higher, which matters for the idle
 reclaim rule (see §9).
@@ -224,7 +224,7 @@ scp -i ~/.ssh/<key> ubuntu@<IP>:/var/lib/labcare/backup-*.tgz ./
 
 Oracle reclaims Always Free instances it deems **idle over 7 days**
 (CPU < 20% **and** network < 20% **and** memory < 20%-of-shape). An
-internal-only tool like LabCare can nearly reach that on a quiet week. Cheap
+internal-only tool like LabSynch can nearly reach that on a quiet week. Cheap
 insurance — a keep-alive cron that curls your public URL (external traffic
 counts toward the network metric) and does a couple of seconds of CPU work:
 

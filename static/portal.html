@@ -4,13 +4,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#0f766e">
-  <title>Report an issue — LabCare</title>
+  <meta name="theme-color" content="#b91c1c">
+  <title>Report an issue — LabSynch</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32x32.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta property="og:image" content="/og-image.png">
   <style>
     :root {
       --bg: #f3f5f9; --card: #fff; --ink: #0f172a; --soft: #64748b; --line: #e2e8f0;
-      --brand: #0f766e; --brand2: #14b8a6; --brand-soft: #ccfbf1; --danger: #dc2626;
+      --brand: #b91c1c; --brand2: #111111; --brand-soft: #fee2e2; --danger: #dc2626;
       --danger-soft: #fee2e2; --ok: #16a34a; --ok-soft: #dcfce7; --info: #2563eb; --info-soft: #dbeafe;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -20,7 +24,7 @@
     }
     .wrap { max-width: 520px; margin: 0 auto; padding: 16px 16px 40px; }
     .hero {
-      background: linear-gradient(135deg, #0f766e, #0d9488); color: #fff;
+      background: linear-gradient(135deg, #b91c1c, #7f1d1d); color: #fff;
       border-radius: 18px; padding: 22px 20px; box-shadow: 0 12px 32px rgba(15,118,110,.28);
     }
     .hero .brand { font-size: 12px; font-weight: 700; letter-spacing: .6px; opacity: .9; }
@@ -136,7 +140,7 @@
   <button class="siren-arm hidden" id="sirenArm" onclick="armSiren(true)" title="Enable alert sound">🔕 Enable alert sound</button>
   <div class="wrap">
     <div id="content"><div class="empty">Loading…</div></div>
-    <footer>Powered by 🔬 LabCare</footer>
+    <footer>Powered by <img src="/icons/icon-192.png" alt="LS" style="width:18px;height:18px;border-radius:4px;vertical-align:middle"> LabSynch</footer>
   </div>
   <script>
     "use strict";
@@ -160,6 +164,21 @@
     const PRIO = {
       low: { label: "Low", cls: "b-low" }, medium: { label: "Medium", cls: "b-medium" },
       high: { label: "High", cls: "b-high" }, critical: { label: "Critical", cls: "b-critical" },
+    };
+    const telHref = (s) => "tel:" + String(s == null ? "" : s).replace(/[^\d+]/g, "");
+    const waNumber = (s) => {
+      let d = String(s == null ? "" : s).replace(/[^\d+]/g, "");
+      if (!d) return "";
+      if (d.startsWith("+")) return d.slice(1);
+      if (d.length >= 9 && d.length <= 11 && d.startsWith("0")) d = "60" + d.slice(1);
+      return d;
+    };
+    const waChatHref = (s) => { const n = waNumber(s); return n ? "https://wa.me/" + n : ""; };
+    const phoneContactHtml = (phone) => {
+      if (!phone) return "";
+      const wa = waChatHref(phone);
+      const tel = telHref(phone);
+      return `<span style="display:inline-flex;gap:6px;align-items:center;margin-left:6px"><a href="${wa}" target="_blank" rel="noopener" style="color:#16a34a;text-decoration:none;font-weight:700">💬 WhatsApp ${esc(phone)}</a><a href="${tel}" style="text-decoration:none">📞</a></span>`;
     };
     const badge = (m, v) => `<span class="badge ${m[v].cls}">${m[v].label}</span>`;
     const statusBadge = (v) => badge(STATUS, v);
@@ -219,7 +238,7 @@
 
       box.innerHTML = `
         <div class="hero">
-          <div class="brand">🔬 LABCARE SERVICE PORTAL</div>
+          <div class="brand">LS LABSYNCH SERVICE PORTAL</div>
           <h1>Report an equipment issue</h1>
           <div class="meta">${esc(info.customer_name || "")}</div>
           ${eqLabel ? `<div class="tag">⚙ ${esc(eqLabel)}</div>` : ""}
@@ -300,7 +319,7 @@
           <div class="t-meta">${kindBadge(t.kind || "complaint")} ${statusBadge(t.status)} ${badge(PRIO, t.priority)}</div>
           ${t.accepted_by || t.accepted_by_name ? `
             <div class="accept-box">
-              <b>✔ Accepted by ${esc(t.accepted_by_name || "")}</b>
+              <b>✔ Accepted by ${esc(t.accepted_by_name || "")}</b>${t.accepted_by_phone ? phoneContactHtml(t.accepted_by_phone) : ""}
               ${t.accept_reply ? `<div class="accept-reply">“${esc(t.accept_reply)}”</div>` : ""}
             </div>` : ""}
         </div>`).join("");
@@ -419,7 +438,7 @@
           <div class="t-meta">${kindBadge(t.kind || "complaint")} ${statusBadge(t.status)} ${badge(PRIO, t.priority)}</div>
           ${t.accepted_by || t.accepted_by_name ? `
             <div class="accept-box">
-              <b>✔ Accepted by ${esc(t.accepted_by_name || "")}</b>
+              <b>✔ Accepted by ${esc(t.accepted_by_name || "")}</b>${t.accepted_by_phone ? phoneContactHtml(t.accepted_by_phone) : ""}
               ${t.accept_reply ? `<div class="accept-reply">“${esc(t.accept_reply)}”</div>` : ""}
             </div>` : ""}
           ${fbBlock(t)}

@@ -1,17 +1,17 @@
-# LabCare — native installers
+# LabSynch — native installers
 
-Built by GitHub Actions run [#57](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36219769780)
-from commit 4112acb on 2026-09-26 UTC.
+Built by GitHub Actions run [#77](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36236657086)
+from commit 9e6fd67 on 2026-09-26 UTC.
 
-## Android — android/LabCare-Alerts-v1.3.apk
+## Android — android/LabSynch-Alerts-v1.3.apk
 Requires Android 8.0+ (API 26) and installs on the latest Android
 14/15/16 devices (targets SDK 34, includes the FGS data-sync
 permission). Self-signed — not on the Play Store.
 1. Copy the APK to the phone (USB / cloud drive / direct download).
 2. Tap it; allow "install unknown apps" when Android asks. The APK is
    self-signed, not from the Play Store — that is expected.
-3. Open "LabCare Alerts" and sign in with your LabCare account — the
-   app opens the LabCare site itself (Site tab), plus Notifications
+3. Open "LabSynch Alerts" and sign in with your LabSynch account — the
+   app opens the LabSynch site itself (Site tab), plus Notifications
    and the ring-sound picker.
 4. Keep "Phone alerts" on: every new bell notification drops a heads-up
    bubble banner on top of the display, rings your chosen sound and
@@ -19,26 +19,26 @@ permission). Self-signed — not on the Play Store.
 Note: each CI build uses a fresh signing key, so uninstall any older CI
 build before installing a new one.
 
-## Windows — windows/LabCare-Alerts-Setup-1.2.0.exe
+## Windows — windows/LabSynch-Alerts-Setup-1.2.0.exe
 1. Run the installer. SmartScreen will warn about an "unrecognized app"
    (self-signed) — choose **More info → Run anyway**.
-2. It installs under %LOCALAPPDATA%\LabCare Alerts, adds Start-menu +
+2. It installs under %LOCALAPPDATA%\LabSynch Alerts, adds Start-menu +
    desktop shortcuts, and auto-starts with Windows.
 3. Sign in once; the app then lives in the system tray. Every new bell
    notification floats an always-on-top bubble banner (top-right of
    your screen) with the alert sound + dismiss/open buttons, plus a
    Windows notification. Clicking either opens the web app.
-4. The **Site** tab opens the LabCare web app itself
+4. The **Site** tab opens the LabSynch web app itself
    (https://labcare.insforge.site) inside the app, already signed in
-   with the account you used here — as does the **Open the LabCare
+   with the account you used here — as does the **Open the LabSynch
    site** button on Home and the tray menu. If the site cannot load
    you get a page with **Retry** and **Open the site in my browser**,
    never a blank window.
 
-This is 1.2.0. In 1.1.0 the installer left out the alert-bubble files
+This is 1.2.0 with new LS logo (interlocked 3D). In 1.1.0 the installer left out the alert-bubble files
 and never showed its window, so the EXE opened a blank page with no
-way through to the LabCare site. Uninstall 1.1.0 first (Settings →
-Apps → LabCare Alerts), then install this build.
+way through to the LabSynch site. Uninstall 1.1.0 first (Settings →
+Apps → LabSynch Alerts), then install this build.
 
 ## Web app (no install)
 https://labcare.insforge.site — also installable as a PWA

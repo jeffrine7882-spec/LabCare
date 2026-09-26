@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
     private ScrollView scroll;
     /** Screen area: shows either the site WebView or the native scroll view. */
     private FrameLayout content;
-    /** The LabCare site itself — kept alive across tab switches. */
+    /** The LabSynch site itself — kept alive across tab switches. */
     private WebView web;
     /** Which screen is shown: site | home | alerts | sound */
     private String screen = "site";
@@ -186,7 +186,7 @@ public class MainActivity extends Activity {
         }
 
         TextView title = new TextView(this);
-        title.setText("LabCare");
+        title.setText("LabSynch");
         title.setTextSize(28);
         title.setTypeface(null, Typeface.BOLD);
         title.setTextColor(Color.rgb(15, 118, 110));
@@ -219,7 +219,7 @@ public class MainActivity extends Activity {
     // ----------------------------------------------------------------- site
 
     /**
-     * The LabCare site itself, embedded so the app connects the user straight
+     * The LabSynch site itself, embedded so the app connects the user straight
      * to the web app (same account, same data). The native token is injected
      * as the site's own session (cookie + localStorage) so the site opens
      * already signed in.
@@ -252,7 +252,7 @@ public class MainActivity extends Activity {
         TextView head = label("The site didn't open in the app");
         box.addView(head);
         TextView m = muted(msg == null
-                ? "The LabCare site failed to load. Check your internet connection."
+                ? "The LabSynch site failed to load. Check your internet connection."
                 : msg);
         LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -318,8 +318,8 @@ public class MainActivity extends Activity {
                 webErrored = true;
                 CharSequence d = error != null ? error.getDescription() : null;
                 webErrorMsg = (d == null || d.length() == 0)
-                        ? "The LabCare site failed to load. Check your internet connection."
-                        : "The LabCare site failed to load (" + d + ").";
+                        ? "The LabSynch site failed to load. Check your internet connection."
+                        : "The LabSynch site failed to load (" + d + ").";
                 render();
             }
 
@@ -328,7 +328,7 @@ public class MainActivity extends Activity {
                 Uri u = req.getUrl();
                 String host = u.getHost() == null ? "" : u.getHost();
                 if (host.equals("labcare.insforge.site") || host.endsWith(".insforge.site")) {
-                    return false; // keep LabCare pages in the app
+                    return false; // keep LabSynch pages in the app
                 }
                 openExternal(u);
                 return true;
@@ -371,7 +371,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        w.addJavascriptInterface(new SiteBridge(), "LabCareDroid");
+        w.addJavascriptInterface(new SiteBridge(), "LabSynchDroid");
 
         // Load the site IMMEDIATELY and unconditionally — never gate the load
         // on a cookie callback. Session sync (cookie + localStorage) is
@@ -476,7 +476,7 @@ public class MainActivity extends Activity {
             "e.preventDefault();e.stopPropagation();" +
             "fetch(a.href).then(function(r){return r.blob()}).then(function(b){" +
             "var fr=new FileReader();fr.onload=function(){" +
-            "LabCareDroid.save(a.getAttribute('download')||'file.bin'," +
+            "LabSynchDroid.save(a.getAttribute('download')||'file.bin'," +
             "(fr.result||'').split(',')[1]||'',b.type||'application/octet-stream');" +
             "};fr.readAsDataURL(b);});" +
             "}catch(err){}" +
@@ -686,7 +686,7 @@ public class MainActivity extends Activity {
             if ("site".equals(target) && "site".equals(screen) && web != null) {
                 web.clearCache(true);
                 web.reload();
-                toast("Refreshing LabCare…");
+                toast("Refreshing LabSynch…");
                 return;
             }
             screen = target;
@@ -724,7 +724,7 @@ public class MainActivity extends Activity {
             String em = email.getText().toString().trim();
             String pw = pass.getText().toString();
             if (em.isEmpty() || pw.isEmpty()) {
-                toast("Enter your LabCare email and password");
+                toast("Enter your LabSynch email and password");
                 return;
             }
             signIn.setEnabled(false);
@@ -736,7 +736,7 @@ public class MainActivity extends Activity {
                     signIn.setEnabled(true);
                     signIn.setText("Sign in");
                     if ("ok".equals(res[0])) {
-                        toast("Signed in \u2014 opening LabCare");
+                        toast("Signed in \u2014 opening LabSynch");
                         notifs.clear();
                         syncSiteSession();
                         if (web != null) web.loadUrl(Api.BASE + "/");

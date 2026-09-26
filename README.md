@@ -1,4 +1,4 @@
-# LabCare — Complaint & Breakdown Management
+# LabSynch — Complaint & Breakdown Management
 
 Lab equipment complaints and breakdown tracking with role-based login
 (Admin / Technician / Customer), sound alerts, PDF service reports, QR
@@ -29,7 +29,7 @@ labcare/
 
 ## Backend (InsForge)
 
-LabCare runs on **InsForge**: PostgreSQL (`database.insforge.app`) for all data,
+LabSynch runs on **InsForge**: PostgreSQL (`database.insforge.app`) for all data,
 plus a Flask container on InsForge **compute**. The same `database.py` keeps
 working against plain SQLite for local development.
 
@@ -200,7 +200,7 @@ Organizations** and **Admin → Team & users**.
     automatically added to their care list), then its users (technicians and
     customer accounts), locations, departments and equipment. They **cannot**
     create or edit any admin account, cannot see other organizations' data,
-    and can only assign work to their own team or LabCare's provider
+    and can only assign work to their own team or LabSynch's provider
     technicians.
   - **Technician**: provider technicians (`customer_id NULL` **and** no linked
     tenant admin — created by the master) work across all organizations; tenant
@@ -321,7 +321,7 @@ Organizations** and **Admin → Team & users**.
   `"Added file"` entries in the audit log are deliberately kept — the history
   log is an audit trail, and those rows live in `audit_logs`, not here.
 - **Service report PDFs** ([`server/report.py`](server/report.py)): one per
-  ticket, on the LabCare letterhead — `GET /api/complaints/<id>/report.pdf`
+  ticket, on the LabSynch letterhead — `GET /api/complaints/<id>/report.pdf`
   (summary, description, linked breakdown work orders and conversation log) and
   `GET /api/breakdowns/<id>/report.pdf` (summary, fault description, source
   complaint, root cause, resolution notes and work log). Plus a management
@@ -365,7 +365,7 @@ Organizations** and **Admin → Team & users**.
   (override with `LABCARE_VAPID_PRIVATE`; the public key for clients is derived
   from it). `pywebpush` sends one push per recipient whenever `notify()` runs.
 - **Native mobile alerts (phone rings)**: an [Expo app](mobile/README.md) signs
-  into LabCare and receives every bell notification via **Firebase Cloud
+  into LabSynch and receives every bell notification via **Firebase Cloud
   Messaging**, so the phone rings even with the browser closed or the phone
   locked. Backend side (`app_devices` table + `server/apppush.py` + the
   `/api/app/*` endpoints) is implemented; enabling it only needs Firebase

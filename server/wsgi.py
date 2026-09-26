@@ -1,4 +1,4 @@
-"""Production WSGI entry point for LabCare.
+"""Production WSGI entry point for LabSynch.
 
 Serving choices (all equivalent — pick one):
 

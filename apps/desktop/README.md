@@ -1,35 +1,35 @@
-# LabCare Alerts — Windows desktop app
+# LabSynch Alerts — Windows desktop app
 
 ## Install
-Run **`LabCare-Alerts-Setup-1.2.0.exe`** (in `Release/windows/`, or `dist/`
-after a local build). It installs to `%LOCALAPPDATA%\LabCare Alerts`, adds a
+Run **`LabSynch-Alerts-Setup-1.2.0.exe`** (in `Release/windows/`, or `dist/`
+after a local build). It installs to `%LOCALAPPDATA%\LabSynch Alerts`, adds a
 Start-menu + desktop shortcut, and launches on finish. **SmartScreen** will warn
 about an "unrecognized app" (self-signed) — choose **More info → Run anyway**.
 
-> Upgrading from 1.1.0? Uninstall it first (Settings → Apps → LabCare Alerts).
+> Upgrading from 1.1.0? Uninstall it first (Settings → Apps → LabSynch Alerts).
 > 1.1.0 shipped broken — see *Why 1.2.0 exists* below.
 
 ## What it does
-* **Opens the LabCare site.** The **Site** tab loads
+* **Opens the LabSynch site.** The **Site** tab loads
   `https://labcare.insforge.site` inside the app, already signed in with the
   account this app holds (the token is mirrored into the site's own
   `labcare_token` session cookie, and the web app calls `/api/me` on boot).
-  The same site opens from the **Open the LabCare site** button on Home, from
-  the tray menu, from an alert bubble's **Open LabCare**, and from a Windows
+  The same site opens from the **Open the LabSynch site** button on Home, from
+  the tray menu, from an alert bubble's **Open LabSynch**, and from a Windows
   notification click. Files the site downloads (PDF service reports) land in
   your Downloads folder.
 * **Never a blank page.** The window shows as soon as it can paint. If the
   bundled UI cannot load, the window falls back to the real site; if the site
   cannot load, you get a recovery page with **Retry** and **Open the site in my
   browser**.
-* **System tray** app — sign in once with your LabCare account, then close the
+* **System tray** app — sign in once with your LabSynch account, then close the
   window; it keeps running in the tray.
 * **Auto-starts with Windows** (login item).
 * Polls your bell every 10 s. On a new notification it:
   * floats an **always-on-top bubble banner** at the top-right of your screen
-    (no focus theft, dismiss or "Open LabCare" buttons), with **sound**, and
+    (no focus theft, dismiss or "Open LabSynch" buttons), with **sound**, and
   * adds a native **Windows notification** as a durable breadcrumb.
-* Right-click the tray icon for **Open LabCare site**, **Open Alerts window**,
+* Right-click the tray icon for **Open LabSynch site**, **Open Alerts window**,
   **Alerts on/off**, **Sign out**, **Quit**.
 
 ## Why 1.2.0 exists
@@ -39,7 +39,7 @@ about an "unrecognized app" (self-signed) — choose **More info → Run anyway*
    only `main.js`, `preload.js`, `renderer/**`, `assets/**` — so `bubble.html`
    and `bubble-preload.js` were never packed into `app.asar`. `npm start` worked
    (it reads from disk), but the installed app's alert bubble had nothing to
-   load: a blank bubble, no **Open LabCare** button, and no sound.
+   load: a blank bubble, no **Open LabSynch** button, and no sound.
 2. **The main window was created with `show: false` and nothing ever showed
    it** — there was no `ready-to-show` handler and no `win.show()` at launch, so
    after the installer's `runAfterFinish` launch the app looked dead.

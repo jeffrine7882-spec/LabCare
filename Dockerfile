@@ -1,4 +1,4 @@
-# LabCare API + static frontend — InsForge compute container.
+# LabSynch API + static frontend — InsForge compute container.
 # Deployment:  npx -y @insforge/cli compute deploy . --name labcare-api --port 8000
 #
 # The Flask app serves BOTH the REST API and the static web app (single

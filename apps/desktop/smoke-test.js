@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /*
- * Behavioural smoke test for the LabCare desktop app — runs main.js against a
+ * Behavioural smoke test for the LabSynch desktop app — runs main.js against a
  * mock Electron in plain Node, so it needs no Electron binary, no display and
  * no network. `npm test` / the release workflow run it before packaging.
  *
  * It exists because the 1.1.0 installer shipped an app that could show a blank
- * window and had no working link to the LabCare site, and nothing caught it.
+ * window and had no working link to the LabSynch site, and nothing caught it.
  * These assertions pin the behaviour the user actually depends on:
  *
  *   1. the alerts window is really shown at launch (it used to be created
@@ -13,7 +13,7 @@
  *   2. the bundled UI loads,
  *   3. the Site action opens https://labcare.insforge.site/,
  *   4. a failed load lands on a recovery page that still links to the site,
- *   5. the tray offers "Open LabCare site",
+ *   5. the tray offers "Open LabSynch site",
  *   6. Quit actually quits (the close handler used to swallow it),
  *   7. an alert still rings when the bubble UI is unavailable.
  */
@@ -184,7 +184,7 @@ Module._load = function (request, parent, isMain) {
 // Run
 // ---------------------------------------------------------------------------
 (async () => {
-  console.log("LabCare desktop smoke test\n");
+  console.log("LabSynch desktop smoke test\n");
 
   require(MAIN);
   // let app.whenReady().then(...) and its timers settle
@@ -203,7 +203,7 @@ Module._load = function (request, parent, isMain) {
   console.log("\ntray");
   const trayMenu = menuTemplates[0] || [];
   const labels = trayMenu.map((i) => i.label);
-  check("tray offers 'Open LabCare site'", labels.includes("Open LabCare site"), "labels: " + labels.join(", "));
+  check("tray offers 'Open LabSynch site'", labels.includes("Open LabSynch site"), "labels: " + labels.join(", "));
   check("tray still offers the alerts window", labels.includes("Open Alerts window"));
 
   console.log("\nsite link");
@@ -224,7 +224,7 @@ Module._load = function (request, parent, isMain) {
   check("the main window loads a recovery page", !!errPage, "last load: " + JSON.stringify(last));
   if (errPage) {
     const html = fs.readFileSync(errPage, "utf8");
-    check("the recovery page links to the LabCare site", html.includes(SITE_URL));
+    check("the recovery page links to the LabSynch site", html.includes(SITE_URL));
     check("the recovery page offers the browser fallback",
       html.includes("labcare://open-external") && /Open the site in my browser/.test(html));
     check("the recovery page offers Retry", /Retry/.test(html));

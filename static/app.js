@@ -1,4 +1,4 @@
-/* LabCare — mobile web app (complaints & breakdowns for lab equipment) */
+/* LabSynch — mobile web app (complaints & breakdowns for lab equipment) */
 "use strict";
 
 // ---------------------------------------------------------------- Safe storage
@@ -59,13 +59,13 @@ const API = {
           signal: controller.signal,
         });
         if ([502, 503, 504].includes(res.status)) {
-          throw Object.assign(new Error("The LabCare server is temporarily unavailable. Please try again shortly."), { status: res.status });
+          throw Object.assign(new Error("The LabSynch server is temporarily unavailable. Please try again shortly."), { status: res.status });
         }
         let data;
         if ((res.headers.get("content-type") || "").includes("application/json")) {
           data = await res.json();
         } else {
-          throw Object.assign(new Error("Unexpected response from the LabCare server (" + res.status + "). Please try again."), { status: res.status });
+          throw Object.assign(new Error("Unexpected response from the LabSynch server (" + res.status + "). Please try again."), { status: res.status });
         }
         if (!res.ok) {
           throw Object.assign(new Error((data && typeof data.error === "string" && data.error) || "Request failed (" + res.status + ")"), { status: res.status });
@@ -73,13 +73,13 @@ const API = {
         return data;
       } catch (e) {
         if (controller.signal.aborted) {
-          failure = new Error("The LabCare server took too long to respond. Please try again shortly.");
+          failure = new Error("The LabSynch server took too long to respond. Please try again shortly.");
         } else if (e instanceof SyntaxError) {
-          failure = new Error("Invalid response from the LabCare server. Please try again shortly.");
+          failure = new Error("Invalid response from the LabSynch server. Please try again shortly.");
         } else if (e.status) {
           failure = e;
         } else {
-          failure = new Error("Cannot reach the LabCare server. Check your connection and try again.");
+          failure = new Error("Cannot reach the LabSynch server. Check your connection and try again.");
         }
         const retryable = !e.status || [502, 503, 504].includes(e.status);
         // Never repeat writes, and don't retry authentication/validation errors.
@@ -143,6 +143,21 @@ const waNumber = (s) => {
   return d;
 };
 const waChatHref = (s) => { const n = waNumber(s); return n ? "https://wa.me/" + n : ""; };
+const waChatTextHref = (s, msg) => { const n = waNumber(s); if (!n) return ""; const base = "https://wa.me/" + n; return msg ? base + "?text=" + encodeURIComponent(msg) : base; };
+const phoneContactHtml = (phone, opts = {}) => {
+  if (!phone) return "";
+  const wa = waChatHref(phone);
+  const tel = telHref(phone);
+  const label = opts.label || phone;
+  // tappable WhatsApp link + tel icon; whole number links to WhatsApp as requested
+  return `<span class="phone-actions"><a class="wa-link" href="${wa}" target="_blank" rel="noopener" title="Chat on WhatsApp">💬 ${esc(label)}</a><a class="tel-link" href="${tel}" title="Call">📞</a></span>`;
+};
+const personWithPhoneHtml = (name, phone) => {
+  if (!name && !phone) return "—";
+  const n = esc(name || "—");
+  if (!phone) return n;
+  return `${n} ${phoneContactHtml(phone)}`;
+};
 
 const ROLE_LABELS = { admin: "Admin", engineer: "Engineer", application: "Application", customer: "Customer" };
 const roleChip = (role) => `<span class="chip chip-${role === "admin" ? "admin" : (role === "engineer" || role === "application") ? "tech" : "cust"}">${ROLE_LABELS[role] || role}</span>`;
@@ -365,13 +380,13 @@ function render() {
   const titles = {
     dashboard: "Dashboard", complaints: "Complaints", breakdowns: "Breakdowns",
     equipment: "Equipment", equipmentDetail: "Equipment", more: "Menu",
-    customers: "Organizations", customerDetail: "Organization", users: "Team",
+    customers: "Organization, Customer & Department", customerDetail: "Organization", users: "Add team member",
     complaintDetail: "Complaint", breakdownDetail: "Breakdown", profile: "My Account",
     pm: "Maintenance", pmDetail: "Maintenance", portals: "QR Portal",
-    locations: "Organizations", departments: "Organizations", org: "Organizations",
+    locations: "Organization, Customer & Department", departments: "Organization, Customer & Department", org: "Organization, Customer & Department",
     onboarding: "Join requests", categories: "Categories",
   };
-  $("#tbTitle").textContent = titles[state.view] || "LabCare";
+  $("#tbTitle").textContent = titles[state.view] || "LabSynch";
 
   renderView();
 }
@@ -687,12 +702,12 @@ function complaintDetailHtml(c) {
       <div class="kv"><span class="k">Location/Department</span><span class="v">${esc(locDept || "—")}</span></div>
       ${c.equipment_name ? `<div class="kv"><span class="k">Equipment</span><span class="v">${esc(c.equipment_name)}</span></div>` : ""}
       ${c.equipment_serial ? `<div class="kv"><span class="k">Serial number</span><span class="v mono">${esc(c.equipment_serial)}</span></div>` : ""}
-      <div class="kv"><span class="k">Opened by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
-      ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v phone-actions"><a class="wa-link" href="${waChatHref(c.reporter_phone)}" target="_blank" rel="noopener">💬 WhatsApp ${esc(c.reporter_phone)}</a><a class="tel-link" href="${telHref(c.reporter_phone)}">📞</a></span></div>` : ""}
-      <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
-      ${c.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${esc(c.accepted_by_name)}${c.accepted_at ? " · " + fmtDate(c.accepted_at) : ""}</span></div>` : ""}
+      <div class="kv"><span class="k">Opened by</span><span class="v">${personWithPhoneHtml(c.created_by_name, c.created_by_phone)}</span></div>
+      ${c.reporter_name ? `<div class="kv"><span class="k">Reporter (portal)</span><span class="v">${personWithPhoneHtml(c.reporter_name, c.reporter_phone)}</span></div>` : (c.reporter_phone ? `<div class="kv"><span class="k">Reporter contact</span><span class="v">${phoneContactHtml(c.reporter_phone)}</span></div>` : "")}
+      ${c.created_by_phone && c.reporter_phone && c.created_by_phone !== c.reporter_phone ? "" : ""}
+      <div class="kv"><span class="k">Assigned to</span><span class="v">${c.assigned_to_name ? personWithPhoneHtml(c.assigned_to_name, c.assigned_to_phone) : "Unassigned"}</span></div>
+      ${c.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${personWithPhoneHtml(c.accepted_by_name, c.accepted_by_phone)}${c.accepted_at ? " · " + fmtDate(c.accepted_at) : ""}</span></div>` : ""}
       ${c.accept_reply ? `<div class="kv"><span class="k">Reply to sender</span><span class="v">“${esc(c.accept_reply)}”</span></div>` : ""}
-      ${c.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(c.responsible_admin_name)}</span></div>` : ""}
       ${c.closed_by_name ? `<div class="kv"><span class="k">${c.status === "closed" ? "Closed by" : "Resolved by"}</span><span class="v">${esc(c.closed_by_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Created</span><span class="v">${fmtDate(c.created_at)}</span></div>
       ${c.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(c.resolved_at)}</span></div>` : ""}
@@ -909,7 +924,7 @@ function statusButtons(entity, rec) {
     }
   }
   if (rec.accepted_by_name) {
-    b.unshift(`<div class="accept-banner">✔ Accepted by <b>${esc(rec.accepted_by_name)}</b>${rec.accepted_at ? ` · ${fmtDate(rec.accepted_at)}` : ""}</div>`);
+    b.unshift(`<div class="accept-banner">✔ Accepted by <b>${esc(rec.accepted_by_name)}</b>${rec.accepted_by_phone ? " " + phoneContactHtml(rec.accepted_by_phone) : ""}${rec.accepted_at ? ` · ${fmtDate(rec.accepted_at)}` : ""}</div>`);
   }
   if (!b.length) return `<p style="color:var(--ink-soft);font-size:13px">No actions available for the current status${isCust() ? " — the support team will update this" : ""}.</p>`;
   return b.join("");
@@ -1101,7 +1116,7 @@ async function refreshBreakdowns() {
 
 function breakdownCard(b) {
   const passed = isCust() ? "" : `<span class="mono">${esc(b.code)}</span>`;
-  const sn = b.equipment_serial ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(b.equipment_serial)}</span>` : "";
+  const sn = b.equipment_serial ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11px;font-weight:600;background:var(--brand-soft,#fee2e2);color:var(--brand,#b91c1c)">S/N: ${esc(b.equipment_serial)}</span>` : "";
   const scope = isCust() ? "" : (b.customer_name ? "<b>" + esc(b.customer_name) + "</b> · " : "");
   return `
     <div class="item" onclick="navigate('breakdownDetail',{id:${b.id}})">
@@ -1152,7 +1167,7 @@ function breakdownDetailHtml(b) {
           ${badge("priority", b.priority)}
         </div>
         <h2 style="font-size:17px;line-height:1.35">${esc(b.equipment_name || "Equipment")}</h2>
-        ${b.equipment_serial ? `<div style="margin-top:4px"><span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(b.equipment_serial)}</span></div>` : ""}
+        ${b.equipment_serial ? `<div style="margin-top:4px"><span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#fee2e2);color:var(--brand,#b91c1c)">S/N: ${esc(b.equipment_serial)}</span></div>` : ""}
         <div class="item-sub" style="margin-top:6px">${esc(b.customer_name || "")}</div>
       </div>
     </div>
@@ -1165,13 +1180,11 @@ function breakdownDetailHtml(b) {
       <div class="kv"><span class="k">Location/Department</span><span class="v">${esc(b.location_name || b.department_name || "—")}</span></div>
       ${b.equipment_serial ? `<div class="kv"><span class="k">Serial number</span><span class="v mono">${esc(b.equipment_serial)}</span></div>` : ""}
       ${b.complaint_id ? `<div class="kv"><span class="k">Source complaint</span><span class="v" style="color:var(--brand);text-decoration:underline" onclick="navigate('complaintDetail',{id:${b.complaint_id}})">${esc("View")}</span></div>` : ""}
-      <div class="kv"><span class="k">Opened by</span><span class="v">${esc(b.reported_by_name || "—")}</span></div>
-      ${b.reporter_name ? `<div class="kv"><span class="k">Reporter</span><span class="v">${esc(b.reporter_name)}</span></div>` : ""}
-      ${b.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v phone-actions"><a class="wa-link" href="${waChatHref(b.reporter_phone)}" target="_blank" rel="noopener">💬 WhatsApp ${esc(b.reporter_phone)}</a><a class="tel-link" href="${telHref(b.reporter_phone)}">📞</a></span></div>` : ""}
-      <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(b.assigned_to_name || "Unassigned")}</span></div>
-      ${b.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${esc(b.accepted_by_name)}${b.accepted_at ? " · " + fmtDate(b.accepted_at) : ""}</span></div>` : ""}
+      <div class="kv"><span class="k">Opened by</span><span class="v">${personWithPhoneHtml(b.reported_by_name, b.reported_by_phone)}</span></div>
+      ${b.reporter_name ? `<div class="kv"><span class="k">Reporter (portal)</span><span class="v">${personWithPhoneHtml(b.reporter_name, b.reporter_phone)}</span></div>` : (b.reporter_phone && b.reporter_phone !== b.reported_by_phone ? `<div class="kv"><span class="k">Reporter contact</span><span class="v">${phoneContactHtml(b.reporter_phone)}</span></div>` : "")}
+      <div class="kv"><span class="k">Assigned to</span><span class="v">${b.assigned_to_name ? personWithPhoneHtml(b.assigned_to_name, b.assigned_to_phone) : "Unassigned"}</span></div>
+      ${b.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${personWithPhoneHtml(b.accepted_by_name, b.accepted_by_phone)}${b.accepted_at ? " · " + fmtDate(b.accepted_at) : ""}</span></div>` : ""}
       ${b.accept_reply ? `<div class="kv"><span class="k">Reply to sender</span><span class="v">“${esc(b.accept_reply)}”</span></div>` : ""}
-      ${b.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(b.responsible_admin_name)}</span></div>` : ""}
       ${b.closed_by_name ? `<div class="kv"><span class="k">Resolved by</span><span class="v">${esc(b.closed_by_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Reported</span><span class="v">${fmtDate(b.created_at)}</span></div>
       ${b.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(b.resolved_at)}</span></div>` : ""}
@@ -1313,7 +1326,7 @@ function equipmentCard(e) {
     ? ""
     : `${esc(e.customer_name || "")} · ${esc(e.location_name || e.department_name || "—")}`;
   const snBadge = e.serial_number
-    ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(e.serial_number)}</span>`
+    ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:600;background:var(--brand-soft,#fee2e2);color:var(--brand,#b91c1c)">S/N: ${esc(e.serial_number)}</span>`
     : `<span class="badge" style="font-size:11.5px;background:var(--bg);color:var(--ink-soft)">No S/N</span>`;
   const details = [
     e.model ? `Model: ${esc(e.model)}` : null,
@@ -1354,7 +1367,7 @@ async function viewEquipmentDetail(v) {
         <div class="card" style="margin-top:8px">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <h2 style="font-size:18px;margin:0">${esc(e.name)}</h2>
-            ${e.serial_number ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:12px;font-weight:600;background:var(--brand-soft,#ccfbf1);color:var(--brand,#0f766e)">S/N: ${esc(e.serial_number)}</span>` : `<span class="badge" style="font-size:12px;background:var(--bg);color:var(--ink-soft)">No S/N</span>`}
+            ${e.serial_number ? `<span class="badge" style="font-family:ui-monospace,monospace;font-size:12px;font-weight:600;background:var(--brand-soft,#fee2e2);color:var(--brand,#b91c1c)">S/N: ${esc(e.serial_number)}</span>` : `<span class="badge" style="font-size:12px;background:var(--bg);color:var(--ink-soft)">No S/N</span>`}
           </div>
           <div class="item-sub mono" style="margin-top:4px">${esc(e.model ? "Model: " + e.model : "No model specified")}</div>
           <div class="item-meta" style="margin-top:8px">
@@ -1393,9 +1406,9 @@ async function viewOrg(v, tab) {
     ? (isAdmin() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add organization</button>` : "")
     : (isTech() ? `<button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location/department</button>` : "");
   v.innerHTML = `
-    <div class="hero" style="background:linear-gradient(135deg,#134e4a,#0f766e)">
-      <h2>Organizations</h2>
-      <p>Organizations and locations/departments in one place.</p>
+    <div class="hero" style="background:linear-gradient(135deg,#450a0a,#b91c1c)">
+      <h2>Organization, Customer & Department</h2>
+      <p>Manage organizations, customers and their locations/departments in one place.</p>
     </div>
     <div class="seg" style="margin:14px 0 12px">
       ${tabs.map(([k, label]) => `<button class="${t === k ? "active" : ""}" onclick="setOrgTab('${k}')">${label}</button>`).join("")}
@@ -1565,33 +1578,38 @@ async function openLocationEditor(edit, id) {
   let customers = [];
   try { customers = await API.get("/api/customers"); } catch (e) {}
   const l = edit ? state.locations?.find((x) => x.id === id) : null;
+  const hasCustomers = customers && customers.length > 0;
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit location/department" : "Add location/department"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
       <label class="field"><span>Location/Department name *</span><input id="locName" value="${esc(l ? l.name : "")}" placeholder="e.g. Molecular Lab"></label>
       <label class="field"><span>Organization *</span>
-        <select id="locCustomer">
-          ${customers.map((x) => `<option value="${x.id}" ${l && l.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
-        </select></label>
+        ${hasCustomers ? `<select id="locCustomer">
+          ${customers.map((x) => `<option value="${x.id}" ${l && String(l.customer_id) === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select>` : `<div style="padding:12px;border:1.5px dashed var(--line);border-radius:12px;background:var(--bg);color:var(--ink-soft);font-size:13px">
+          No organizations found. As Tenant Admin, please create an Organization first via <b>Organization, Customer & Department → ＋ Add organization</b>, then add its Location/Department here. The new organization will automatically be linked to your account.
+        </div><input type="hidden" id="locCustomer" value="">`}
+        </label>
       <label class="field"><span>City</span><input id="locCity" value="${esc(l ? l.city : "")}" placeholder="e.g. Kuala Lumpur"></label>
       <label class="field"><span>Address</span><input id="locAddress" value="${esc(l ? l.address : "")}"></label>
     </div>
     <div class="sheet-foot">
       ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteLocation(${l.id})">Delete</button>` : ""}
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
-      <button class="btn btn-primary-2" onclick="saveLocation(${edit ? l.id : "null"})">${edit ? "Save" : "Add location/department"}</button>
+      <button class="btn btn-primary-2" ${!hasCustomers && !edit ? "disabled style='opacity:.5;pointer-events:none'" : ""} onclick="saveLocation(${edit ? l.id : "null"})">${edit ? "Save" : "Add location/department"}</button>
     </div>`);
 }
 
 async function saveLocation(id) {
+  const rawCid = $("#locCustomer")?.value;
   const body = {
     name: $("#locName").value.trim(),
-    customer_id: $("#locCustomer").value,
+    customer_id: rawCid ? parseInt(rawCid, 10) : null,
     city: $("#locCity").value.trim(),
     address: $("#locAddress").value.trim(),
   };
   if (!body.name) { toast("Location/department name is required", "error"); return; }
-  if (!body.customer_id) { toast("Organization is required", "error"); return; }
+  if (!body.customer_id) { toast("Organization is required — create an Organization first", "error"); return; }
   closeSheet();
   showLoading();
   try {
@@ -1769,7 +1787,7 @@ function onboardingCard(a) {
         <div class="item-main">
           <div class="item-title">${esc(a.name)} ${roleChip(a.role)}</div>
           <div class="item-sub">${esc(a.email)}${a.phone ? " · " + esc(a.phone) : ""}</div>
-          <div class="item-sub">${a.role === "customer" ? "Scope: " + scope : "LabCare engineer"}</div>
+          <div class="item-sub">${a.role === "customer" ? "Scope: " + scope : "LabSynch engineer"}</div>
         </div>
         <span class="badge ${badgeCls}">${badgeLabel}</span>
       </div>
@@ -2013,9 +2031,9 @@ async function assignCare(id, adminId) {
 function viewMore(v) {
   const items = [];
   items.push(`<button class="menu-item" onclick="navigate('profile')"><span class="mi-ico">👤</span> My account <span class="mi-arrow">›</span></button>`);
-  if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Organizations &amp; locations/departments <span class="mi-arrow">›</span></button>`);
+  if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Organization, Customer &amp; Department <span class="mi-arrow">›</span></button>`);
   if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('categories')"><span class="mi-ico">🏷️</span> Categories <span class="mi-arrow">›</span></button>`);
-  if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('users')"><span class="mi-ico">👥</span> Team & users <span class="mi-arrow">›</span></button>`);
+  if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('users')"><span class="mi-ico">👥</span> Add team member <span class="mi-arrow">›</span></button>`);
   if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('onboarding')"><span class="mi-ico">📥</span> Join requests <span class="mi-arrow">›</span></button>`);
 
   // Create new: quick access from the menu (same as the ＋ button)
@@ -2051,7 +2069,7 @@ function viewMore(v) {
     <div class="section-title">Menu</div>
     <div class="menu-group">${items.join("")}</div>
     <div class="card" style="margin-top:6px">
-      <p style="font-size:12.5px;color:var(--ink-soft)">LabCare v1.1 — complaints &amp; breakdowns, photos, reports &amp; notifications.</p>
+      <p style="font-size:12.5px;color:var(--ink-soft)">LabSynch v1.1 — complaints &amp; breakdowns, photos, reports &amp; notifications.</p>
     </div>`;
 }
 
@@ -2081,7 +2099,6 @@ async function openComplaintEditor(edit) {
   state.equipment = equipment;
   const c = edit ? state.complaintDetail : null;
   const defCust = c && c.customer_id ? c.customer_id : (customers.length ? customers[0].id : "");
-  const respAdmins = isTech() && isUnboundStaff() && defCust ? await adminsForCustomer(defCust) : [];
 
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit complaint" : "Log complaint"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
@@ -2093,11 +2110,6 @@ async function openComplaintEditor(edit) {
         <select id="fCustomer" onchange="onCustPickComplaint()">
           ${customers.map((x) => `<option value="${x.id}" ${c && c.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
-      ${isUnboundStaff() ? `
-      <label class="field" id="fRespAdminField" style="${defCust ? "" : "display:none"}"><span>Responsible tenant admin</span>
-        <select id="fRespAdmin">
-          ${respAdminOpts(respAdmins, c && c.responsible_admin_id, true)}
-        </select></label>` : ""}
       <label class="field"><span>Location/Department</span>
         <select id="fLocation" onchange="onLocPickComplaint()">
           ${locOpts(state.locations || [], c && c.location_id, defCust)}
@@ -2148,12 +2160,12 @@ async function saveComplaint(id) {
     priority: ($("#fPriority button.active")?.dataset.p || "medium"),
   };
   if (isTech()) {
-    body.customer_id = $("#fCustomer").value;
-    body.location_id = $("#fLocation").value || null;
+    body.customer_id = $("#fCustomer").value ? parseInt($("#fCustomer").value, 10) : null;
+    body.location_id = $("#fLocation").value ? parseInt($("#fLocation").value, 10) : null;
     const deptMatch = (state.departments || []).find((d) => String(d.location_id) === String(body.location_id));
-    body.department_id = $("#fDepartment")?.value || deptMatch?.id || body.location_id || null;
-    body.assigned_to = ($("#fAssignee").value || null);
-    if (isUnboundStaff() && $("#fRespAdmin")) body.responsible_admin_id = $("#fRespAdmin").value || null;
+    body.department_id = $("#fDepartment")?.value ? parseInt($("#fDepartment").value, 10) : (deptMatch?.id ? parseInt(deptMatch.id, 10) : (body.location_id || null));
+    body.assigned_to = ($("#fAssignee").value ? parseInt($("#fAssignee").value, 10) : null);
+    // Responsible tenant admin auto-resolved by backend based on organization — no manual picker
   }
   if (!body.subject) { toast("Subject is required", "error"); return; }
   if (isTech() && !body.customer_id) { toast("Organization is required", "error"); return; }
@@ -2190,7 +2202,6 @@ async function openBreakdownEditor(edit, prefill) {
   const b = edit && !prefill ? state.breakdownDetail : null;
   const p = prefill || {};
   const defCust = (b ? b.customer_id : p.customer_id) || (isTech() && customers.length ? customers[0].id : "");
-  const respAdmins = isTech() && isUnboundStaff() && defCust ? await adminsForCustomer(defCust) : [];
 
   openSheet(`
     <div class="sheet-head"><h3>${edit && !prefill ? "Edit breakdown" : "Report breakdown"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
@@ -2204,11 +2215,6 @@ async function openBreakdownEditor(edit, prefill) {
         <select id="bCustomer" onchange="onCustPickBreakdown()">
           ${customers.map((x) => `<option value="${x.id}" ${(b ? b.customer_id === x.id : p.customer_id === x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
-      ${isUnboundStaff() ? `
-      <label class="field" id="bRespAdminField" style="${defCust ? "" : "display:none"}"><span>Responsible tenant admin</span>
-        <select id="bRespAdmin">
-          ${respAdminOpts(respAdmins, b && b.responsible_admin_id, true)}
-        </select></label>` : ""}
       <label class="field"><span>Location/Department</span>
         <select id="bLocation" onchange="onLocPickBreakdown()">
           ${locOpts(state.locations || [], (b && b.location_id) || null, defCust)}
@@ -2253,13 +2259,13 @@ async function saveBreakdown(id) {
     priority: ($("#bPriority button.active")?.dataset.p || "medium"),
   };
   if (isTech()) {
-    body.customer_id = $("#bCustomer").value;
-    body.location_id = $("#bLocation").value || null;
+    body.customer_id = $("#bCustomer").value ? parseInt($("#bCustomer").value, 10) : null;
+    body.location_id = $("#bLocation").value ? parseInt($("#bLocation").value, 10) : null;
     const deptMatch = (state.departments || []).find((d) => String(d.location_id) === String(body.location_id));
-    body.department_id = $("#bDepartment")?.value || deptMatch?.id || body.location_id || null;
-    body.complaint_id = $("#bComplaint").value || null;
-    body.assigned_to = ($("#bAssignee").value || null);
-    if (isUnboundStaff() && $("#bRespAdmin")) body.responsible_admin_id = $("#bRespAdmin").value || null;
+    body.department_id = $("#bDepartment")?.value ? parseInt($("#bDepartment").value, 10) : (deptMatch?.id ? parseInt(deptMatch.id, 10) : (body.location_id || null));
+    body.complaint_id = $("#bComplaint").value ? parseInt($("#bComplaint").value, 10) : null;
+    body.assigned_to = ($("#bAssignee").value ? parseInt($("#bAssignee").value, 10) : null);
+    // Responsible tenant admin auto-resolved by backend
   }
   if (!body.fault_description) { toast("Fault description is required", "error"); return; }
   if (isTech() && !body.customer_id) { toast("Organization is required", "error"); return; }
@@ -2293,7 +2299,6 @@ async function openEquipmentEditor(edit) {
   let catNames = cats.map((x) => x.name);
   if (currentCat && !catNames.includes(currentCat)) catNames.push(currentCat);
   const defEqCust = (e && e.customer_id) || (isTech() && (state.customers || []).length ? state.customers[0].id : "");
-  const eqRespAdmins = isTech() && defEqCust ? await adminsForCustomer(defEqCust) : [];
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit equipment" : "Add equipment"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
@@ -2303,11 +2308,6 @@ async function openEquipmentEditor(edit) {
         <select id="eqCustomer" onchange="onCustPick('eqCustomer')">
           ${(state.customers || []).map((x) => `<option value="${x.id}" ${e && e.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
-      ${isUnboundStaff() ? `
-      <label class="field" id="eqRespAdminField" style="${defEqCust ? "" : "display:none"}"><span>Responsible tenant admin</span>
-        <select id="eqRespAdmin">
-          ${respAdminOpts(eqRespAdmins, e && e.responsible_admin_id, true)}
-        </select></label>` : ""}
       <div class="section-label">Location/Department</div>
       <label class="field"><span>Location/Department *</span>
         <select id="eqLocation" onchange="onLocPick('eqLocation')">
@@ -2387,7 +2387,7 @@ async function adminsForCustomer(customerId) {
 // tenant admin yet; tenant staff are always defaulted by the backend.
 function respAdminOpts(admins, selectedId, allowNone) {
   return (allowNone ? `<option value="">— None / not assigned —</option>` : "")
-    + admins.map((a) => `<option value="${a.id}" ${String(selectedId) === String(a.id) ? "selected" : ""}>${esc(a.name)} · ${esc(a.email)}</option>`).join("");
+    + admins.map((a) => `<option value="${a.id}" ${String(selectedId) === String(a.id) ? "selected" : ""}>${esc(a.name)}</option>`).join("");
 }
 
 async function onRespCustomerPick(customerSelId, respSelId) {
@@ -2433,7 +2433,6 @@ function onCustPick(custSelId) {
     $("#eqDepartment").innerHTML = deptOpts(state.departments || [], null, null);
     $("#eqDepartment").value = "";
   }
-  if ($("#eqRespAdmin")) onRespCustomerPick(custSelId, "eqRespAdmin");
 }
 
 function onLocPick(locSelId) {
@@ -2483,7 +2482,6 @@ function onCustPickComplaint() {
     $("#fEquipment").innerHTML = eqOpts(state.equipment || [], null, cust, "— None / general —");
     $("#fEquipment").value = "";
   }
-  if ($("#fRespAdmin")) onRespCustomerPick("fCustomer", "fRespAdmin");
 }
 
 function onLocPickComplaint() {
@@ -2507,7 +2505,6 @@ function onCustPickBreakdown() {
     $("#bEquipment").innerHTML = eqOpts(state.equipment || [], null, cust, "— Select —");
     $("#bEquipment").value = "";
   }
-  if ($("#bRespAdmin")) onRespCustomerPick("bCustomer", "bRespAdmin");
 }
 
 function onLocPickBreakdown() {
@@ -2558,7 +2555,6 @@ async function saveEquipment(id) {
     notes: $("#eqNotes").value.trim(),
   };
   if (isTech()) body.customer_id = $("#eqCustomer").value;
-  if (isTech() && isUnboundStaff() && $("#eqRespAdmin")) body.responsible_admin_id = $("#eqRespAdmin").value || null;
   if (!body.name) { toast("Equipment name is required", "error"); return; }
   if (isTech() && !body.customer_id) { toast("Organization is required", "error"); return; }
   if (isTech() && !body.location_id) { toast("Location/department is required", "error"); return; }
@@ -2586,6 +2582,14 @@ async function openCustomerEditor(edit) {
       <label class="field"><span>Phone</span><input id="cuPhone" value="${esc(cu ? cu.phone : "")}"></label>
       <label class="field"><span>City</span><input id="cuCity" value="${esc(cu ? cu.city : "")}"></label>
       <label class="field"><span>Address</span><input id="cuAddress" value="${esc(cu ? cu.address : "")}"></label>
+      ${!edit ? `
+      <div class="section-title" style="margin-top:18px">Customer login (optional — creates a customer account for this organization)</div>
+      <label class="field"><span>Customer full name</span><input id="cuLoginName" placeholder="e.g. Lab Manager"></label>
+      <label class="field"><span>Customer login email</span><input id="cuLoginEmail" type="email" placeholder="customer@hospital.com"></label>
+      <label class="field"><span>Customer login password</span><input id="cuLoginPassword" type="password" placeholder="Min 6 characters"></label>
+      <label class="field"><span>Location/Department for customer (optional, defaults to Main Lab)</span><input id="cuLoginLocation" placeholder="e.g. Molecular Lab"></label>
+      <small style="display:block;margin-top:4px;color:var(--ink-soft);font-size:12px">If you set a password, a customer account will be created and can log in immediately to see only this organization+location tickets.</small>
+      ` : ""}
     </div>
     <div class="sheet-foot">
       ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteCustomer(${cu.id})">Delete</button>` : ""}
@@ -2619,12 +2623,72 @@ async function saveCustomer(id) {
     address: $("#cuAddress").value.trim(),
   };
   if (!body.name) { toast("Organization name is required", "error"); return; }
+  const isNew = !id;
+  const loginName = isNew ? $("#cuLoginName")?.value.trim() : "";
+  const loginEmail = isNew ? $("#cuLoginEmail")?.value.trim() : "";
+  const loginPassword = isNew ? $("#cuLoginPassword")?.value : "";
+  const loginLocation = isNew ? $("#cuLoginLocation")?.value.trim() : "";
+  if (isNew && loginPassword && loginPassword.length < 6) {
+    toast("Customer password must be at least 6 characters", "error");
+    return;
+  }
+  if (isNew && loginPassword && !loginEmail) {
+    toast("Customer login email is required when setting a password", "error");
+    return;
+  }
   closeSheet();
   showLoading();
   try {
-    if (id) await API.put("/api/customers/" + id, body);
-    else await API.post("/api/customers", body);
-    toast(id ? "Organization updated" : "Organization added", "success");
+    let orgId = id;
+    let orgRes;
+    if (id) {
+      await API.put("/api/customers/" + id, body);
+    } else {
+      orgRes = await API.post("/api/customers", body);
+      orgId = orgRes.id;
+    }
+    // If password provided, create a customer user for this org
+    if (isNew && loginPassword) {
+      try {
+        // Create or get location for this customer
+        let locId = null, deptId = null;
+        const locName = loginLocation || "Main Lab";
+        // Try to find existing location with same name for this customer, or create
+        try {
+          const locs = await API.get(`/api/locations?customer_id=${orgId}`);
+          const existing = locs.find((l) => l.name.toLowerCase() === locName.toLowerCase());
+          if (existing) {
+            locId = existing.id;
+          } else {
+            const newLoc = await API.post("/api/locations", { name: locName, customer_id: orgId });
+            locId = newLoc.id;
+          }
+          // Get department for location
+          try {
+            const depts = await API.get(`/api/departments?location_id=${locId}`);
+            if (depts.length) deptId = depts[0].id;
+          } catch (e) {}
+        } catch (e) {
+          // If location creation fails, proceed without location (backend will still allow)
+        }
+        const userBody = {
+          name: loginName || body.contact_name || body.name,
+          email: loginEmail,
+          password: loginPassword,
+          role: "customer",
+          customer_id: orgId,
+          location_id: locId,
+          department_id: deptId,
+        };
+        await API.post("/api/users", userBody);
+        toast(`Organization added + customer login ${loginEmail} created`, "success");
+      } catch (e) {
+        // Org created but user failed — show warning
+        toast(`Organization ${body.name} added, but customer login failed: ${e.message}`, "error");
+      }
+    } else {
+      toast(id ? "Organization updated" : "Organization added", "success");
+    }
     state.customers = null;
     if (state.view === "customerDetail" && id) await viewCustomerDetail($("#view"));
     else if (state.view === "customers" || state.view === "org") await refreshCustomers();
@@ -2644,7 +2708,7 @@ async function openUserEditor(edit, id) {
   const startRole = u ? u.role : "engineer";
   const startCust = startRole === "customer";
   // who sees which fields: customers always get the full pickers; the master may
-  // bind engineers to a customer or leave them LabCare-wide, and may create
+  // bind engineers to a customer or leave them LabSynch-wide, and may create
   // tenant admins linked to a customer or entirely unlinked (they create their
   // own organizations after first login); non-master tenant admins always pick
   // which of their care-list customers the new account belongs to.
@@ -2675,20 +2739,26 @@ async function openUserEditor(edit, id) {
       <label class="field"><span>Phone</span><input id="uPhone" value="${esc(u ? u.phone : "")}"></label>
       <label class="field"><span>Role</span>
         <select id="uRole" onchange="toggleCustomerSelect()">
-          ${(master ? [["admin", "Tenant admin"], ["engineer", "Engineer"], ["application", "Application"], ["customer", "Customer"]] : [["engineer", "Engineer"], ["application", "Application"], ["customer", "Customer"]])
-            .map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("")}
+          ${(() => {
+            const base = [["engineer", "Engineer"], ["application", "Application"]];
+            // When editing, keep the existing role visible even if it's customer/admin
+            if (u && !base.find(([r]) => r === u.role)) base.unshift([u.role, u.role === "admin" ? "Tenant admin" : (u.role === "customer" ? "Customer" : u.role)]);
+            return base.map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("");
+          })()}
         </select></label>
       <div id="uCustomerFields" style="${showCustFields ? "" : "display:none"}">
-        <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked organization (optional — leave empty for LabCare-wide)" : (tenantAdmin && !startCust ? "Linked organization (optional — leave empty to place them under tenant admin care)" : "Linked organization")}</span>
+        <label class="field" id="uCustomerField"><span id="uCustomerLabel">${master && !startCust ? "Linked organization (optional — leave empty for LabSynch-wide)" : (tenantAdmin && !startCust ? "Linked organization (optional — leave empty to place them under tenant admin care)" : "Linked organization")}</span>
           <select id="uCustomer" onchange="onUserCustPick()">
-            ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabCare-wide (no customer) —</option>` : ""}
+            ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabSynch-wide (no customer) —</option>` : ""}
             ${tenantAdmin ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— Under tenant admin care (no single organization) —</option>` : ""}
             ${customers.map((x) => `<option value="${x.id}" ${String(x.id) === String(u && u.customer_id ? u.customer_id : (!master ? startCustId : null)) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
           </select></label>
         <label class="field" id="uLocationField" style="${showLocDept ? "" : "display:none"}"><span>Linked location/department</span>
           <select id="uLocation" onchange="onUserLocPick()">
             ${locOpts(state.locations || [], u && u.location_id, u && u.customer_id)}
-          </select></label>
+          </select>
+          <small style="display:block;margin-top:6px;color:var(--ink-soft);font-size:12px">If no location appears, create one via <a href="#" onclick="event.preventDefault(); const cust=$('#uCustomer').value; closeSheet(); setTimeout(()=>{openLocationEditor(false); setTimeout(()=>{const s=$('#locCustomer'); if(s&&cust) s.value=cust;},100);},150);" style="color:var(--brand);text-decoration:underline">Organizations → Add location</a> or select "Create new" above.</small>
+        </label>
         <select id="uDepartment" style="display:none">
           ${deptOpts(state.departments || [], u && u.department_id, u && u.location_id)}
         </select>
@@ -2713,25 +2783,43 @@ function toggleCustomerSelect() {
   const role = $("#uRole").value;
   const isCustRole = role === "customer";
   const isTenantAdminRole = role === "admin";
+  const isStaff = !isCustRole && !isTenantAdminRole;
   if (isMaster()) {
-    // customer accounts always need the full customer/location/department picker;
-    // a tenant admin MAY stay unlinked — after first login they create their own
-    // organizations, which land in their care list automatically.
-    $("#uCustomerFields").style.display = (isCustRole || isTenantAdminRole) ? "" : "none";
+    // Master: customer and tenant admin need organization picker.
+    // Engineer/Application should NOT have organization — only linked tenant admin (optional).
+    $("#uCustomerFields").style.display = "";
+    const custField = $("#uCustomerField");
+    if (custField) custField.style.display = isStaff ? "none" : "";
     const lbl = $("#uCustomerLabel");
     if (lbl) lbl.textContent = isTenantAdminRole
       ? "Linked organization (optional — they create their own after login)"
-      : "Linked organization (optional — leave empty for LabCare-wide)";
+      : "Linked organization (optional — leave empty for LabSynch-wide)";
     const emptyOpt = document.querySelector("#uCustomer option[value='']");
     if (emptyOpt) emptyOpt.textContent = isTenantAdminRole
       ? "— Not linked yet (they create their own later) —"
-      : "— LabCare-wide (no customer) —";
+      : "— LabSynch-wide (no customer) —";
+    const respFieldM = $("#uRespAdminField");
+    if (respFieldM) {
+      if (isStaff) {
+        respFieldM.style.display = "";
+        if (!respFieldM.querySelector("select")?.innerHTML?.trim()) {
+          tenantAdminPeers().then((admins) => {
+            const sel = $("#uRespAdmin");
+            if (sel) sel.innerHTML = respAdminOpts(admins, null, true);
+          });
+        }
+      } else if (isCustRole) {
+        // keep existing logic via onUserCustPick
+      } else {
+        respFieldM.style.display = isTenantAdminRole ? "none" : "";
+      }
+    }
   } else {
-    // Tenant staff can create for any organization in their care list (which the
-    // backend scopes /api/customers to). Customer-role accounts MUST name one, so
-    // default those to the admin's primary organization. Staff accounts may stay
-    // empty — that places them under the linked tenant admin's care.
+    // Tenant admin: customer accounts need organization + location.
+    // Engineer/Application should NOT have organization selection — only linked tenant admin.
     $("#uCustomerFields").style.display = "";
+    const custField = $("#uCustomerField");
+    if (custField) custField.style.display = isStaff ? "none" : "";
     const sel = $("#uCustomer");
     if (isCustRole && sel && !sel.value && state.user && state.user.customer_id) {
       sel.value = String(state.user.customer_id);
@@ -2740,19 +2828,34 @@ function toggleCustomerSelect() {
     if (lbl && !isMaster()) lbl.textContent = isCustRole
       ? "Linked organization"
       : "Linked organization (optional — leave empty to place them under tenant admin care)";
-    // The linked-tenant-admin choice only matters for staff accounts; a customer
-    // account's admin follows from its organization.
     const respField = $("#uRespAdminField");
     if (respField && !isMaster()) respField.style.display = isCustRole ? "none" : "";
   }
-  $("#uLocationField").style.display = isCustRole ? "" : "none";
+  $("#uLocationField").style.display = (function(){
+    const r = $("#uRole").value;
+    return r === "customer" ? "" : "none";
+  })();
   if ($("#uDepartmentField")) $("#uDepartmentField").style.display = "none";
-  onUserCustPick();
+  if ($("#uCustomerField") && $("#uCustomerField").style.display !== "none") {
+    onUserCustPick();
+  }
 }
 
 function onUserCustPick() {
   const cust = $("#uCustomer").value;
-  $("#uLocation").innerHTML = locOpts(state.locations || [], null, cust);
+  // Build location options: existing + create new, so tenant admin can create location directly from user editor
+  const baseOpts = locOpts(state.locations || [], null, cust);
+  const hasCust = !!cust;
+  let extra = "";
+  if (hasCust) {
+    // Check if there are any locations for this customer
+    const list = (state.locations || []).filter((l) => String(l.customer_id) === String(cust));
+    if (!list.length) {
+      extra = `<option value="" disabled>— No locations yet —</option>`;
+    }
+    extra += `<option value="__new__">＋ Create new location/department…</option>`;
+  }
+  $("#uLocation").innerHTML = baseOpts + extra;
   $("#uLocation").value = "";
   if ($("#uDepartment")) {
     $("#uDepartment").innerHTML = deptOpts(state.departments || [], null, null);
@@ -2764,6 +2867,25 @@ function onUserCustPick() {
 
 function onUserLocPick() {
   const loc = $("#uLocation").value;
+  if (loc === "__new__") {
+    const cust = $("#uCustomer").value;
+    if (!cust) {
+      toast("Select an organization first", "error");
+      $("#uLocation").value = "";
+      return;
+    }
+    // Open location editor pre-filled with this customer, then refresh
+    closeSheet();
+    setTimeout(() => {
+      openLocationEditor(false);
+      // Pre-select the customer in the location editor after it opens
+      setTimeout(() => {
+        const sel = $("#locCustomer");
+        if (sel) sel.value = cust;
+      }, 100);
+    }, 150);
+    return;
+  }
   const depts = (state.departments || []).filter((d) => String(d.location_id) === String(loc));
   if ($("#uDepartment")) {
     $("#uDepartment").innerHTML = deptOpts(state.departments || [], depts[0]?.id || null, loc);
@@ -3397,7 +3519,7 @@ function primeAudio() {
 }
 
 // ---- Desktop push alerts (ring even when the app / tab is closed) ----
-// LabCare's bell can also ring as a real system notification via Web Push:
+// LabSynch's bell can also ring as a real system notification via Web Push:
 // a service worker receives pushes from the backend and the OS/browser plays
 // its alert sound — even if the user has closed the tab, as long as the
 // browser is running and "Desktop alerts" is ON.
@@ -3812,9 +3934,16 @@ function onJoinCust() {
   }
 
   const locs = cust ? (state.signup?.locations || []).filter((l) => String(l.customer_id) === String(cust)) : [];
-  let opts = `<option value="">— Select location/department —</option>`;
-  if (cust) {
-    opts += locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  let opts;
+  if (!cust) {
+    opts = `<option value="">— Select organization first —</option>`;
+  } else {
+    opts = `<option value="">— Select location/department —</option>`;
+    if (locs.length) {
+      opts += locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+    } else {
+      opts += `<option value="" disabled>— No locations yet —</option>`;
+    }
     opts += `<option value="__new__">＋ Create new location/department…</option>`;
   }
   $("#jnLocation").innerHTML = opts;
@@ -4046,14 +4175,14 @@ async function boot() {
   const retry = $("#startupRetry");
   const loginBtn = $("#loginBtn");
   const joinBtn = $("#showJoinBtn");
-  status.textContent = "Connecting to LabCare…";
+  status.textContent = "Connecting to LabSynch…";
   retry.classList.add("hidden");
   loginBtn.disabled = joinBtn.disabled = true;
   render(); // paint before any network request, including for saved sessions
   let startupError = null;
   try {
     const user = await API.get("/api/me", { attempts: 1, timeoutMs: 8000 });
-    if (!user || !user.id || !user.role) throw new Error("Invalid session response from the LabCare server. Please try again.");
+    if (!user || !user.id || !user.role) throw new Error("Invalid session response from the LabSynch server. Please try again.");
     state.user = user;
   } catch (e) {
     if (e.status === 401) {
