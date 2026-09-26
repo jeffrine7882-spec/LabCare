@@ -56,8 +56,11 @@ def seed():
     init_db()
     c = conn()
 
-    # Start each run from a clean session table.
-    c.execute("DELETE FROM sessions")
+    # Sessions are deliberately left alone. seed() runs on EVERY server start
+    # (run.py / wsgi.py — so every deploy, container restart and Fly machine
+    # restart), and an earlier "start each run from a clean session table"
+    # here signed every user out of every device each time. A session ends
+    # only when the user signs out, or an admin removes the account.
 
     # Categories are offered from the very first run, unlike the master account
     # below which is only created into a database with no users at all.

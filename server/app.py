@@ -25,6 +25,25 @@ CORS(app)
 # comparing the actor against this account, not by the bare shape of the record,
 # so an accidental second unbound admin can never gain master powers.
 MASTER_ADMIN_EMAIL = "admin@labcare.com"
+
+# A signed-in user stays signed in until they sign out. Session rows never
+# expire server-side; the cookie (the fallback channel when a client cannot
+# keep the token in storage) is issued for the longest lifetime browsers honour
+# (400 days) and re-issued on every /api/me, so it slides forward with use.
+SESSION_COOKIE_MAX_AGE = 400 * 24 * 3600
+
+
+def set_session_cookie(resp, token):
+    resp.set_cookie(
+        "labcare_token", token,
+        max_age=SESSION_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="Lax",
+        # Behind an HTTPS reverse proxy set LABCARE_SECURE_COOKIES=1 so the
+        # browser only ever sends the session cookie over TLS.
+        secure=os.environ.get("LABCARE_SECURE_COOKIES") == "1",
+    )
+    return resp
 # Reserved account that absorbs references from deleted users: immutable
 # history columns (complaints.created_by, breakdowns.reported_by, comments,
 # pm_logs) are NOT NULL with enforced FKs, so they cannot simply
@@ -118,14 +137,10 @@ def auth_user():
     # Accept the token from any of several channels: some reverse proxies /
     # sandboxed iframes strip the Authorization header or drop cookies, so we
     # try, in order: Authorization header, X-Auth-Token header, cookie, and a
-    # ?token= query parameter (handy for plain <a>/<img> requests).
-    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-    if not token:
-        token = request.headers.get("X-Auth-Token", "").strip()
-    if not token:
-        token = request.cookies.get("labcare_token", "").strip()
-    if not token:
-        token = (request.args.get("token") or "").strip()
+    # ?token= query parameter (handy for plain <a>/<img> requests). The same
+    # resolution (_request_token) is used by /api/logout and the /api/me cookie
+    # re-issue, so "the session this request used" is one definition.
+    token = _request_token()
     if not token:
         return None
     c = conn()
@@ -1053,23 +1068,16 @@ def login():
     else:
         user_payload["care_customers"] = []
     resp = make_response(jsonify({"token": token, "user": user_payload}))
-    resp.set_cookie(
-        "labcare_token", token,
-        max_age=30 * 24 * 3600,  # 30 days
-        httponly=True,
-        samesite="Lax",
-        # Behind an HTTPS reverse proxy set LABCARE_SECURE_COOKIES=1 so the
-        # browser only ever sends the session cookie over TLS.
-        secure=os.environ.get("LABCARE_SECURE_COOKIES") == "1",
-    )
+    set_session_cookie(resp, token)
     c.close()
     return resp
 
 
 @app.post("/api/logout")
 def logout():
-    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip() or \
-        request.cookies.get("labcare_token", "")
+    # Signing out is the ONE way a session ends: accept the token through any
+    # channel auth_user() accepts, so the server-side row is really removed.
+    token = _request_token()
     c = conn()
     c.execute("DELETE FROM sessions WHERE token=?", (token,))
     c.commit()
@@ -1097,7 +1105,26 @@ def me():
         d["customer_ids"] = [x["id"] for x in cust_rows]
     d["care_customers"] = cust_rows
     c.close()
-    return jsonify(d)
+    resp = make_response(jsonify(d))
+    # Every app start calls /api/me: re-issue the cookie so its lifetime slides
+    # forward with use and a client that relies on it is never signed out by
+    # cookie expiry.
+    token = _request_token()
+    if token:
+        set_session_cookie(resp, token)
+    return resp
+
+
+def _request_token():
+    """The session token this request carried, through whichever channel."""
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if not token:
+        token = request.headers.get("X-Auth-Token", "").strip()
+    if not token:
+        token = request.cookies.get("labcare_token", "").strip()
+    if not token:
+        token = (request.args.get("token") or "").strip()
+    return token
 
 
 @app.get("/api/my-customers")
@@ -5155,7 +5182,7 @@ def portal_events(token):
 # --------------------------------------------------------------------------
 # Version check
 # --------------------------------------------------------------------------
-APP_VERSION = "51"
+APP_VERSION = "52"
 
 @app.get("/api/version")
 def api_version():

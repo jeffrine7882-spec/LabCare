@@ -19,7 +19,12 @@
  *   8. ringing-with-the-app-closed: a per-minute watchdog Scheduled Task
  *      relaunches the exe hidden, auto-start uses --hidden, a hidden
  *      relaunch never pops the window, a --hidden launch shows no window,
- *   9. Quit asks for confirmation and "Keep alerts running" keeps running.
+ *   9. Quit asks for confirmation and "Keep alerts running" keeps running,
+ *  10. the sign-in is kept until the user signs out: outages, network errors,
+ *      proxy 401s and a lone API 401 never sign the user out; only a session
+ *      the API repeatedly confirms as gone does (with a notification), a
+ *      manual sign-out also ends the session on the server, and a sign-in
+ *      made inside the Site tab is adopted by the app.
  */
 "use strict";
 
@@ -94,7 +99,7 @@ class WebContents {
   getURL() { return this.currentUrl; }
   isLoading() { return false; }
   isDestroyed() { return false; }
-  send() {}
+  send(channel, payload) { (this.sends = this.sends || []).push({ channel, payload }); }
   executeJavaScript() { return Promise.resolve(); }
   lastLoad() { return this.loads[this.loads.length - 1] || null; }
   loadedAnything(v) { return this.loads.some((l) => l.value === v || l.value.includes(v)); }
@@ -143,6 +148,25 @@ const app = {
   getPath: (k) => path.join(tmp, k),
 };
 
+// One persistent site partition, like Electron's persist:labcare-site.
+const cookieJar = {};
+const cookieListeners = { changed: [] };
+const siteSession = {
+  cookies: {
+    set: async (c) => { cookieJar[c.name] = c; },
+    remove: async (url, name) => { delete cookieJar[name]; },
+    get: async ({ name } = {}) => Object.values(cookieJar).filter((c) => !name || c.name === name),
+    on: (ev, cb) => { (cookieListeners[ev] = cookieListeners[ev] || []).push(cb); },
+    off: (ev, cb) => { cookieListeners[ev] = (cookieListeners[ev] || []).filter((f) => f !== cb); },
+    // what Chromium does when the site's /api/login answers with Set-Cookie
+    emitSet(name, value) {
+      cookieJar[name] = { name, value };
+      for (const cb of (cookieListeners.changed || []).slice()) cb({}, { name, value }, "explicit", false);
+    },
+  },
+  on: () => {}, off: () => {},
+};
+
 const mockElectron = {
   app,
   BrowserWindow,
@@ -172,10 +196,7 @@ const mockElectron = {
     },
   },
   session: {
-    fromPartition: () => ({
-      cookies: { set: async () => {}, remove: async () => {} },
-      on: () => {}, off: () => {},
-    }),
+    fromPartition: () => siteSession,
   },
   screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
   ipcMain: {
@@ -342,6 +363,128 @@ Module._load = function (request, parent, isMain) {
     }
   }
   check("bubble files restored", fs.existsSync(bubbleHtml) && fs.existsSync(bubblePreload));
+
+  console.log("\nsigned in until the user signs out");
+  // Drive the poll loop by hand: capture what schedulePolling() hands to
+  // setInterval instead of waiting 10 s per tick.
+  const realSetInterval = global.setInterval;
+  let poll = null;
+  global.setInterval = (fn, ms) => { poll = fn; return realSetInterval(() => {}, 1 << 30).unref(); };
+  const realFetch = global.fetch;
+  const httpLog = [];
+  const jsonRes = (status, body) => ({
+    ok: status >= 200 && status < 300, status,
+    headers: { get: (h) => (h.toLowerCase() === "content-type" ? "application/json" : null) },
+    json: async () => body,
+  });
+  const htmlRes = (status) => ({
+    ok: false, status,
+    headers: { get: (h) => (h.toLowerCase() === "content-type" ? "text/html" : null) },
+    json: async () => { throw new Error("not json"); },
+  });
+  let server = () => jsonRes(200, { latest: null, unread: 0 });
+  global.fetch = async (url, opts) => {
+    httpLog.push({ url: String(url), opts: opts || {} });
+    return server(String(url), opts || {});
+  };
+  const state = async () => ipcHandlers["auth:state"]({});
+  const tick = async (n) => { for (let i = 0; i < n; i++) { await poll(); await new Promise((r) => setTimeout(r, 5)); } };
+  try {
+    server = (url) => url.endsWith("/api/login")
+      ? jsonRes(200, { token: "tok-A", user: { name: "Test User" } })
+      : jsonRes(200, { latest: { id: 7, text: "x" }, unread: 0 });
+    const signedIn = await ipcHandlers["auth:signIn"]({}, { email: "tech@lab.test", password: "pw" });
+    check("sign-in works against the mocked API", !!signedIn && signedIn.ok === true, JSON.stringify(signedIn));
+    check("polling is scheduled after sign-in", typeof poll === "function");
+    await new Promise((r) => setTimeout(r, 10));
+
+    server = () => jsonRes(503, { error: "unavailable" });
+    await tick(8);
+    check("a server outage (503) never signs the user out", (await state()).signedIn === true);
+
+    server = () => { throw new TypeError("fetch failed"); };
+    await tick(8);
+    check("network errors never sign the user out", (await state()).signedIn === true);
+
+    server = () => htmlRes(401);
+    await tick(8);
+    check("a non-JSON 401 (proxy / captive portal) never signs the user out", (await state()).signedIn === true);
+
+    server = () => htmlRes(403);
+    await tick(8);
+    check("a 403 never signs the user out", (await state()).signedIn === true);
+
+    // one API 401 (e.g. mid-deploy) that heals: stays signed in, counter resets
+    let flaky = 0;
+    server = () => (flaky++ < 2 ? jsonRes(401, { error: "Not authenticated" }) : jsonRes(200, { latest: { id: 7, text: "x" }, unread: 0 }));
+    await tick(6);
+    check("a lone API 401 that heals never signs the user out", (await state()).signedIn === true);
+
+    // the API keeps saying the session is gone, but /api/me disagrees → stay
+    server = (url) => (url.endsWith("/api/me") ? jsonRes(200, { id: 1, email: "tech@lab.test", name: "Test User" })
+      : jsonRes(401, { error: "Not authenticated" }));
+    await tick(8);
+    check("a 401 the /api/me re-check contradicts never signs the user out", (await state()).signedIn === true);
+
+    // the real thing: session removed on the server (signed out on the site
+    // or account removed) — confirmed on every poll, for a full minute
+    notifications = [];
+    const alertsWin = windows[windows.length - 1];
+    alertsWin.hide();
+    server = () => jsonRes(401, { error: "Not authenticated" });
+    await tick(3);
+    check("three confirmed 401s (≈30 s) are still not enough to sign out", (await state()).signedIn === true);
+    await tick(4);
+    check("a session the API confirms gone for ≈1 minute is finally signed out", (await state()).signedIn === false);
+    check("…with a Windows notification telling the user to sign in again",
+      notifications.some((n) => /signed out/i.test(String(n.opts && n.opts.title)) && n.shown),
+      JSON.stringify(notifications.map((n) => n.opts)));
+    check("…without forcing the window over the user's work", !alertsWin.isVisible());
+    const sent = (alertsWin.webContents.sends || []).filter((s) => s.channel === "state").pop();
+    check("…and the sign-in form explains why", !!sent && sent.payload.signedIn === false && /sign in again/i.test(String(sent.payload.reason)));
+    const prefs = JSON.parse(fs.readFileSync(path.join(tmp, "userData", "config.json"), "utf8"));
+    check("the dead token is not kept on disk", !prefs.token);
+    check("no /api/logout was sent for a server-side sign-out", !httpLog.some((h) => h.url.endsWith("/api/logout")));
+
+    // manual sign-out ends the session on the server as well
+    httpLog.length = 0;
+    server = (url) => url.endsWith("/api/login")
+      ? jsonRes(200, { token: "tok-B", user: { name: "Test User" } })
+      : jsonRes(200, { ok: true, latest: null, unread: 0 });
+    await ipcHandlers["auth:signIn"]({}, { email: "tech@lab.test", password: "pw" });
+    check("signing in again works after a server-side sign-out", (await state()).signedIn === true);
+    await ipcHandlers["auth:signOut"]({});
+    await new Promise((r) => setTimeout(r, 10));
+    const logout = httpLog.find((h) => h.url.endsWith("/api/logout"));
+    check("a manual sign-out ends the session on the server too (POST /api/logout)",
+      !!logout && logout.opts.method === "POST" && /tok-B/.test(String(logout.opts.headers && logout.opts.headers.Authorization)));
+    check("a manual sign-out signs out locally", (await state()).signedIn === false);
+    check("a manual sign-out drops the mirrored site cookie", !cookieJar.labcare_token);
+
+    // a sign-in made inside the Site tab is adopted by the app
+    server = (url) => (url.endsWith("/api/me") ? jsonRes(200, { id: 3, email: "site@lab.test", name: "Site User" })
+      : jsonRes(200, { latest: null, unread: 0 }));
+    siteSession.cookies.emitSet("labcare_token", "tok-site");
+    await new Promise((r) => setTimeout(r, 30));
+    const adopted = await state();
+    check("a sign-in made in the Site tab is adopted (alerts ring without a second sign-in)",
+      adopted.signedIn === true && adopted.email === "site@lab.test", JSON.stringify(adopted));
+    const adoptedPrefs = JSON.parse(fs.readFileSync(path.join(tmp, "userData", "config.json"), "utf8"));
+    check("the adopted session is saved for the next start", adoptedPrefs.token === "tok-site");
+    // …but a different account signing in on the site never replaces one already here
+    siteSession.cookies.emitSet("labcare_token", "tok-other");
+    await new Promise((r) => setTimeout(r, 30));
+    check("a different site sign-in never replaces the app's own session", (await state()).email === "site@lab.test");
+    // the mirrored cookie lives long enough to outlast any realistic gap
+    await ipcHandlers["site:open"]({}, undefined);
+    await new Promise((r) => setTimeout(r, 10));
+    const mirrored = cookieJar.labcare_token;
+    check("the Site tab session cookie is long-lived (≥ 1 year)",
+      !!mirrored && (mirrored.expirationDate - Date.now() / 1000) > 365 * 24 * 3600, JSON.stringify(mirrored));
+  } finally {
+    global.setInterval = realSetInterval;
+    global.fetch = realFetch;
+  }
 
   console.log("\nbridge surface");
   const preloadSrc = fs.readFileSync(path.join(APP_DIR, "preload.js"), "utf8");

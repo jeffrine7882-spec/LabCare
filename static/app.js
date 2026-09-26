@@ -68,7 +68,10 @@ const API = {
           throw Object.assign(new Error("Unexpected response from the LabSynch server (" + res.status + "). Please try again."), { status: res.status });
         }
         if (!res.ok) {
-          throw Object.assign(new Error((data && typeof data.error === "string" && data.error) || "Request failed (" + res.status + ")"), { status: res.status });
+          // `auth` marks a 401 that came from the LabSynch API itself (a JSON
+          // body) — the only kind that means "this session is really gone".
+          // A bare 401/403 from a proxy or captive portal never carries it.
+          throw Object.assign(new Error((data && typeof data.error === "string" && data.error) || "Request failed (" + res.status + ")"), { status: res.status, auth: res.status === 401 });
         }
         return data;
       } catch (e) {
@@ -295,6 +298,23 @@ function confirmDialog(title, message, dangerText, onConfirm) {
 }
 
 // ---------------------------------------------------------------- Auth
+// A native shell (the Android app's WebView) shares this session so phone
+// alerts follow a sign-in or sign-out made here. Sessions never end on their
+// own — only these two explicit actions (or an administrator) end one.
+function hostBridge() {
+  try { return (typeof window !== "undefined" && window.LabSynchDroid) || null; } catch (e) { return null; }
+}
+function notifyHostSignedIn(token, email, user) {
+  const b = hostBridge();
+  try {
+    if (b && typeof b.signedIn === "function") b.signedIn(String(token || ""), String(email || ""), String((user && user.name) || ""));
+  } catch (e) {}
+}
+function notifyHostSignedOut(token) {
+  const b = hostBridge();
+  try { if (b && typeof b.signedOut === "function") b.signedOut(String(token || "")); } catch (e) {}
+}
+
 async function login(email, password) {
   const data = await API.post("/api/login", { email, password });
   API.token = data.token;
@@ -303,10 +323,13 @@ async function login(email, password) {
   state.user = data.user;
   $("#startupStatus").textContent = "";
   $("#startupRetry").classList.add("hidden");
+  notifyHostSignedIn(data.token, email, data.user);
 }
 
 function logout() {
+  const ending = API.token;
   API.post("/api/logout", {}).catch(() => {});
+  notifyHostSignedOut(ending);
   API.token = null;
   store.remove("labcare_token");
   state.user = null;
@@ -4349,7 +4372,7 @@ Object.assign(window, {
   togglePushAlerts, syncPushAlerts, pushStateLabel,
 });
 
-const BUILD_VERSION = "51";
+const BUILD_VERSION = "52";
 
 async function checkVersion() {
   // Advisory only: a version endpoint outage must not block sign-in/session
@@ -4384,8 +4407,12 @@ async function boot() {
     if (!user || !user.id || !user.role) throw new Error("Invalid session response from the LabSynch server. Please try again.");
     state.user = user;
   } catch (e) {
-    if (e.status === 401) {
-      // Only an explicit expired/invalid session should discard the token.
+    if (e.auth) {
+      // The LabSynch API itself said this session no longer exists (the user
+      // signed out elsewhere or the account was removed). That is the ONLY
+      // case that discards the saved token: a network hiccup, a proxy's
+      // non-JSON 401/403 or a server outage keeps the user signed in and
+      // simply offers Retry.
       API.token = null;
       store.remove("labcare_token");
     } else {

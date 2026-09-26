@@ -34,6 +34,18 @@ const API_BASE = SITE_URL.replace(/\/+$/, "");
 const SITE_ORIGIN = new URL(SITE_URL).origin;
 const SITE_PARTITION = "persist:labcare-site";
 const POLL_INTERVAL_MS = 10000;
+// Sign-in is kept until the user signs out. Nothing here ever drops the
+// session on its own: a server restart, a deploy, a proxy/captive-portal
+// 401, an outage or a network blip simply means "no alerts until it is
+// back". The single exception is a session the LabSynch API itself reports
+// as gone (the user signed out in the LabSynch site, or an administrator
+// removed the account) — and even that needs this many CONSECUTIVE polls in
+// a row (≈ 1 minute) to each be re-confirmed by /api/me before the app
+// treats the token as dead and asks for a fresh sign-in.
+const AUTH_CONFIRMATIONS_TO_SIGN_OUT = 6;
+// Cookie lifetime for the mirrored site session (Chromium caps at 400 days;
+// the site re-issues it on every visit, so it slides forward with use).
+const SITE_COOKIE_MAX_AGE_S = 400 * 24 * 3600;
 
 // Set for the login-item auto-start and every watchdog relaunch: start in
 // the tray, never throw a window in the user's face.
@@ -56,6 +68,9 @@ let pollTimer = null;
 let lastNotifId = null;
 let enabled = true;
 let sound = "chime"; // chime | bell | beep | alarm
+// consecutive polls in which the API confirmed the session no longer exists
+let authFailures = 0;
+let adoptingSiteSession = false;
 
 const prefsPath = path.join(app.getPath("userData"), "config.json");
 const SOUNDS = {
@@ -323,20 +338,111 @@ function showWindow() {
   } catch (e) {}
 }
 
-function signOut() {
+const SIGNED_OUT_REMOTELY_MSG =
+  "You were signed out of LabSynch (signed out on the site, or the account was changed by an administrator). Sign in again to keep receiving alerts on this PC.";
+
+/**
+ * End the session on this PC.
+ *
+ *   signOut()                 — the user clicked Sign out (tray / window):
+ *                               also ends the session on the server, shows
+ *                               the window with the sign-in form.
+ *   signOut({ remote: true }) — the LabSynch API confirmed, repeatedly, that
+ *                               this session no longer exists (see
+ *                               AUTH_CONFIRMATIONS_TO_SIGN_OUT). The token is
+ *                               useless, so drop it and TELL the user via a
+ *                               Windows notification instead of silently
+ *                               polling forever without ever ringing. No
+ *                               window is forced over their work.
+ */
+function signOut(opts) {
+  const remote = !!(opts && opts.remote);
+  const oldToken = token;
   token = "";
   email = "";
   name = "";
+  authFailures = 0;
   savePrefs();
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
   refreshMenu();
+  if (!remote && oldToken) {
+    // A manual sign-out is the one thing that ends a session — make sure it
+    // really ends on the server too (best effort; the token is gone locally
+    // either way).
+    try {
+      fetch(API_BASE + "/api/logout", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + oldToken, Accept: "application/json" },
+      }).catch(() => {});
+    } catch (e) {}
+  }
   // Drop the site session too, so the Site tab shows the signed-out site.
   syncSiteSession().then(() => {
     if (siteWin && !siteWin.isDestroyed()) siteWin.loadURL(SITE_URL).catch(() => {});
   });
-  if (win && !win.isDestroyed()) win.webContents.send("state", { signedIn: false, email: "", name: "" });
-  showWindow();
+  const state = { signedIn: false, email: "", name: "" };
+  if (remote) state.reason = SIGNED_OUT_REMOTELY_MSG;
+  if (win && !win.isDestroyed()) win.webContents.send("state", state);
+  if (remote) {
+    notifySignedOut();
+  } else {
+    showWindow();
+  }
+}
+
+function notifySignedOut() {
+  try {
+    if (tray) tray.setToolTip("LabSynch Alerts — signed out, sign in again");
+  } catch (e) {}
+  try {
+    if (Notification.isSupported()) {
+      const n = new Notification({
+        title: "Signed out of LabSynch",
+        body: "Sign in again to keep receiving alerts on this PC.",
+        icon: assetPath("icon.png") || undefined,
+      });
+      n.on("click", () => showWindow());
+      n.show();
+    }
+  } catch (e) {}
+}
+
+/**
+ * The LabSynch API answered 401 to a poll. Never take a single 401 at face
+ * value: proxies, captive portals and half-finished deploys produce them
+ * too. Only a JSON 401 from the API itself counts, it is re-checked against
+ * /api/me, and only AUTH_CONFIRMATIONS_TO_SIGN_OUT consecutive confirmations
+ * end the session on this PC. Anything else keeps the user signed in.
+ */
+async function handleUnauthorized(res) {
+  if (!(await isApiAuthFailure(res))) return;
+  let confirmed = false;
+  try {
+    const me = await fetch(API_BASE + "/api/me", {
+      headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+    });
+    if (me.ok) { authFailures = 0; return; }
+    confirmed = await isApiAuthFailure(me);
+  } catch (e) {
+    return; // cannot reach the server: no verdict either way
+  }
+  if (!confirmed) return;
+  authFailures++;
+  if (authFailures >= AUTH_CONFIRMATIONS_TO_SIGN_OUT) signOut({ remote: true });
+}
+
+/** True only for a 401 carrying the API's own JSON error body. */
+async function isApiAuthFailure(res) {
+  try {
+    if (!res || res.status !== 401) return false;
+    const ct = String((res.headers && res.headers.get && res.headers.get("content-type")) || "");
+    if (!ct.includes("application/json")) return false;
+    const body = await res.json();
+    return !!(body && typeof body.error === "string");
+  } catch (e) {
+    return false;
+  }
 }
 
 // ---- LabSynch site window (the "Site" tab) ----------------------------------
@@ -357,7 +463,7 @@ async function syncSiteSession() {
         secure: SITE_ORIGIN.startsWith("https:"),
         httpOnly: true,
         sameSite: "lax",
-        expirationDate: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+        expirationDate: Math.floor(Date.now() / 1000) + SITE_COOKIE_MAX_AGE_S,
       });
     } else {
       try { await ses.cookies.remove(SITE_ORIGIN, "labcare_token"); } catch (e) {}
@@ -365,7 +471,57 @@ async function syncSiteSession() {
     // Service reports and other files download to the user's Downloads folder.
     ses.off("will-download", onSiteDownload);
     ses.on("will-download", onSiteDownload);
+    // A sign-in made inside the Site tab becomes this app's session too.
+    try {
+      if (ses.cookies && typeof ses.cookies.on === "function") {
+        if (typeof ses.cookies.off === "function") ses.cookies.off("changed", onSiteCookieChanged);
+        ses.cookies.on("changed", onSiteCookieChanged);
+      }
+    } catch (e) {}
   } catch (e) {}
+}
+
+/**
+ * The site sets `labcare_token` when the user signs in there. If this app is
+ * signed out at that moment, adopt that session so alerts start ringing
+ * without a second sign-in. (A different account signed in on the site while
+ * this app already has one is left alone — nothing ever replaces or drops a
+ * session behind the user's back.)
+ */
+function onSiteCookieChanged(event, cookie, cause, removed) {
+  try {
+    if (!cookie || cookie.name !== "labcare_token" || removed) return;
+    const value = String(cookie.value || "").trim();
+    if (!value || value === token || token) return;
+    adoptSiteSession(value);
+  } catch (e) {}
+}
+
+async function adoptSiteSession(candidate) {
+  if (adoptingSiteSession || token) return;
+  adoptingSiteSession = true;
+  try {
+    const res = await fetch(API_BASE + "/api/me", {
+      headers: { Authorization: "Bearer " + candidate, Accept: "application/json" },
+    });
+    if (!res.ok) return;
+    const me = await res.json();
+    if (!me || !me.id) return;
+    if (token) return; // the user signed in here in the meantime
+    token = candidate;
+    email = String(me.email || "");
+    name = String(me.name || "");
+    lastNotifId = null;
+    authFailures = 0;
+    savePrefs();
+    schedulePolling();
+    refreshMenu();
+    try { if (tray) tray.setToolTip("LabSynch Alerts"); } catch (e) {}
+    if (win && !win.isDestroyed()) win.webContents.send("state", { signedIn: true, email, name });
+  } catch (e) {
+  } finally {
+    adoptingSiteSession = false;
+  }
 }
 
 function onSiteDownload(event, item) {
@@ -608,9 +764,12 @@ async function pollOnce() {
       headers: { Authorization: "Bearer " + token, Accept: "application/json" },
     });
     if (!res.ok) {
-      if (res.status === 401) { signOut(); return; }
+      // 401 → maybe the session is gone; everything else (5xx, 403 from a
+      // proxy, 429, …) is a transient condition: stay signed in, poll again.
+      if (res.status === 401) await handleUnauthorized(res);
       return;
     }
+    authFailures = 0;
     const body = await res.json();
     const latest = body.latest;
     if (!latest) return;
@@ -714,9 +873,11 @@ ipcMain.handle("auth:signIn", async (evt, credentials) => {
     email = credentials.email;
     name = (data.user && data.user.name) || "";
     lastNotifId = null;
+    authFailures = 0;
     savePrefs();
     schedulePolling();
     refreshMenu();
+    try { if (tray) tray.setToolTip("LabSynch Alerts"); } catch (e) {}
     syncSiteSession(); // so the Site tab opens signed in straight away
     return { ok: true, name };
   } catch (e) {

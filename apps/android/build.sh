@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the LabSynch Android alerts app into a release APK without Gradle.
 # Requires: JDK 11+, and the Android build-tools + platform android-33 in
-# ~/android-sdk (see README.md). Output: dist/LabSynch-Alerts-v1.4.apk
+# ~/android-sdk (see README.md). Output: dist/LabSynch-Alerts-v1.5.apk
 set -euo pipefail
 
 # Make sure keytool/javac are on PATH regardless of the JDK install layout.
@@ -66,9 +66,9 @@ fi
 echo "==> sign"
 "$BT/apksigner" sign --ks "$KEYSTORE" --ks-key-alias labcare \
     --ks-pass pass:labcare1 --key-pass pass:labcare1 \
-    --out "$OUT/LabSynch-Alerts-v1.4.apk" app.aligned.apk
+    --out "$OUT/LabSynch-Alerts-v1.5.apk" app.aligned.apk
 
-"$BT/apksigner" verify --print-certs "$OUT/LabSynch-Alerts-v1.4.apk" | head -3
+"$BT/apksigner" verify --print-certs "$OUT/LabSynch-Alerts-v1.5.apk" | head -3
 
 echo
-echo "DONE: $OUT/LabSynch-Alerts-v1.4.apk"
+echo "DONE: $OUT/LabSynch-Alerts-v1.5.apk"

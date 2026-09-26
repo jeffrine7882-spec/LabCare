@@ -5,7 +5,7 @@ Requirements: **Android 8.0+**, installable on the latest Android 14/15/16
 (targets SDK 34). Self-signed, not on the Play Store.
 
 
-1. Copy **`LabSynch-Alerts-v1.4.apk`** (in `dist/`) to your Android phone —
+1. Copy **`LabSynch-Alerts-v1.5.apk`** (in `dist/`) to your Android phone —
    e.g. over USB, cloud drive, or direct download.
 2. Tap it in Files. Android will ask you to allow "install unknown apps"
    for that app — allow it. (The APK is self-signed, not from the Play Store.)
@@ -30,6 +30,16 @@ Requirements: **Android 8.0+**, installable on the latest Android 14/15/16
 * Auto-starts the relay after the phone reboots **and after the app itself is
   updated**.
 * A **Phone alerts** switch turns it on/off; sign-out clears the session.
+* **You stay signed in until you sign out (v1.5).** The relay never drops the
+  session on its own: server restarts/deploys, outages, proxy 401s and network
+  blips only pause alerts until the server is back. Only a session the API
+  itself repeatedly reports as gone (six consecutive `Not authenticated` polls,
+  each re-checked against `/api/me`, ≈ 1 min — i.e. you signed out on the
+  site, or an administrator removed the account) is dropped, and then the
+  phone shows a "Signed out of LabSynch — sign in again" notification instead
+  of going silent. Signing in or out inside the Site tab is mirrored into the
+  app through the `LabSynchDroid` JS bridge, so alerts follow the site session
+  without a second sign-in.
 
 ## Ringing with the app closed (mandatory, v1.4)
 The relay is built so the phone keeps ringing when the app is closed, swiped
@@ -74,7 +84,7 @@ The APK **also** needs the LabSynch server to stay reachable (it's HTTPS, always
 ## Build (optional)
 Requires JDK 11 and `~/android-sdk` with build-tools 33.0.2 + platform 33:
 ```
-./build.sh        # → dist/LabSynch-Alerts-v1.4.apk (signed)
+./build.sh        # → dist/LabSynch-Alerts-v1.5.apk (signed)
 ```
 
 In-app emergency access: the app has no "demo" account built in; use any

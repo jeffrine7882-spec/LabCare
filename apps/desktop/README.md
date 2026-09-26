@@ -1,7 +1,7 @@
 # LabSynch Alerts — Windows desktop app
 
 ## Install
-Run **`LabSynch-Alerts-Setup-1.3.0.exe`** (in `Release/windows/`, or `dist/`
+Run **`LabSynch-Alerts-Setup-1.4.0.exe`** (in `Release/windows/`, or `dist/`
 after a local build). It installs to `%LOCALAPPDATA%\LabSynch Alerts`, adds a
 Start-menu + desktop shortcut, and launches on finish. **SmartScreen** will warn
 about an "unrecognized app" (self-signed) — choose **More info → Run anyway**.
@@ -30,6 +30,18 @@ about an "unrecognized app" (self-signed) — choose **More info → Run anyway*
   * adds a native **Windows notification** as a durable breadcrumb.
 * Right-click the tray icon for **Open LabSynch site**, **Open Alerts window**,
   **Alerts on/off**, **Sign out**, **Quit**.
+* **You stay signed in until you sign out (1.4.0).** The app never drops the
+  session on its own: server restarts/deploys, outages, proxy 401s and network
+  blips only pause alerts until the server is back (before 1.4.0 a single 401
+  signed the PC out and popped the window). Only a session the API itself
+  repeatedly reports as gone (six consecutive JSON `Not authenticated` polls,
+  each re-checked against `/api/me`, ≈ 1 min — i.e. you signed out on the
+  site, or an administrator removed the account) is dropped, and then a
+  Windows notification says "Signed out of LabSynch — sign in again" instead
+  of the app going silent. A sign-in made inside the Site tab while the app
+  is signed out is adopted automatically (the site's `labcare_token` cookie),
+  and **Sign out** also ends the session on the server. `smoke-test.js` pins
+  all of this.
 
 ## Ringing with the app closed (mandatory, 1.3.0)
 The alert must ring no matter what happens to the app, so 1.3.0 layers three

@@ -35,15 +35,31 @@ import org.json.JSONObject;
  *  5. a WATCHDOG chain that resurrects the relay if its heartbeat ever
  *     goes stale.
  * All chains are cancelled when the user turns alerts off or signs out.
+ *
+ * The sign-in is kept until the user signs out. The relay never drops the
+ * session on its own: a server restart or deploy, an outage, a proxy or
+ * captive-portal 401, or a network blip only means "no alerts until it is
+ * back". The single exception is a session the LabSynch API itself reports
+ * as gone (the user signed out of LabSynch inside the site, or an
+ * administrator removed the account): that needs
+ * {@link #AUTH_CONFIRMATIONS_TO_SIGN_OUT} CONSECUTIVE polls in a row, each
+ * re-confirmed by /api/me, before the dead token is dropped — and then the
+ * user is told with a notification instead of the phone silently never
+ * ringing again.
  */
 public class AlertRelayService extends Service {
 
     private static final String CHANNEL = "labcare_alerts_v2"; // new id: heads-up settings land on upgrades too
+    private static final int SIGNED_OUT_NOTIF_ID = 1002;
+    /** ≈ 1 minute of the API consistently saying the session does not exist. */
+    static final int AUTH_CONFIRMATIONS_TO_SIGN_OUT = 6;
     private Handler handler;
     private Runnable poller;
     private SharedPreferences prefs;
     private long lastId = -1;
     private boolean polling = false;
+    /** consecutive polls in which the API confirmed the session no longer exists */
+    private int authFailures = 0;
 
     @Override
     public void onCreate() {
@@ -136,9 +152,16 @@ public class AlertRelayService extends Service {
         String token = prefs.getString("token", "");
         if (token.isEmpty()) return;
         try {
-            String body = Api.get("/api/notifications/ping", token);
-            JSONObject j = new JSONObject(body);
+            Api.Response r = Api.fetch("/api/notifications/ping", token);
+            if (r.isApiAuthFailure()) {
+                // maybe the session is gone — never decided on one answer
+                onSessionRejected(token);
+                return;
+            }
+            if (r.code >= 400) return;      // 5xx / proxy 401 / 403 / 429: transient, stay signed in
+            JSONObject j = new JSONObject(r.body);
             if (j.has("error")) return;
+            authFailures = 0;
             JSONObject latest = j.optJSONObject("latest");
             int unread = j.optInt("unread", 0);
             if (latest == null) return;
@@ -163,6 +186,78 @@ public class AlertRelayService extends Service {
                         SystemClock.elapsedRealtime()).apply();
             } catch (Exception ignored) {
             }
+        }
+    }
+
+    /**
+     * The bell endpoint answered with the API's own 401. Re-check against
+     * /api/me and count only consecutive confirmations; anything else (a
+     * reachable /api/me that accepts the token, a non-JSON answer, a network
+     * error) keeps the user signed in and the counter untouched or reset.
+     */
+    private void onSessionRejected(String token) {
+        Api.Response me;
+        try {
+            me = Api.fetch("/api/me", token);
+        } catch (Exception e) {
+            return;                         // unreachable: no verdict either way
+        }
+        if (me.code >= 200 && me.code < 300) {
+            authFailures = 0;               // the session is fine after all
+            return;
+        }
+        if (!me.isApiAuthFailure()) return; // proxy / outage / odd answer: no verdict
+        authFailures++;
+        if (authFailures < AUTH_CONFIRMATIONS_TO_SIGN_OUT) return;
+        if (!token.equals(prefs.getString("token", ""))) return; // re-signed-in meanwhile
+        new Handler(Looper.getMainLooper()).post(this::endSession);
+    }
+
+    /**
+     * The token is dead for good (signed out on the site / account removed):
+     * drop it, stop every chain and TELL the user — a relay that keeps
+     * polling with a dead token would simply never ring again.
+     */
+    private void endSession() {
+        authFailures = 0;
+        prefs.edit()
+                .remove("token").remove("email").remove("name").remove("uid")
+                .putBoolean("relay_user_stopped", true)   // watchdog must not resurrect us
+                .apply();
+        Alarms.cancelAll(this);
+        if (handler != null && poller != null) handler.removeCallbacks(poller);
+        handler = null;
+        poller = null;
+        lastId = -1;
+        notifySignedOut();
+        stopForeground(true);
+        stopSelf();
+    }
+
+    private void notifySignedOut() {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            Intent i = new Intent(this, MainActivity.class);
+            i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            i.putExtra("screen", "home");
+            PendingIntent pi = PendingIntent.getActivity(this, 2, i,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            String text = "Sign in again to keep receiving alerts on this phone.";
+            Notification.Builder b = new Notification.Builder(this, CHANNEL)
+                    .setContentTitle("Signed out of LabSynch")
+                    .setContentText(text)
+                    .setStyle(new Notification.BigTextStyle().bigText(
+                            "You were signed out of LabSynch (signed out on the site, or the account was changed by an administrator). "
+                            + text))
+                    .setSmallIcon(R.drawable.ic_stat_bell)
+                    .setAutoCancel(true)
+                    .setShowWhen(true)
+                    .setContentIntent(pi);
+            if (android.os.Build.VERSION.SDK_INT < 26) {
+                b = b.setPriority(Notification.PRIORITY_HIGH);
+            }
+            nm.notify(SIGNED_OUT_NOTIF_ID, b.build());
+        } catch (Exception ignored) {
         }
     }
 
