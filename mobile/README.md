@@ -1,11 +1,11 @@
-# LabCare mobile app (Expo / React Native)
+# LabSynch mobile app (Expo / React Native)
 
 A native companion app whose job is exactly one thing: **ring on the phone for
-every LabCare bell notification** — even when the browser is closed, the app is
+every LabSynch bell notification** — even when the browser is closed, the app is
 backgrounded, or the phone is locked. One app covers Android and iPhone; push
 is delivered through **Firebase Cloud Messaging (FCM)**, which supports both.
 
-The LabCare backend already has the receiving side implemented:
+The LabSynch backend already has the receiving side implemented:
 
 * tables: `app_devices` (per-user device/token registrations)
 * endpoints: `POST /api/app/register`, `POST /api/app/unregister`,
@@ -62,13 +62,13 @@ npx expo start          # scan the QR with the Expo Go app
   upload the `.p8` to Firebase → Project settings → Cloud Messaging → iOS app)
   then `npx expo run:ios` on a real iPhone.
 
-> Firebase treats Android and iOS tokens the same way: the LabCare backend
+> Firebase treats Android and iOS tokens the same way: the LabSynch backend
 > sends one FCM v1 message per token, with `android.priority=high` and
 > `apns.payload.aps.sound="default"`, so both platforms ring on delivery.
 
 ## 4. Test end-to-end
 
-1. Sign in in the app (any LabCare account, e.g. `admin@labcare.com` /
+1. Sign in in the app (any LabSynch account, e.g. `admin@labcare.com` /
    `Demo123!`), allow notifications when asked. The app POSTs the push token
    to `/api/app/register`.
 2. From the web (or another account) trigger any bell notification, e.g. the

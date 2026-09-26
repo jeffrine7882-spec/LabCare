@@ -1,4 +1,4 @@
-"""LabCare — database layer.
+"""LabSynch — database layer.
 
 Two engines behind one interface:
 
@@ -57,7 +57,7 @@ def hash_password(pw):
 
 
 # ---------------------------------------------------------------------------
-# SQLite engine (local development; the original LabCare behaviour).
+# SQLite engine (local development; the original LabSynch behaviour).
 # ---------------------------------------------------------------------------
 
 _SQLITE_SCHEMA = """

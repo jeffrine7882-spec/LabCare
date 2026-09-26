@@ -1,4 +1,4 @@
-"""LabCare — Web Push (service-worker push notifications).
+"""LabSynch — Web Push (service-worker push notifications).
 
 Every bell notification also fires a browser push, so a user receives an
 OS-level alert (with the browser's notification sound) even when the app,
@@ -152,7 +152,7 @@ def send_push(user_id, text, entity_type="", entity_id=None):
                 "type": entity_type or "notification",
                 "entityType": entity_type,
                 "entityId": entity_id,
-                "title": "LabCare",
+                "title": "LabSynch",
                 "body": (text or "")[:180],
                 "icon": "/icons/icon-192.png",
                 "badge": "/icons/icon-192.png",

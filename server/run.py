@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LabCare — production entry point.
+"""LabSynch — production entry point.
 
 Runs the app with Waitress (a cross-platform production WSGI server) by
 default so it is NOT on Flask's threaded dev server.
@@ -38,5 +38,5 @@ PORT = int(os.environ.get("PORT", 8000))
 
 if __name__ == "__main__":
     from waitress import serve
-    print(f"* LabCare running on http://{HOST}:{PORT} (waitress)")
+    print(f"* LabSynch running on http://{HOST}:{PORT} (waitress)")
     serve(app, host=HOST, port=PORT, threads=8)

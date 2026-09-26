@@ -1,15 +1,15 @@
 /*
- * LabCare mobile — native alerts app.
+ * LabSynch mobile — native alerts app.
  *
- * Purpose: receive LabCare bell notifications as OS-level push alerts that
+ * Purpose: receive LabSynch bell notifications as OS-level push alerts that
  * RING on this phone even when the browser is closed, the app is backgrounded,
  * or the phone is locked.
  *
  * Flow:
- *   1. Sign in with a LabCare account (same credentials as the web app).
+ *   1. Sign in with a LabSynch account (same credentials as the web app).
  *   2. The app asks for notification permission, gets a Firebase/expo push
  *      token, and POSTs it to /api/app/register.
- *   3. From then on, the LabCare backend sends every bell notification to this
+ *   3. From then on, the LabSynch backend sends every bell notification to this
  *      device via Firebase Cloud Messaging → the OS rings it.
  *   4. The Alerts toggle mirrors the per-user sound choice; turning it off
  *      unregisters the device (no more phone alerts).
@@ -185,7 +185,7 @@ export default function App() {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={COLORS.teal} size="large" />
-        <Text style={styles.muted}>Loading LabCare…</Text>
+        <Text style={styles.muted}>Loading LabSynch…</Text>
       </View>
     );
   }
@@ -196,7 +196,7 @@ export default function App() {
       {user ? (
         <ScrollView contentContainerStyle={styles.container}>
           <View style={styles.header}>
-            <Text style={styles.appName}>LabCare</Text>
+            <Text style={styles.appName}>LabSynch</Text>
             <Text style={styles.appTag}>Equipment complaints &amp; breakdowns</Text>
           </View>
 
@@ -228,7 +228,7 @@ export default function App() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowTitle}>Home</Text>
                 <Text style={styles.rowSub}>
-                  This device is linked to your LabCare account
+                  This device is linked to your LabSynch account
                   {Device.isDevice ? "" : " (Emulator/Expo Go: push may not arrive)"}.
                 </Text>
               </View>
@@ -247,8 +247,8 @@ export default function App() {
       ) : (
         <ScrollView contentContainerStyle={[styles.container, { justifyContent: "center" }]}>
           <View style={styles.header}>
-            <Text style={styles.appName}>LabCare</Text>
-            <Text style={styles.appTag}>Sign in with your LabCare account to get phone alerts</Text>
+            <Text style={styles.appName}>LabSynch</Text>
+            <Text style={styles.appTag}>Sign in with your LabSynch account to get phone alerts</Text>
           </View>
 
           <View style={styles.card}>
@@ -283,7 +283,7 @@ export default function App() {
           </View>
 
           <Text style={styles.footnote}>
-            Push works with the LabCare deployed backend via Firebase Cloud Messaging.
+            Push works with the LabSynch deployed backend via Firebase Cloud Messaging.
             See mobile/README.md for the one-time setup.
           </Text>
         </ScrollView>

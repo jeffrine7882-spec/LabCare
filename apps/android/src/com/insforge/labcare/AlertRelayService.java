@@ -17,10 +17,10 @@ import android.os.Looper;
 import org.json.JSONObject;
 
 /**
- * Foreground relay: polls the LabCare bell endpoint and, on a new unread
+ * Foreground relay: polls the LabSynch bell endpoint and, on a new unread
  * notification, drops a HEADS-UP bubble over the top of the display, rings
  * the user's chosen sound and vibrates — the phone alerts even when the
- * LabCare app UI is closed or the screen is off.
+ * LabSynch app UI is closed or the screen is off.
  */
 public class AlertRelayService extends Service {
 
@@ -52,7 +52,7 @@ public class AlertRelayService extends Service {
 
         // Persistent notification so Android doesn't kill us when idle.
         Notification n = new Notification.Builder(this, CHANNEL)
-                .setContentTitle("LabCare alerts on")
+                .setContentTitle("LabSynch alerts on")
                 .setContentText("Listening for equipment complaints & breakdowns")
                 .setSmallIcon(R.drawable.ic_stat_bell)
                 .setOngoing(true)
@@ -92,7 +92,7 @@ public class AlertRelayService extends Service {
             }
             if (id != lastId && unread > 0 && prefs.getBoolean("alerts", true)) {
                 lastId = id;
-                String text = latest.optString("text", "New LabCare alert");
+                String text = latest.optString("text", "New LabSynch alert");
                 ring(text);
             } else if (id != lastId) {
                 lastId = id;
@@ -134,7 +134,7 @@ public class AlertRelayService extends Service {
         buzz();
 
         Notification.Builder b = new Notification.Builder(this, CHANNEL)
-                .setContentTitle("\uD83D\uDD14 LabCare alert")
+                .setContentTitle("\uD83D\uDD14 LabSynch alert")
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setSmallIcon(R.drawable.ic_stat_bell)
@@ -190,8 +190,8 @@ public class AlertRelayService extends Service {
             // Sound stays null: ring() plays the user's chosen tune itself,
             // so the user never hears a doubled notification ding.
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL, "LabCare alerts", NotificationManager.IMPORTANCE_HIGH);
-            ch.setDescription("Heads-up bubble + sound + vibration for new LabCare bell notifications");
+                    CHANNEL, "LabSynch alerts", NotificationManager.IMPORTANCE_HIGH);
+            ch.setDescription("Heads-up bubble + sound + vibration for new LabSynch bell notifications");
             ch.enableVibration(true);
             ch.setVibrationPattern(new long[]{0, 250, 120, 250, 120, 250});
             ch.enableLights(true);

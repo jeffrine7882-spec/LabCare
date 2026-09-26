@@ -1,4 +1,4 @@
-"""LabCare — initial seed data.
+"""LabSynch — initial seed data.
 
 InsForge policy: a *fresh* database, seeded with the single Master System
 Admin account only (admin@labcare.com). Customers, users, equipment, tickets

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>LabCare alert</title>
+<title>LabSynch alert</title>
 <style>
   html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
   body { width: 360px; height: 112px; }
@@ -44,9 +44,9 @@
   <div id="bubble">
     <div id="bell">🔔</div>
     <div id="content">
-      <div id="title">LABCARE — NEW ALERT</div>
+      <div id="title">LABSYNCH — NEW ALERT</div>
       <div id="text"></div>
-      <div id="row"><button id="open">Open LabCare</button></div>
+      <div id="row"><button id="open">Open LabSynch</button></div>
     </div>
     <button id="close" title="Dismiss">✕</button>
   </div>
@@ -58,7 +58,7 @@
     const player = document.getElementById("player");
 
     window.bubble.onShow((text, soundId) => {
-      textEl.textContent = text || "New LabCare alert";
+      textEl.textContent = text || "New LabSynch alert";
       try {
         const s = VALID_SOUNDS.includes(soundId) ? soundId : "chime";
         player.src = "assets/" + s + ".wav";

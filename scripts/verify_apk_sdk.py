@@ -2,7 +2,7 @@
 """Minimal AXML (binary AndroidManifest.xml) parser.
 
 aapt1/aapt2's own dump tools vary in how (or whether) they print uses-sdk
-attributes across build-tools versions, so LabCare CI verifies the SDK levels
+attributes across build-tools versions, so LabSynch CI verifies the SDK levels
 straight from the binary chunk format itself.
 
     python3 scripts/verify_apk_sdk.py <apk> [--min-sdk N] [--target-sdk N]

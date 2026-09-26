@@ -1,4 +1,4 @@
-/* LabCare — mobile web app (complaints & breakdowns for lab equipment) */
+/* LabSynch — mobile web app (complaints & breakdowns for lab equipment) */
 "use strict";
 
 // ---------------------------------------------------------------- Safe storage
@@ -59,13 +59,13 @@ const API = {
           signal: controller.signal,
         });
         if ([502, 503, 504].includes(res.status)) {
-          throw Object.assign(new Error("The LabCare server is temporarily unavailable. Please try again shortly."), { status: res.status });
+          throw Object.assign(new Error("The LabSynch server is temporarily unavailable. Please try again shortly."), { status: res.status });
         }
         let data;
         if ((res.headers.get("content-type") || "").includes("application/json")) {
           data = await res.json();
         } else {
-          throw Object.assign(new Error("Unexpected response from the LabCare server (" + res.status + "). Please try again."), { status: res.status });
+          throw Object.assign(new Error("Unexpected response from the LabSynch server (" + res.status + "). Please try again."), { status: res.status });
         }
         if (!res.ok) {
           throw Object.assign(new Error((data && typeof data.error === "string" && data.error) || "Request failed (" + res.status + ")"), { status: res.status });
@@ -73,13 +73,13 @@ const API = {
         return data;
       } catch (e) {
         if (controller.signal.aborted) {
-          failure = new Error("The LabCare server took too long to respond. Please try again shortly.");
+          failure = new Error("The LabSynch server took too long to respond. Please try again shortly.");
         } else if (e instanceof SyntaxError) {
-          failure = new Error("Invalid response from the LabCare server. Please try again shortly.");
+          failure = new Error("Invalid response from the LabSynch server. Please try again shortly.");
         } else if (e.status) {
           failure = e;
         } else {
-          failure = new Error("Cannot reach the LabCare server. Check your connection and try again.");
+          failure = new Error("Cannot reach the LabSynch server. Check your connection and try again.");
         }
         const retryable = !e.status || [502, 503, 504].includes(e.status);
         // Never repeat writes, and don't retry authentication/validation errors.
@@ -143,6 +143,21 @@ const waNumber = (s) => {
   return d;
 };
 const waChatHref = (s) => { const n = waNumber(s); return n ? "https://wa.me/" + n : ""; };
+const waChatTextHref = (s, msg) => { const n = waNumber(s); if (!n) return ""; const base = "https://wa.me/" + n; return msg ? base + "?text=" + encodeURIComponent(msg) : base; };
+const phoneContactHtml = (phone, opts = {}) => {
+  if (!phone) return "";
+  const wa = waChatHref(phone);
+  const tel = telHref(phone);
+  const label = opts.label || phone;
+  // tappable WhatsApp link + tel icon; whole number links to WhatsApp as requested
+  return `<span class="phone-actions"><a class="wa-link" href="${wa}" target="_blank" rel="noopener" title="Chat on WhatsApp">💬 ${esc(label)}</a><a class="tel-link" href="${tel}" title="Call">📞</a></span>`;
+};
+const personWithPhoneHtml = (name, phone) => {
+  if (!name && !phone) return "—";
+  const n = esc(name || "—");
+  if (!phone) return n;
+  return `${n} ${phoneContactHtml(phone)}`;
+};
 
 const ROLE_LABELS = { admin: "Admin", engineer: "Engineer", application: "Application", customer: "Customer" };
 const roleChip = (role) => `<span class="chip chip-${role === "admin" ? "admin" : (role === "engineer" || role === "application") ? "tech" : "cust"}">${ROLE_LABELS[role] || role}</span>`;
@@ -371,7 +386,7 @@ function render() {
     locations: "Organizations", departments: "Organizations", org: "Organizations",
     onboarding: "Join requests", categories: "Categories",
   };
-  $("#tbTitle").textContent = titles[state.view] || "LabCare";
+  $("#tbTitle").textContent = titles[state.view] || "LabSynch";
 
   renderView();
 }
@@ -687,10 +702,11 @@ function complaintDetailHtml(c) {
       <div class="kv"><span class="k">Location/Department</span><span class="v">${esc(locDept || "—")}</span></div>
       ${c.equipment_name ? `<div class="kv"><span class="k">Equipment</span><span class="v">${esc(c.equipment_name)}</span></div>` : ""}
       ${c.equipment_serial ? `<div class="kv"><span class="k">Serial number</span><span class="v mono">${esc(c.equipment_serial)}</span></div>` : ""}
-      <div class="kv"><span class="k">Opened by</span><span class="v">${esc(c.reporter_name || c.created_by_name || "—")}</span></div>
-      ${c.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v phone-actions"><a class="wa-link" href="${waChatHref(c.reporter_phone)}" target="_blank" rel="noopener">💬 WhatsApp ${esc(c.reporter_phone)}</a><a class="tel-link" href="${telHref(c.reporter_phone)}">📞</a></span></div>` : ""}
-      <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(c.assigned_to_name || "Unassigned")}</span></div>
-      ${c.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${esc(c.accepted_by_name)}${c.accepted_at ? " · " + fmtDate(c.accepted_at) : ""}</span></div>` : ""}
+      <div class="kv"><span class="k">Opened by</span><span class="v">${personWithPhoneHtml(c.created_by_name, c.created_by_phone)}</span></div>
+      ${c.reporter_name ? `<div class="kv"><span class="k">Reporter (portal)</span><span class="v">${personWithPhoneHtml(c.reporter_name, c.reporter_phone)}</span></div>` : (c.reporter_phone ? `<div class="kv"><span class="k">Reporter contact</span><span class="v">${phoneContactHtml(c.reporter_phone)}</span></div>` : "")}
+      ${c.created_by_phone && c.reporter_phone && c.created_by_phone !== c.reporter_phone ? "" : ""}
+      <div class="kv"><span class="k">Assigned to</span><span class="v">${c.assigned_to_name ? personWithPhoneHtml(c.assigned_to_name, c.assigned_to_phone) : "Unassigned"}</span></div>
+      ${c.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${personWithPhoneHtml(c.accepted_by_name, c.accepted_by_phone)}${c.accepted_at ? " · " + fmtDate(c.accepted_at) : ""}</span></div>` : ""}
       ${c.accept_reply ? `<div class="kv"><span class="k">Reply to sender</span><span class="v">“${esc(c.accept_reply)}”</span></div>` : ""}
       ${c.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(c.responsible_admin_name)}</span></div>` : ""}
       ${c.closed_by_name ? `<div class="kv"><span class="k">${c.status === "closed" ? "Closed by" : "Resolved by"}</span><span class="v">${esc(c.closed_by_name)}</span></div>` : ""}
@@ -909,7 +925,7 @@ function statusButtons(entity, rec) {
     }
   }
   if (rec.accepted_by_name) {
-    b.unshift(`<div class="accept-banner">✔ Accepted by <b>${esc(rec.accepted_by_name)}</b>${rec.accepted_at ? ` · ${fmtDate(rec.accepted_at)}` : ""}</div>`);
+    b.unshift(`<div class="accept-banner">✔ Accepted by <b>${esc(rec.accepted_by_name)}</b>${rec.accepted_by_phone ? " " + phoneContactHtml(rec.accepted_by_phone) : ""}${rec.accepted_at ? ` · ${fmtDate(rec.accepted_at)}` : ""}</div>`);
   }
   if (!b.length) return `<p style="color:var(--ink-soft);font-size:13px">No actions available for the current status${isCust() ? " — the support team will update this" : ""}.</p>`;
   return b.join("");
@@ -1165,11 +1181,10 @@ function breakdownDetailHtml(b) {
       <div class="kv"><span class="k">Location/Department</span><span class="v">${esc(b.location_name || b.department_name || "—")}</span></div>
       ${b.equipment_serial ? `<div class="kv"><span class="k">Serial number</span><span class="v mono">${esc(b.equipment_serial)}</span></div>` : ""}
       ${b.complaint_id ? `<div class="kv"><span class="k">Source complaint</span><span class="v" style="color:var(--brand);text-decoration:underline" onclick="navigate('complaintDetail',{id:${b.complaint_id}})">${esc("View")}</span></div>` : ""}
-      <div class="kv"><span class="k">Opened by</span><span class="v">${esc(b.reported_by_name || "—")}</span></div>
-      ${b.reporter_name ? `<div class="kv"><span class="k">Reporter</span><span class="v">${esc(b.reporter_name)}</span></div>` : ""}
-      ${b.reporter_phone ? `<div class="kv"><span class="k">Contact</span><span class="v phone-actions"><a class="wa-link" href="${waChatHref(b.reporter_phone)}" target="_blank" rel="noopener">💬 WhatsApp ${esc(b.reporter_phone)}</a><a class="tel-link" href="${telHref(b.reporter_phone)}">📞</a></span></div>` : ""}
-      <div class="kv"><span class="k">Assigned to</span><span class="v">${esc(b.assigned_to_name || "Unassigned")}</span></div>
-      ${b.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${esc(b.accepted_by_name)}${b.accepted_at ? " · " + fmtDate(b.accepted_at) : ""}</span></div>` : ""}
+      <div class="kv"><span class="k">Opened by</span><span class="v">${personWithPhoneHtml(b.reported_by_name, b.reported_by_phone)}</span></div>
+      ${b.reporter_name ? `<div class="kv"><span class="k">Reporter (portal)</span><span class="v">${personWithPhoneHtml(b.reporter_name, b.reporter_phone)}</span></div>` : (b.reporter_phone && b.reporter_phone !== b.reported_by_phone ? `<div class="kv"><span class="k">Reporter contact</span><span class="v">${phoneContactHtml(b.reporter_phone)}</span></div>` : "")}
+      <div class="kv"><span class="k">Assigned to</span><span class="v">${b.assigned_to_name ? personWithPhoneHtml(b.assigned_to_name, b.assigned_to_phone) : "Unassigned"}</span></div>
+      ${b.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${personWithPhoneHtml(b.accepted_by_name, b.accepted_by_phone)}${b.accepted_at ? " · " + fmtDate(b.accepted_at) : ""}</span></div>` : ""}
       ${b.accept_reply ? `<div class="kv"><span class="k">Reply to sender</span><span class="v">“${esc(b.accept_reply)}”</span></div>` : ""}
       ${b.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(b.responsible_admin_name)}</span></div>` : ""}
       ${b.closed_by_name ? `<div class="kv"><span class="k">Resolved by</span><span class="v">${esc(b.closed_by_name)}</span></div>` : ""}
@@ -1769,7 +1784,7 @@ function onboardingCard(a) {
         <div class="item-main">
           <div class="item-title">${esc(a.name)} ${roleChip(a.role)}</div>
           <div class="item-sub">${esc(a.email)}${a.phone ? " · " + esc(a.phone) : ""}</div>
-          <div class="item-sub">${a.role === "customer" ? "Scope: " + scope : "LabCare engineer"}</div>
+          <div class="item-sub">${a.role === "customer" ? "Scope: " + scope : "LabSynch engineer"}</div>
         </div>
         <span class="badge ${badgeCls}">${badgeLabel}</span>
       </div>
@@ -2051,7 +2066,7 @@ function viewMore(v) {
     <div class="section-title">Menu</div>
     <div class="menu-group">${items.join("")}</div>
     <div class="card" style="margin-top:6px">
-      <p style="font-size:12.5px;color:var(--ink-soft)">LabCare v1.1 — complaints &amp; breakdowns, photos, reports &amp; notifications.</p>
+      <p style="font-size:12.5px;color:var(--ink-soft)">LabSynch v1.1 — complaints &amp; breakdowns, photos, reports &amp; notifications.</p>
     </div>`;
 }
 
@@ -2644,7 +2659,7 @@ async function openUserEditor(edit, id) {
   const startRole = u ? u.role : "engineer";
   const startCust = startRole === "customer";
   // who sees which fields: customers always get the full pickers; the master may
-  // bind engineers to a customer or leave them LabCare-wide, and may create
+  // bind engineers to a customer or leave them LabSynch-wide, and may create
   // tenant admins linked to a customer or entirely unlinked (they create their
   // own organizations after first login); non-master tenant admins always pick
   // which of their care-list customers the new account belongs to.
@@ -2679,9 +2694,9 @@ async function openUserEditor(edit, id) {
             .map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("")}
         </select></label>
       <div id="uCustomerFields" style="${showCustFields ? "" : "display:none"}">
-        <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked organization (optional — leave empty for LabCare-wide)" : (tenantAdmin && !startCust ? "Linked organization (optional — leave empty to place them under tenant admin care)" : "Linked organization")}</span>
+        <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked organization (optional — leave empty for LabSynch-wide)" : (tenantAdmin && !startCust ? "Linked organization (optional — leave empty to place them under tenant admin care)" : "Linked organization")}</span>
           <select id="uCustomer" onchange="onUserCustPick()">
-            ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabCare-wide (no customer) —</option>` : ""}
+            ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabSynch-wide (no customer) —</option>` : ""}
             ${tenantAdmin ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— Under tenant admin care (no single organization) —</option>` : ""}
             ${customers.map((x) => `<option value="${x.id}" ${String(x.id) === String(u && u.customer_id ? u.customer_id : (!master ? startCustId : null)) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
           </select></label>
@@ -2721,11 +2736,11 @@ function toggleCustomerSelect() {
     const lbl = $("#uCustomerLabel");
     if (lbl) lbl.textContent = isTenantAdminRole
       ? "Linked organization (optional — they create their own after login)"
-      : "Linked organization (optional — leave empty for LabCare-wide)";
+      : "Linked organization (optional — leave empty for LabSynch-wide)";
     const emptyOpt = document.querySelector("#uCustomer option[value='']");
     if (emptyOpt) emptyOpt.textContent = isTenantAdminRole
       ? "— Not linked yet (they create their own later) —"
-      : "— LabCare-wide (no customer) —";
+      : "— LabSynch-wide (no customer) —";
   } else {
     // Tenant staff can create for any organization in their care list (which the
     // backend scopes /api/customers to). Customer-role accounts MUST name one, so
@@ -3397,7 +3412,7 @@ function primeAudio() {
 }
 
 // ---- Desktop push alerts (ring even when the app / tab is closed) ----
-// LabCare's bell can also ring as a real system notification via Web Push:
+// LabSynch's bell can also ring as a real system notification via Web Push:
 // a service worker receives pushes from the backend and the OS/browser plays
 // its alert sound — even if the user has closed the tab, as long as the
 // browser is running and "Desktop alerts" is ON.
@@ -4046,14 +4061,14 @@ async function boot() {
   const retry = $("#startupRetry");
   const loginBtn = $("#loginBtn");
   const joinBtn = $("#showJoinBtn");
-  status.textContent = "Connecting to LabCare…";
+  status.textContent = "Connecting to LabSynch…";
   retry.classList.add("hidden");
   loginBtn.disabled = joinBtn.disabled = true;
   render(); // paint before any network request, including for saved sessions
   let startupError = null;
   try {
     const user = await API.get("/api/me", { attempts: 1, timeoutMs: 8000 });
-    if (!user || !user.id || !user.role) throw new Error("Invalid session response from the LabCare server. Please try again.");
+    if (!user || !user.id || !user.role) throw new Error("Invalid session response from the LabSynch server. Please try again.");
     state.user = user;
   } catch (e) {
     if (e.status === 401) {

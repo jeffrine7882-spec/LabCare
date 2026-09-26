@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LabCare Alerts</title>
+<title>LabSynch Alerts</title>
 <style>
   :root { --teal:#0f766e; --teal-dark:#115e59; --ink:#111827; --soft:#6b7280; --bg:#f3f5f9; --border:#e5e7eb; }
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -58,7 +58,7 @@
       return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
     }
 
-    /** Opens the LabCare site in its own window, browser as the fallback. */
+    /** Opens the LabSynch site in its own window, browser as the fallback. */
     async function openSite() {
       try {
         if (L && L.openSite) { const r = await L.openSite(); if (r && r.ok === false) return openSiteExternal(); return; }
@@ -90,7 +90,7 @@
 
     function shell(title, tag, active, body, foot) {
       document.getElementById("root").innerHTML = `
-        <div class="brand">LabCare</div>
+        <div class="brand">LabSynch</div>
         <div class="tag">${esc(tag)}</div>
         ${tabbar(active)}
         ${body}
@@ -104,7 +104,7 @@
           <div class="notif"><div class="t" style="font-weight:700">${esc(window.myName || window.myEmail || "—")}</div></div>
         </div>
         <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener"
-           onclick="openSite(); return false;">🔬 Open the LabCare site</a>
+           onclick="openSite(); return false;">🔬 Open the LabSynch site</a>
         <div class="card" style="margin-top:12px">
           <div class="notif"><div class="t">🔔 Rings for every new bell notification</div></div>
           <div class="notif"><div class="t">▶ Opens the web app when you click an alert</div></div>
@@ -112,19 +112,19 @@
           <div class="notif"><div class="t">🚀 Starts automatically with Windows</div></div>
         </div>
         <button class="danger" onclick="signOut()">Sign out</button>`,
-        `You can close this window — LabCare keeps running in the tray.`);
+        `You can close this window — LabSynch keeps running in the tray.`);
     }
     window.home = home;
 
-    /** The Site tab: the LabCare web app itself, opened inside this app. */
+    /** The Site tab: the LabSynch web app itself, opened inside this app. */
     function site() {
-      shell("Site", "The LabCare web app", "site", `
+      shell("Site", "The LabSynch web app", "site", `
         <div class="card">
           <div class="notif"><div class="t">🔬 Complaints, breakdowns, equipment, PM and reports</div></div>
           <div class="notif"><div class="t">🔑 Opens signed in with this app's account</div></div>
         </div>
         <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener"
-           onclick="openSite(); return false;">Open the LabCare site</a>
+           onclick="openSite(); return false;">Open the LabSynch site</a>
         <button class="ghost" onclick="openSiteExternal()">Open in my web browser</button>
         <div class="url">${esc(SITE)}</div>`,
         `If the site window doesn't appear, use "Open in my web browser".`);
@@ -207,7 +207,7 @@
 
     function loginScreen() {
       document.getElementById("root").innerHTML = `
-        <div class="brand">LabCare</div>
+        <div class="brand">LabSynch</div>
         <div class="tag">Windows desktop alerts — rings for every bell alert</div>
         <div class="card">
           <div class="err" id="err"></div>
@@ -218,14 +218,14 @@
           <button class="primary" id="btn">Sign in &amp; enable alerts</button>
         </div>
         <a class="sitelink ghost" style="color:#115e59" href="${esc(SITE)}" target="_blank" rel="noopener"
-           onclick="openSite(); return false;">🔬 Just take me to the LabCare site</a>
-        <div class="foot">Uses the same account as the LabCare web app.<br>Runs in the system tray and starts with Windows.</div>
+           onclick="openSite(); return false;">🔬 Just take me to the LabSynch site</a>
+        <div class="foot">Uses the same account as the LabSynch web app.<br>Runs in the system tray and starts with Windows.</div>
       `;
       const btn = document.getElementById("btn");
       const go = async () => {
         if (!L || !L.signIn) {
           document.getElementById("err").textContent =
-            "This install is incomplete — use the link below to open the LabCare site.";
+            "This install is incomplete — use the link below to open the LabSynch site.";
           return;
         }
         btn.disabled = true; btn.textContent = "Signing in…";
@@ -253,24 +253,24 @@
 
     /**
      * Shown only if the preload bridge never arrived. It still links to the
-     * LabCare site, because a blank window is never an acceptable outcome.
+     * LabSynch site, because a blank window is never an acceptable outcome.
      */
     function bridgeMissing() {
       document.getElementById("root").innerHTML = `
-        <div class="brand">LabCare</div>
+        <div class="brand">LabSynch</div>
         <div class="tag">Desktop alerts</div>
         <div class="card">
           <div class="muted">This window couldn't load its own controls, but the
-          LabCare site still works.</div>
+          LabSynch site still works.</div>
         </div>
-        <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener">🔬 Open the LabCare site</a>
+        <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener">🔬 Open the LabSynch site</a>
         <button class="ghost" onclick="location.reload()">Reload this window</button>
         <div class="foot">${esc(SITE)}</div>`;
     }
 
     // Paint something immediately — the window must never show a blank frame.
     document.getElementById("root").innerHTML =
-      `<div class="brand">LabCare</div><div class="tag">Starting…</div>`;
+      `<div class="brand">LabSynch</div><div class="tag">Starting…</div>`;
 
     (async () => {
       try {

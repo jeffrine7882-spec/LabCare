@@ -1,6 +1,6 @@
 {
-  "name": "LabCare — Equipment Complaints & Breakdowns",
-  "short_name": "LabCare",
+  "name": "LabSynch — Equipment Complaints & Breakdowns",
+  "short_name": "LabSynch",
   "description": "Manage customer complaints and breakdowns for laboratory equipment.",
   "start_url": "/",
   "display": "standalone",

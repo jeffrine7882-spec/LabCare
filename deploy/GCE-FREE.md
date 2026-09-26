@@ -1,6 +1,6 @@
-# LabCare on Google Cloud — Always-Free e2-micro VPS ($0/mo)
+# LabSynch on Google Cloud — Always-Free e2-micro VPS ($0/mo)
 
-Run the LabCare backend for free on Google Cloud's always-free VM and point
+Run the LabSynch backend for free on Google Cloud's always-free VM and point
 Netlify's `/api/*` proxy at it. No code changes; SQLite runs on a real local
 disk (the recommended way to run SQLite in GCP).
 

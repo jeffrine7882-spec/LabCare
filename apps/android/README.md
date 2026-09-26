@@ -1,21 +1,21 @@
-# LabCare Alerts — Android APK
+# LabSynch Alerts — Android APK
 
 ## Install
 Requirements: **Android 8.0+**, installable on the latest Android 14/15/16
 (targets SDK 34). Self-signed, not on the Play Store.
 
 
-1. Copy **`LabCare-Alerts-v1.3.apk`** (in `dist/`) to your Android phone —
+1. Copy **`LabSynch-Alerts-v1.3.apk`** (in `dist/`) to your Android phone —
    e.g. over USB, cloud drive, or direct download.
 2. Tap it in Files. Android will ask you to allow "install unknown apps"
    for that app — allow it. (The APK is self-signed, not from the Play Store.)
-3. Open **LabCare Alerts** and sign in with your LabCare account — the app
-   opens the **LabCare site itself** (Site tab) so you can work on your
+3. Open **LabSynch Alerts** and sign in with your LabSynch account — the app
+   opens the **LabSynch site itself** (Site tab) so you can work on your
    complaints, breakdowns and equipment right away.
 
 ## What it does
-* **Opens the LabCare site** (`https://labcare.insforge.site`) in the app's
-  **Site** tab, already signed in with your LabCare account — the same data
+* **Opens the LabSynch site** (`https://labcare.insforge.site`) in the app's
+  **Site** tab, already signed in with your LabSynch account — the same data
   and features as the web app (tickets, equipment, PDF service reports).
 * Signs in with the same account as the web app.
 * A foreground **alert relay** polls your bell every **10 seconds** and, on a
@@ -33,12 +33,12 @@ see **`server/apppush.py`** + the two env vars in `apps/README-setup.md`.
 Until then the relay above does the ringing and works reliably in practice
 (foreground service + battery optimization off).
 
-The APK **also** needs the LabCare server to stay reachable (it's HTTPS, always-on).
+The APK **also** needs the LabSynch server to stay reachable (it's HTTPS, always-on).
 
 ## Build (optional)
 Requires JDK 11 and `~/android-sdk` with build-tools 33.0.2 + platform 33:
 ```
-./build.sh        # → dist/LabCare-Alerts-v1.3.apk (signed)
+./build.sh        # → dist/LabSynch-Alerts-v1.3.apk (signed)
 ```
 
 In-app emergency access: the app has no "demo" account built in; use any

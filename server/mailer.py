@@ -1,11 +1,11 @@
-"""LabCare — email notifications.
+"""LabSynch — email notifications.
 
 By default email is disabled (outbox mode): messages are written to
 server/outbox.log so you can preview them. Enable SMTP through environment
 variables to actually send, e.g. on a deployment server.
 
   LABCARE_SMTP_HOST, LABCARE_SMTP_PORT, LABCARE_SMTP_USER, LABCARE_SMTP_PASS
-  LABCARE_MAIL_FROM  (default: LabCare <no-reply@labcare.local>)
+  LABCARE_MAIL_FROM  (default: LabSynch <no-reply@labcare.local>)
 
 SMTP sending is best-effort and never raises into the request path.
 """
@@ -38,21 +38,21 @@ def _render(to_email, recipient_name, subject, lines):
     <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;
                 border:1px solid #e2e8f0;border-radius:14px;overflow:hidden">
       <div style="background:#0f766e;color:#fff;padding:18px 22px">
-        <h2 style="margin:0;font-size:18px">🔬 LabCare</h2>
+        <h2 style="margin:0;font-size:18px">🔬 LabSynch</h2>
         <div style="font-size:12px;opacity:.85">Complaints &amp; Breakdowns</div>
       </div>
       <div style="padding:22px">
         <p style="margin:0 0 6px">Hi {recipient_name},</p>
         {''.join(f'<p style="margin:8px 0;color:#0f172a">{l}</p>' for l in lines)}
         <p style="margin-top:18px;color:#64748b;font-size:12px">
-          This is an automated message from LabCare.
-          <a href="{_APP_URL}" style="color:#0f766e">Open LabCare</a>
+          This is an automated message from LabSynch.
+          <a href="{_APP_URL}" style="color:#0f766e">Open LabSynch</a>
         </p>
       </div>
     </div>"""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = os.environ.get("LABCARE_MAIL_FROM", "LabCare <no-reply@labcare.local>")
+    msg["From"] = os.environ.get("LABCARE_MAIL_FROM", "LabSynch <no-reply@labcare.local>")
     msg["To"] = to_email
     msg.attach(MIMEText(body, "plain"))
     msg.attach(MIMEText(html, "html"))
@@ -61,7 +61,7 @@ def _render(to_email, recipient_name, subject, lines):
 
 def send(to_email, to_name, subject, lines):
     """Queue/send one notification email. Never raises."""
-    subject = f"[LabCare] {subject}"
+    subject = f"[LabSynch] {subject}"
     try:
         # Always log to the outbox for preview/debug
         with open(OUTBOX, "a") as fh:

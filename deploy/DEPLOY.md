@@ -1,4 +1,4 @@
-# Deploying LabCare on Netlify (labcareassist.netlify.app)
+# Deploying LabSynch on Netlify (labcareassist.netlify.app)
 
 You chose to use the **`labcareassist.netlify.app`** address. Because `*.netlify.app`
 is served by Netlify itself, the final architecture is:

@@ -1,9 +1,9 @@
 {
   "name": "labcare-desktop",
   "version": "1.2.0",
-  "description": "LabCare desktop alerts for Windows \u2014 rings for every bell notification from the system tray, and opens the LabCare site.",
+  "description": "LabSynch desktop alerts for Windows \u2014 rings for every bell notification from the system tray, and opens the LabSynch site.",
   "main": "main.js",
-  "author": "LabCare",
+  "author": "LabSynch",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
@@ -18,7 +18,7 @@
   },
   "build": {
     "appId": "com.insforge.labcare",
-    "productName": "LabCare Alerts",
+    "productName": "LabSynch Alerts",
     "files": [
       "main.js",
       "preload.js",
@@ -38,7 +38,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "LabCare Alerts",
+      "shortcutName": "LabSynch Alerts",
       "runAfterFinish": true
     }
   }

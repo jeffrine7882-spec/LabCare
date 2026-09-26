@@ -1,4 +1,4 @@
-"""LabCare — sample data seeder for the live (InsForge Postgres) app.
+"""LabSynch — sample data seeder for the live (InsForge Postgres) app.
 
 Inserts a realistic demo picture: two customer organisations (tenant admins,
 engineers, customer users, locations, departments, equipment), a spread of
