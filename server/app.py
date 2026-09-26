@@ -1175,20 +1175,16 @@ def signup():
     new_org_created = False
     if role == "customer":
         if new_cust_name:
-            existing_cust = c.execute(
-                "SELECT id FROM customers WHERE lower(name)=?",
-                (new_cust_name.lower(),)
-            ).fetchone()
-            if existing_cust:
-                customer_id = existing_cust["id"]
-            else:
-                cur_cust = c.execute(
-                    "INSERT INTO customers (name,contact_name,email,phone,address,city,pending_care,created_at) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
-                    (new_cust_name, name, email, phone, "", "", 1, now()),
-                )
-                customer_id = cur_cust.lastrowid
-                new_org_created = True
+            # Rule: multiple customers can be added under same organization name or location.
+            # Always create a new organization entry when user types a new name, even if same name exists.
+            # Differentiation is by Organization + Location, not just name.
+            cur_cust = c.execute(
+                "INSERT INTO customers (name,contact_name,email,phone,address,city,pending_care,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (new_cust_name, name, email, phone, "", "", 1, now()),
+            )
+            customer_id = cur_cust.lastrowid
+            new_org_created = True
             if location_id and not new_loc_name:
                 ref_loc = c.execute("SELECT name FROM locations WHERE id=?", (location_id,)).fetchone()
                 if ref_loc:
