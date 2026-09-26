@@ -22,6 +22,14 @@
 # Mirrors ./deploy.sh (backend → compute, frontend → hosting) but is fully
 # non-interactive. The Postgres DSN is fetched from InsForge at deploy time —
 # never hardcoded, never printed.
+#
+# Guards learned the hard way (2026-09-26, when the API was down for ~1h):
+#   * the database schemas are tested, and the app is booted against the live
+#     Postgres *before* the deploy — the container runs init_db() unguarded, so
+#     a DDL error there is a crash loop with no visible traceback;
+#   * the backend health check is bounded (~10 min) so it cannot consume the
+#     job timeout, and the frontend publish runs even when it fails — a merged
+#     frontend fix was stranded for 30 minutes behind a hung health check.
 # =============================================================================
 
 name: Deploy to InsForge
@@ -73,8 +81,29 @@ jobs:
         with:
           node-version: 22
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Test frontend startup and API failure recovery
+        id: frontend_tests
         run: node --test scripts/test_frontend_startup.js
+
+      - name: Test the database schemas, including the Postgres DDL
+        id: schema_tests
+        run: |
+          set -euo pipefail
+          pip install --quiet -r requirements.txt
+          # Optional, but with it the schema test parses the DDL with the real
+          # PostgreSQL grammar instead of only checking the column types.
+          pip install --quiet pglast || echo "pglast unavailable — parse test will skip"
+          cd server
+          for t in test_pg_schema_syntax test_pending_care test_ticket_feedback \
+                   test_audit_history test_equipment_categories test_shared_asset \
+                   test_tenant_admin_users; do
+            echo "— $t"
+            env -u LABCARE_DATABASE_URL python3 -m unittest "$t"
+          done
 
       - name: Check the INSFORGE_API_KEY secret is configured
         env:
@@ -94,6 +123,7 @@ jobs:
           echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
 
       - name: Link the InsForge project (API-key auth, no OAuth)
+        id: link_project
         env:
           INSFORGE_API_KEY: ${{ secrets.INSFORGE_API_KEY }}
         run: |
@@ -125,6 +155,33 @@ jobs:
           done
           echo "wrote .env.production ($(wc -l < .env.production) entries; contents not echoed)"
 
+      - name: Boot the app against the live Postgres (before deploying)
+        id: boot_check
+        if: inputs.target != 'frontend'
+        run: |
+          set -euo pipefail
+          # The container runs server/run.py, which calls init_db() unguarded:
+          # if the schema or a migration fails there, the machine exits, the
+          # restart loop begins and the proxy answers 503 — with no traceback
+          # anywhere the app can see. Reproduce that boot here first, where a
+          # failure is visible and production has not been touched yet. It
+          # applies the same idempotent DDL the container applies seconds later.
+          # Only the DSN is read back out: the optional VAPID/FCM values can
+          # contain characters that are fine in an env file but not in a shell.
+          export LABCARE_DATABASE_URL="$(sed -n 's/^LABCARE_DATABASE_URL=//p' .env.production | tail -n1)"
+          [ -n "$LABCARE_DATABASE_URL" ] || { echo "::error::no LABCARE_DATABASE_URL in .env.production"; exit 1; }
+          ( cd server && python3 -c "import database; database.init_db(); print('init_db OK')" )
+          ( cd server && PORT=8011 nohup python3 run.py > /tmp/boot.log 2>&1 & )
+          for i in $(seq 1 15); do
+            if health="$(curl -fsS -m 5 http://127.0.0.1:8011/api/health 2>/dev/null)"; then
+              echo "boot check passed: $health"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error title=The app cannot boot against the live database::Deploying now would swap a working container for one that cannot start. Log (tail):"
+          tail -40 /tmp/boot.log || true
+          exit 1
+
       - name: Deploy backend (InsForge compute — remote build)
         if: inputs.target != 'frontend'
         run: |
@@ -135,18 +192,28 @@ jobs:
       - name: Health check — backend
         if: inputs.target != 'frontend'
         run: |
-          for i in $(seq 1 30); do
-            if out="$(curl -fsS -m 60 "$BACKEND_ENDPOINT/api/health" 2>/dev/null)"; then
+          # Bounded on purpose: 20 × (20s request + 10s wait) is ~10 minutes, so
+          # a backend that refuses to come up can no longer eat the whole job
+          # timeout and take the frontend publish down with it (that is exactly
+          # how a merged static fix failed to reach production on 2026-09-26).
+          for i in $(seq 1 20); do
+            if out="$(curl -fsS -m 20 "$BACKEND_ENDPOINT/api/health" 2>/dev/null)"; then
               echo "backend healthy: $out"; exit 0
             fi
-            echo "waiting for backend… ($i/30)"; sleep 10
+            echo "waiting for backend… ($i/20)"; sleep 10
           done
-          echo "::error::backend health check failed"; exit 1
+          echo "::error title=Backend health check failed::The API did not answer /api/health within ~10 minutes. The frontend is still published below; check the service with 'npx @insforge/cli compute events <id>'."
+          exit 1
 
       - name: Deploy frontend (InsForge hosting)
+        # Runs even when the backend health check failed: the static app is
+        # served on its own host and its startup path tolerates an API outage,
+        # so a backend problem must never withhold a frontend fix.
+        if: always() && steps.frontend_tests.outcome == 'success' && steps.schema_tests.outcome == 'success' && steps.link_project.outcome == 'success'
         run: npx --yes @insforge/cli deployments deploy static
 
       - name: Health check — frontend
+        if: always() && steps.frontend_tests.outcome == 'success' && steps.schema_tests.outcome == 'success' && steps.link_project.outcome == 'success'
         run: |
           curl --retry 3 --retry-delay 5 --retry-all-errors -fsS -m 30 -o /dev/null "$SITE_URL/"
           curl --retry 3 --retry-delay 5 --retry-all-errors -fsS -m 30 -o /dev/null "$SITE_URL/app.js?v=49.1"

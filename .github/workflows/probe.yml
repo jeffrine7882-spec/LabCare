@@ -1,0 +1,145 @@
+# =============================================================================
+# PROBE — what production actually serves, and why. Deploys nothing.
+#
+# Written on 2026-09-26 during the API outage, when the service reported
+# status "running" while its machine restart-looped and the proxy answered 503.
+# It reads the compute state and machine events, boots the app against the live
+# Postgres on the runner (where a traceback is visible), and probes the public
+# endpoints — which is how the real cause surfaced: `text NOT NULL` in
+# _PG_SCHEMA, a column declared without a type. Postgres rejects it, SQLite
+# accepts it, and because init_db() is unguarded in run.py the container simply
+# exits on every start.
+#
+# Opt-in, like the deploy workflow: it needs the `[probe]` tag in the commit
+# message (or a manual run), so it cannot race a `[deploy]` run.
+#
+# Results are emitted as check-run annotations (titles LABBOOT_*/LABDIAG_*) so
+# they can be read back over the API without log access. Delete when it is no
+# longer useful.
+# =============================================================================
+
+name: Probe — production status
+
+on:
+  push:
+    branches: ['arena/01a0dc3f-labcare']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe-01a0dc3f
+  cancel-in-progress: false
+
+env:
+  SITE_URL: https://labcare.insforge.site
+  BACKEND_ENDPOINT: https://labcare-api-ee5bd3a7-8f78-4005-87ea-6c57ff5728aa.fly.dev
+  API_BASE_URL: https://yj675q8e.ap-southeast.insforge.app
+  SERVICE_NAME: labcare-api
+
+jobs:
+  probe:
+    if: contains(github.event.head_commit.message, '[probe]') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Link the InsForge project (API-key auth, no OAuth)
+        env:
+          INSFORGE_API_KEY: ${{ secrets.INSFORGE_API_KEY }}
+        run: |
+          set +e
+          if [ -z "${INSFORGE_API_KEY:-}" ]; then
+            echo "::error title=Missing repository secret::INSFORGE_API_KEY is not set."
+            exit 1
+          fi
+          npx --yes @insforge/cli link \
+            --api-base-url "$API_BASE_URL" --api-key "$INSFORGE_API_KEY" --guard off --json
+
+      - name: What production serves (frontend, API, and through the site)
+        run: |
+          set +e
+          code="$(curl -sS -m 30 -o /tmp/idx.html -w '%{http_code}' "$SITE_URL/" 2>/dev/null)"
+          marker="absent"; grep -q 'id="startupRetry"' /tmp/idx.html 2>/dev/null && marker="present"
+          echo "::notice title=LABPROBE_FRONTEND_INDEX::http=$code bytes=$(wc -c < /tmp/idx.html 2>/dev/null) startupRetry_button=$marker"
+          code="$(curl -sS -m 30 -o /tmp/app.js -w '%{http_code}' "$SITE_URL/app.js?v=49.1" 2>/dev/null)"
+          marker="absent"; grep -q 'startupRetry' /tmp/app.js 2>/dev/null && marker="present"
+          echo "::notice title=LABPROBE_FRONTEND_APPJS::http=$code bytes=$(wc -c < /tmp/app.js 2>/dev/null) boot_retry_wiring=$marker"
+          for path in /api/health /api/version; do
+            t0=$(date +%s)
+            code="$(curl -sS -m 60 -o /tmp/p.json -w '%{http_code}' "$BACKEND_ENDPOINT$path" 2>/dev/null)"
+            t1=$(date +%s)
+            echo "::notice title=LABPROBE_BACKEND::${path} http=${code:-ERR} seconds=$((t1-t0)) body=$(tr -d '\n\r' < /tmp/p.json 2>/dev/null | head -c 200)"
+          done
+          for path in /api/health /api/version; do
+            code="$(curl -sS -m 60 -o /tmp/s.json -w '%{http_code}' "$SITE_URL$path" 2>/dev/null)"
+            echo "::notice title=LABPROBE_SITE_PROXY::${path} http=${code:-ERR} body=$(tr -d '\n\r' < /tmp/s.json 2>/dev/null | head -c 200)"
+          done
+
+      - name: Compute service state and machine events
+        run: |
+          set +e
+          emit() { # emit <title> <file>
+            local title="$1" f="$2" n=0 text chunk
+            text="$(tr '\n\r\t' '   ' < "$f" 2>/dev/null | sed 's/  */ /g' | cut -c1-18000)"
+            while [ -n "$text" ] && [ "$n" -lt 12 ]; do
+              chunk="$(printf '%s' "$text" | cut -c1-1200)"
+              echo "::notice title=${title}_${n}::${chunk}"
+              text="$(printf '%s' "$text" | cut -c1201-18000)"
+              n=$((n+1))
+            done
+          }
+          npx --yes @insforge/cli --json compute list > /tmp/services.json 2>&1
+          jq -r 'if type=="array" then .[] else (.services // .data // [])[] end | "\(.name) \(.status) machine=\(.flyMachineId) updated=\(.updatedAt)"' /tmp/services.json > /tmp/summary.txt 2>&1
+          [ -s /tmp/summary.txt ] || cp /tmp/services.json /tmp/summary.txt
+          emit LABDIAG_SERVICES /tmp/summary.txt
+          id="$(jq -r 'if type=="array" then .[0].id else (.services // .data // [])[0].id end' /tmp/services.json 2>/dev/null)"
+          [ -n "$id" ] && [ "$id" != "null" ] || id=""
+          echo "::notice title=LABDIAG_SERVICE_ID::id=${id:-none}"
+          if [ -n "$id" ]; then
+            npx --yes @insforge/cli --json compute events "$id" > /tmp/events.json 2>&1
+            emit LABDIAG_EVENTS /tmp/events.json
+          fi
+
+      - name: Boot the app against the live Postgres (traceback if it cannot)
+        run: |
+          set +e
+          emit() {
+            local title="$1" f="$2" n=0 text chunk
+            text="$(tr '\n\r\t' '   ' < "$f" 2>/dev/null | sed 's/  */ /g' | cut -c1-9000)"
+            while [ -n "$text" ] && [ "$n" -lt 8 ]; do
+              chunk="$(printf '%s' "$text" | cut -c1-1200)"
+              echo "::notice title=${title}_${n}::${chunk}"
+              text="$(printf '%s' "$text" | cut -c1201-9000)"
+              n=$((n+1))
+            done
+          }
+          dsn="$(npx --yes @insforge/cli --json db connection-string | jq -r '.connectionURL // empty')"
+          [ -n "$dsn" ] || { echo "::warning title=LABBOOT_NO_DSN::could not fetch the database connection string"; exit 0; }
+          echo "::notice title=LABBOOT_DSN_SHAPE::masked=$(printf '%s' "$dsn" | sed -E 's#://[^:]+:[^@]*@#://***:***@#') len=${#dsn}"
+          pip install --quiet -r requirements.txt
+          export LABCARE_DATABASE_URL="$dsn"
+          ( cd server && python3 -c "import database; print('PG_ENABLED=', database.PG_ENABLED); database.init_db(); print('INIT_DB_OK')" ) > /tmp/boot.log 2>&1
+          rc=$?
+          emit LABBOOT_INIT_DB /tmp/boot.log
+          echo "::notice title=LABBOOT_INIT_DB_RESULT::exit=$rc $(grep -q INIT_DB_OK /tmp/boot.log && echo RESULT=INIT_DB_OK || echo RESULT=FAILED)"
+          if [ "$rc" -eq 0 ]; then
+            ( cd server && PORT=8011 nohup python3 run.py > /tmp/app.log 2>&1 & )
+            for i in $(seq 1 15); do
+              code="$(curl -sS -m 5 -o /tmp/local.json -w '%{http_code}' http://127.0.0.1:8011/api/health 2>/dev/null)"
+              [ "$code" = "200" ] && break
+              sleep 2
+            done
+            echo "::notice title=LABBOOT_LOCAL_APP::health_http=${code:-ERR} body=$(tr -d '\n\r' < /tmp/local.json 2>/dev/null | head -c 200)"
+            emit LABBOOT_APP_LOG /tmp/app.log
+          fi
