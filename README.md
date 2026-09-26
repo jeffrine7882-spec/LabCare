@@ -188,8 +188,11 @@ Organizations** and **Admin → Team & users**.
     create or edit admin accounts and organizations, and it can never be
     disabled, demoted or linked to an organization. Every other admin is a tenant admin.
     **Only the Master System Admin can delete a complaint or breakdown
-    ticket.** The master can also **delete any user account** — deleting a
-    user never cascades: their tickets, equipment, PM schedules and other
+    ticket, a user account (customer, engineer/application or tenant admin)
+    or an organization** — `DELETE /api/users/<id>` and
+    `DELETE /api/customers/<id>` are master-only, and the Delete buttons on
+    the user / organization sheets are only rendered for the master. Deleting
+    a user never cascades: their tickets, equipment, PM schedules and other
     records are kept and simply become unlinked/unassigned (history rows
     render the author as "Former user").
   - **Tenant admin** (any admin who is not the Master) manages only the
@@ -201,7 +204,11 @@ Organizations** and **Admin → Team & users**.
     customer accounts), locations, departments and equipment. They **cannot**
     create or edit any admin account, cannot see other organizations' data,
     and can only assign work to their own team or LabSynch's provider
-    technicians.
+    technicians. They **cannot delete** anything that outlives a ticket: not a
+    user account (they may still edit or disable — `active: 0` — the accounts
+    under their care) and not an organization, even one under their care
+    (they may only **drop it from their care list** via
+    `DELETE /api/my-customers/<id>`, which leaves the organization intact).
   - **Technician**: provider technicians (`customer_id NULL` **and** no linked
     tenant admin — created by the master) work across all organizations; tenant
     technicians (`customer_id` set) are restricted to their organization. A
@@ -380,7 +387,31 @@ Organizations** and **Admin → Team & users**.
     assignment, ordering or the work log. It lives in its own `ticket_ratings`
     and `ticket_feedback` tables, sends no notifications, and shows up in the
     audit log as `rating` / `feedback` entries.
-- **Sound + email alerts** for new tickets and updates.
+- **Sound + email alerts** for new tickets and updates. **Who hears a ticket
+  alert** is decided in one place (`_stakeholder_ids()` → `_ticket_team_ids()`
+  / `_ticket_customer_ids()`), and every channel — bell, sound, Web Push,
+  native push and email — follows it:
+  - **Tenant admin, engineer, application**: only tickets of the
+    **organizations they are linked to** — a tenant admin's care list, an
+    engineer's bound organization, a customer-less engineer's linked
+    organizations (else the linked tenant admin's care list). Nobody outside
+    that reach is alerted, and an organization dropped from a care list goes
+    quiet for the tenant and their staff at once. Only the master and a
+    LabSynch-wide engineer (no organization, no links, no tenant admin — i.e.
+    linked to everything) hear every organization.
+  - **Customer users**: tickets of the **organization they are linked to —
+    and, when they are linked to a location, only that location's** (the
+    location's department, which is created with it). Alerts follow where the
+    customer is linked, not merely the tickets they raised themselves: a
+    colleague's new breakdown at the same location, its status changes and
+    comments all reach them; a ticket at another location, or an
+    organization-level ticket with no location, does not.
+  - New tickets and comments go to the whole audience (team + customers);
+    accept/status updates go to the ticket's participants (assignee, reporter)
+    and the customers at its organization/location. The actor never hears
+    their own action. Care-decision notices (`pending_care`) are the one
+    deliberate exception: an organization awaiting a care decision is linked
+    to nobody yet, so every tenant admin is asked.
 - **Desktop push alerts**: every bell notification can also ring as a real
   system notification via Web Push (service worker + VAPID), so users hear the
   alert even when the app/tab/browser window is closed. Each signed-in user

@@ -2602,7 +2602,7 @@ async function openCustomerEditor(edit) {
       ` : ""}
     </div>
     <div class="sheet-foot">
-      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteCustomer(${cu.id})">Delete</button>` : ""}
+      ${edit && isMaster() ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteCustomer(${cu.id})">Delete</button>` : ""}
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
       <button class="btn btn-primary-2" onclick="saveCustomer(${edit ? cu.id : "null"})">${edit ? "Save changes" : "Add customer"}</button>
     </div>`);
@@ -2793,7 +2793,7 @@ async function openUserEditor(edit, id) {
       <label class="field"><span>${edit ? "New password (leave blank to keep)" : "Password *"}</span><input id="uPassword" type="password" placeholder="${edit ? "••••••••" : "Set a password"}"></label>
     </div>
     <div class="sheet-foot">
-      ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteUser(${id})">Delete</button>` : ""}
+      ${edit && isMaster() ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteUser(${id})">Delete</button>` : ""}
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
       <button class="btn btn-primary-2" onclick="saveUser(${edit ? id : "null"})">${edit ? "Save changes" : "Add user"}</button>
     </div>`);

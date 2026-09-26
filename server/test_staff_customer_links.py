@@ -238,8 +238,14 @@ class StaffCustomerLinksTest(unittest.TestCase):
         self.assertEqual(r.status_code, 403)
         r = self.client.delete("/api/users/%d" % uid, headers=self.t2)
         self.assertEqual(r.status_code, 403)
-        # ...while its own tenant admin may remove it, links included
+        # deleting accounts is the master's alone — its own tenant admin may
+        # edit or disable it, but not remove it
         r = self.client.delete("/api/users/%d" % uid, headers=self.t1)
+        self.assertEqual(r.status_code, 403)
+        r = self.patch("/api/users/%d" % uid, self.t1, {"active": 0})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        # ...and when the master removes it the links go with it
+        r = self.client.delete("/api/users/%d" % uid, headers=self.mh)
         self.assertEqual(r.status_code, 200, r.get_json())
         c = conn()
         n = c.execute("SELECT COUNT(*) n FROM staff_customer_links WHERE user_id=?", (uid,)).fetchone()["n"]

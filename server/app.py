@@ -868,8 +868,68 @@ def notify(user_id, text, entity_type="", entity_id=None, email_fn=None):
                 pass
 
 
+def _ticket_team_ids(c, rec):
+    """Tenant admins, engineers and applications who hear about a ticket: only
+    those linked to the ticket's ORGANIZATION.
+
+    * master: every organization;
+    * tenant admin: the organizations on their care list (primary + linked);
+    * engineer/application bound to one organization: that organization;
+    * customer-less engineer/application: their reach — the organizations they
+      were explicitly linked to, else their tenant admin's care list. Only a
+      genuinely LabSynch-wide account (no organization, no links, no tenant
+      admin — created by the master) hears every organization.
+    A ticket without an organization (should not exist) reaches only the
+    unscoped accounts, never everyone."""
+    cust = rec.get("customer_id")
+    ids = set()
+    for r in c.execute(
+            "SELECT * FROM users WHERE role IN ('engineer','application','admin') "
+            "AND active=1 AND COALESCE(pending,0)=0").fetchall():
+        row = dict(r)
+        if row["role"] == "admin":
+            if is_master_admin(row):
+                ids.add(row["id"])
+            elif cust is not None and cust in _admin_scope_ids(c, row["id"], r):
+                ids.add(row["id"])
+            continue
+        if row.get("customer_id"):
+            if row["customer_id"] == cust:
+                ids.add(row["id"])
+            continue
+        reach = tenant_scope(row, c)
+        if reach is None or (cust is not None and cust in reach):
+            ids.add(row["id"])
+    return ids
+
+
+def _ticket_customer_ids(c, rec):
+    """Customer users who hear about a ticket: those linked to the ticket's
+    organization — and, when they are linked to a location (department), only
+    tickets at that location (department). A customer's alerts follow where
+    they are linked, not merely the tickets they raised themselves."""
+    cust = rec.get("customer_id")
+    if not cust:
+        return set()
+    loc, dept = rec.get("location_id"), rec.get("department_id")
+    ids = set()
+    for r in c.execute(
+            "SELECT id, location_id, department_id FROM users WHERE role='customer' "
+            "AND active=1 AND COALESCE(pending,0)=0 AND customer_id=?", (cust,)).fetchall():
+        if r["location_id"] and r["location_id"] != loc:
+            continue
+        if r["department_id"] and r["department_id"] != dept:
+            continue
+        ids.add(r["id"])
+    return ids
+
+
 def _stakeholder_ids(kind, rec, include_team=False):
-    """User ids that should hear about an event on this ticket."""
+    """User ids that should hear about an event on this ticket.
+
+    Always: the participants (assignee + reporter) and the customer users
+    linked to the ticket's organization/location. With include_team: also the
+    tenant admins, engineers and applications linked to its organization."""
     ids = set()
     if kind == "complaint":
         if rec.get("assigned_to"): ids.add(rec["assigned_to"])
@@ -877,36 +937,12 @@ def _stakeholder_ids(kind, rec, include_team=False):
     else:
         if rec.get("assigned_to"): ids.add(rec["assigned_to"])
         if rec.get("reported_by"): ids.add(rec["reported_by"])
-    if include_team:
-        c = conn()
-        cust = rec.get("customer_id")
-        for r in c.execute(
-                "SELECT * FROM users WHERE role IN ('engineer','application','admin') AND active=1").fetchall():
-            if cust is None or r["customer_id"] == cust:
-                ids.add(r["id"])
-                continue
-            if r["customer_id"] is None:
-                # provider engineers hear everything; staff under a tenant
-                # admin's care (or linked to chosen organizations) only hear
-                # tickets within their reach. Among customer-less admins only
-                # the MASTER hears everything — unbound tenant admins rely
-                # solely on their care list (checked below).
-                if r["role"] in STAFF_ROLES:
-                    reach = tenant_scope(dict(r), c)
-                    if reach is None or cust in reach:
-                        ids.add(r["id"])
-                    continue
-                if (r["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL:
-                    ids.add(r["id"])
-                    continue
-            # tenant admins also hear tickets for customers they care for
-            # via admin_customer_links (not just their primary customer)
-            if r["role"] == "admin":
-                link = c.execute(
-                    "SELECT 1 FROM admin_customer_links WHERE admin_id=? AND customer_id=?",
-                    (r["id"], cust)).fetchone()
-                if link:
-                    ids.add(r["id"])
+    c = conn()
+    try:
+        ids |= _ticket_customer_ids(c, rec)
+        if include_team:
+            ids |= _ticket_team_ids(c, rec)
+    finally:
         c.close()
     return ids
 
@@ -1606,18 +1642,13 @@ def update_customer(cid):
 
 @app.delete("/api/customers/<int:cid>")
 def delete_customer(cid):
-    u, err, code = require_role("admin")
+    # Deleting an organization is the master's alone — a tenant admin cannot
+    # delete an organization even when it is under their care (they may only
+    # drop it from their care list via DELETE /api/my-customers/<id>).
+    u, err, code = require_master()
     if err:
         return err, code
     c = conn()
-    if not is_master_admin(u):
-        err_t, code_t = tenant_guard(u, cid, c)
-        if err_t:
-            c.close()
-            return err_t, code_t
-        if u.get("customer_id") == cid:
-            c.close()
-            return jsonify({"error": "You cannot delete your own primary organization"}), 400
     n_equip = c.execute("SELECT COUNT(*) n FROM equipment WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_cmp = c.execute("SELECT COUNT(*) n FROM complaints WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_brk = c.execute("SELECT COUNT(*) n FROM breakdowns WHERE customer_id=?", (cid,)).fetchone()["n"]
@@ -3760,7 +3791,10 @@ def update_user(uid):
 
 @app.delete("/api/users/<int:uid>")
 def delete_user(uid):
-    u, err, code = require_role("admin")
+    # Deleting an account — a customer, an engineer/application or a tenant
+    # admin — is the master's alone. A tenant admin may still create, edit and
+    # disable (active=0) the accounts under their care, but never remove them.
+    u, err, code = require_master()
     if err:
         return err, code
     if uid == u["id"]:
@@ -3773,28 +3807,14 @@ def delete_user(uid):
     if (existing["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL:
         c.close()
         return jsonify({"error": "The Master System Admin account cannot be deleted"}), 403
-    if is_tenant_admin(u):
-        if existing["role"] == "admin":
-            c.close()
-            return jsonify({"error": "Only the master administrator can manage admin accounts"}), 403
-        # Same ownership rule as editing: an account of an organization on the
-        # care list, or a customer-less staff account under this tenant's care.
-        # A LabSynch-wide engineer or another tenant's staff is not theirs.
-        scope = tenant_scope(u, c)
-        in_care = (existing["customer_id"] in (scope or []) if existing["customer_id"]
-                   else _staff_in_tenant_care(c, u["id"], existing, scope))
-        if not in_care:
-            c.close()
-            return jsonify({"error": "Not authorised — user belongs to an organization you do not care for"}), 403
     email = (existing["email"] or "").strip().lower()
     if email == FORMER_USER_EMAIL:
         c.close()
         return jsonify({"error": "The 'Former user' placeholder is a system account and cannot be deleted"}), 400
-    # The master may delete ANY user (tenant admins: any non-admin in their
-    # scope). Deleting never cascades: every record that references the user is
-    # UNLINKED (nullable reference columns set to NULL) — tickets, equipment,
-    # PM schedules, care lists and history are all kept; immutable history
-    # references move to the "Former user" placeholder.
+    # The master may delete ANY user. Deleting never cascades: every record
+    # that references the user is UNLINKED (nullable reference columns set to
+    # NULL) — tickets, equipment, PM schedules, care lists and history are all
+    # kept; immutable history references move to the "Former user" placeholder.
     former = c.execute("SELECT id FROM users WHERE lower(email)=?", (FORMER_USER_EMAIL,)).fetchone()
     if former:
         former_id = former["id"]

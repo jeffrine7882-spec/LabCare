@@ -100,7 +100,7 @@ jobs:
           cd server
           for t in test_pg_schema_syntax test_pending_care test_ticket_feedback \
                    test_audit_history test_equipment_categories test_shared_asset \
-                   test_tenant_admin_users; do
+                   test_tenant_admin_users test_staff_customer_links test_alert_audience; do
             echo "— $t"
             env -u LABCARE_DATABASE_URL python3 -m unittest "$t"
           done
