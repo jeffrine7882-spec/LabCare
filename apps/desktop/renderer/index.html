@@ -18,13 +18,14 @@
   .primary { background:var(--teal); }
   .primary:disabled { opacity:.6; cursor:default; }
   .danger { background:#dc2626; }
+  .ghost { background:#e2f2f0; color:var(--teal-dark); }
   .err { color:#dc2626; font-size:13px; margin-top:4px; }
   .muted { color:var(--soft); font-size:13px; }
   .row { display:flex; align-items:center; justify-content:space-between; }
   .pill { background:#c7f2ec; color:var(--teal-dark); font-weight:700; font-size:12px; padding:4px 10px; border-radius:999px; }
   .foot { margin-top:auto; text-align:center; font-size:12px; color:var(--soft); padding-top:14px; line-height:1.6; }
-  .tabbar { display:flex; gap:6px; margin-bottom:14px; }
-  .tab { flex:1; text-align:center; font-size:13px; font-weight:700; padding:9px 0; border-radius:10px; color:var(--teal); background:#e2f2f0; cursor:pointer; border:0; }
+  .tabbar { display:flex; gap:4px; margin-bottom:14px; }
+  .tab { flex:1; text-align:center; font-size:12px; font-weight:700; padding:9px 0; border-radius:10px; color:var(--teal); background:#e2f2f0; cursor:pointer; border:0; margin:0; }
   .tab.active { background:var(--teal); color:#fff; }
   .notif { padding:10px 0; border-bottom:1px solid var(--border); cursor:pointer; }
   .notif:last-child { border-bottom:0; }
@@ -38,58 +39,104 @@
   .empty { text-align:center; color:var(--soft); font-size:14px; padding:18px 0; }
   .hdr-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
   .linkbtn { background:none; border:0; color:var(--teal); font-weight:700; font-size:13px; cursor:pointer; width:auto; margin:0; padding:0; }
+  .url { font-size:12px; color:#94a3b8; text-align:center; margin-top:8px; word-break:break-all; }
+  /* The site link is a real <a> as well as a button, so it still works if the
+     IPC bridge is unavailable — the window is never a dead end. */
+  a.sitelink { display:block; width:100%; padding:13px; font-size:14px; font-weight:700;
+               border-radius:12px; text-align:center; text-decoration:none;
+               background:var(--teal); color:#fff; margin-top:10px; }
 </style>
 </head>
 <body>
   <div class="wrap" id="root"></div>
   <script>
     const L = window.labcare;
+    // Hardcoded on purpose: this is the last-resort link when the bridge is gone.
+    const SITE = (L && L.siteUrl) || "https://labcare.insforge.site/";
 
     function esc(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+      return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
     }
 
+    /** Opens the LabCare site in its own window, browser as the fallback. */
+    async function openSite() {
+      try {
+        if (L && L.openSite) { const r = await L.openSite(); if (r && r.ok === false) return openSiteExternal(); return; }
+      } catch (e) {}
+      return openSiteExternal();
+    }
+    window.openSite = openSite;
+
+    async function openSiteExternal() {
+      try { if (L && L.openSiteExternal) return await L.openSiteExternal(); } catch (e) {}
+      // No bridge at all: let the browser handle it (main process routes this).
+      window.location.href = SITE;
+    }
+    window.openSiteExternal = openSiteExternal;
+
     function tabbar(active) {
-      const tabs = [["home","Home"],["notifs","Notifications"],["sound","Sound"]];
+      const tabs = [["home","Home"],["site","Site"],["notifs","Notifications"],["sound","Sound"]];
       return `<div class="tabbar">` + tabs.map(([k,label]) =>
         `<button class="tab ${k===active?"active":""}" onclick="show('${k}')">${label}</button>`).join("") + `</div>`;
     }
 
     async function show(view) {
-      const root = document.getElementById("root");
       if (view === "home") return home();
+      if (view === "site") return site();
       if (view === "sound") return sound();
       if (view === "notifs") return notifs();
     }
     window.show = show;
 
-    function home() {
-      const root = document.getElementById("root");
-      root.innerHTML = `
+    function shell(title, tag, active, body, foot) {
+      document.getElementById("root").innerHTML = `
         <div class="brand">LabCare</div>
-        <div class="tag">Desktop alerts</div>
-        ${tabbar("home")}
+        <div class="tag">${esc(tag)}</div>
+        ${tabbar(active)}
+        ${body}
+        <div class="foot">${foot || ""}</div>`;
+    }
+
+    function home() {
+      shell("Home", "Desktop alerts", "home", `
         <div class="card">
           <div class="row"><span class="muted">Signed in as</span><span class="pill">● On</span></div>
-          <div class="notif"><div class="t" style="font-weight:700">${esc(window.myName || "—")}</div></div>
+          <div class="notif"><div class="t" style="font-weight:700">${esc(window.myName || window.myEmail || "—")}</div></div>
         </div>
-        <div class="card">
+        <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener"
+           onclick="openSite(); return false;">🔬 Open the LabCare site</a>
+        <div class="card" style="margin-top:12px">
           <div class="notif"><div class="t">🔔 Rings for every new bell notification</div></div>
           <div class="notif"><div class="t">▶ Opens the web app when you click an alert</div></div>
           <div class="notif"><div class="t">🖥️ Lives in the system tray — close this window anytime</div></div>
           <div class="notif"><div class="t">🚀 Starts automatically with Windows</div></div>
         </div>
-        <button class="danger" onclick="signOut()">Sign out</button>
-        <div class="foot">You can close this window — LabCare keeps running in the tray.</div>
-      `;
+        <button class="danger" onclick="signOut()">Sign out</button>`,
+        `You can close this window — LabCare keeps running in the tray.`);
     }
     window.home = home;
 
+    /** The Site tab: the LabCare web app itself, opened inside this app. */
+    function site() {
+      shell("Site", "The LabCare web app", "site", `
+        <div class="card">
+          <div class="notif"><div class="t">🔬 Complaints, breakdowns, equipment, PM and reports</div></div>
+          <div class="notif"><div class="t">🔑 Opens signed in with this app's account</div></div>
+        </div>
+        <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener"
+           onclick="openSite(); return false;">Open the LabCare site</a>
+        <button class="ghost" onclick="openSiteExternal()">Open in my web browser</button>
+        <div class="url">${esc(SITE)}</div>`,
+        `If the site window doesn't appear, use "Open in my web browser".`);
+      openSite(); // opening the tab takes you straight there
+    }
+    window.site = site;
+
     async function notifs() {
-      const root = document.getElementById("root");
-      root.innerHTML = `<div class="brand">LabCare</div><div class="tag">Notifications</div>${tabbar("notifs")}
-        <div class="card"><div class="empty">Loading…</div></div><div class="foot"></div>`;
-      const r = await L.listNotifs();
+      shell("Notifications", "Notifications", "notifs",
+        `<div class="card"><div class="empty">Loading…</div></div>`, "");
+      let r = null;
+      try { r = await L.listNotifs(); } catch (e) { r = null; }
       const items = (r && r.ok) ? r.items : null;
       let body;
       if (!items) {
@@ -104,28 +151,27 @@
               <div class="m">${esc(n.created_at || "")}</div>
             </div>`).join("");
       }
-      root.innerHTML = `<div class="brand">LabCare</div><div class="tag">Notifications</div>${tabbar("notifs")}
-        <div class="card">${body}</div>
-        <div class="foot">Tap a notification to mark it read.</div>`;
+      shell("Notifications", "Notifications", "notifs", `<div class="card">${body}</div>`,
+        `Tap a notification to mark it read.`);
     }
     window.notifs = notifs;
 
     async function mark(id, el) {
-      await L.markRead(id);
+      try { await L.markRead(id); } catch (e) {}
       if (el) { el.classList.remove("unread"); el.classList.add("read"); }
     }
     window.mark = mark;
 
     async function markAll() {
-      await L.markRead(null);
+      try { await L.markRead(null); } catch (e) {}
       notifs();
     }
     window.markAll = markAll;
 
     async function sound() {
-      const current = await L.getSound();
-      const root = document.getElementById("root");
-      root.innerHTML = `<div class="brand">LabCare</div><div class="tag">Alert sound</div>${tabbar("sound")}
+      let current = "chime";
+      try { current = await L.getSound(); } catch (e) {}
+      shell("Sound", "Alert sound", "sound", `
         <div class="card">
           <div class="muted" style="margin-bottom:4px">The sound this computer plays when a new alert arrives.</div>
           ${["chime","bell","beep","alarm"].map((id) => `
@@ -134,32 +180,33 @@
               <span style="font-size:14px;font-weight:600">${({chime:"Chime (default)",bell:"Bell",beep:"Triple beep",alarm:"Siren"})[id]}</span>
             </label>`).join("")}
         </div>
-        <button class="primary" onclick="previewSound()">▶ Test sound</button>
-        <div class="foot">The same sound is used for tray alerts.</div>`;
+        <button class="primary" onclick="previewSound()">▶ Test sound</button>`,
+        `The same sound is used for tray alerts.`);
     }
     window.sound = sound;
 
     async function pickSound(id) {
-      await L.setSound(id);
+      try { await L.setSound(id); } catch (e) {}
     }
     window.pickSound = pickSound;
 
     async function previewSound() {
-      const current = await L.getSound();
-      await L.testSound(current);
+      let current = "chime";
+      try { current = await L.getSound(); } catch (e) {}
+      try { await L.testSound(current); } catch (e) {}
     }
     window.previewSound = previewSound;
 
     async function signOut() {
-      await L.signOut();
+      try { await L.signOut(); } catch (e) {}
       window.myName = "";
+      window.myEmail = "";
       loginScreen();
     }
     window.signOut = signOut;
 
     function loginScreen() {
-      const root = document.getElementById("root");
-      root.innerHTML = `
+      document.getElementById("root").innerHTML = `
         <div class="brand">LabCare</div>
         <div class="tag">Windows desktop alerts — rings for every bell alert</div>
         <div class="card">
@@ -170,23 +217,80 @@
           <input id="password" type="password" autocomplete="current-password" placeholder="••••••••">
           <button class="primary" id="btn">Sign in &amp; enable alerts</button>
         </div>
+        <a class="sitelink ghost" style="color:#115e59" href="${esc(SITE)}" target="_blank" rel="noopener"
+           onclick="openSite(); return false;">🔬 Just take me to the LabCare site</a>
         <div class="foot">Uses the same account as the LabCare web app.<br>Runs in the system tray and starts with Windows.</div>
       `;
-      document.getElementById("btn").addEventListener("click", async () => {
-        const btn = document.getElementById("btn");
+      const btn = document.getElementById("btn");
+      const go = async () => {
+        if (!L || !L.signIn) {
+          document.getElementById("err").textContent =
+            "This install is incomplete — use the link below to open the LabCare site.";
+          return;
+        }
         btn.disabled = true; btn.textContent = "Signing in…";
-        const r = await L.signIn(document.getElementById("email").value.trim(), document.getElementById("password").value);
-        if (r && r.ok) { window.myName = r.name || ""; return home(); }
-        if (r && r.pending) { document.getElementById("err").textContent = "Your account is awaiting administrator approval."; }
-        else { document.getElementById("err").textContent = (r && r.error) ? r.error : "Sign in failed."; }
+        let r = null;
+        try {
+          r = await L.signIn(document.getElementById("email").value.trim(),
+                             document.getElementById("password").value);
+        } catch (e) { r = null; }
+        if (r && r.ok) {
+          window.myName = r.name || "";
+          window.myEmail = document.getElementById("email").value.trim();
+          return home();
+        }
+        const err = document.getElementById("err");
+        if (r && r.pending) err.textContent = "Your account is awaiting administrator approval.";
+        else err.textContent = (r && r.error) ? r.error : "Sign in failed.";
         btn.disabled = false; btn.textContent = "Sign in & enable alerts";
+      };
+      btn.addEventListener("click", go);
+      document.getElementById("password").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") go();
       });
     }
+    window.loginScreen = loginScreen;
+
+    /**
+     * Shown only if the preload bridge never arrived. It still links to the
+     * LabCare site, because a blank window is never an acceptable outcome.
+     */
+    function bridgeMissing() {
+      document.getElementById("root").innerHTML = `
+        <div class="brand">LabCare</div>
+        <div class="tag">Desktop alerts</div>
+        <div class="card">
+          <div class="muted">This window couldn't load its own controls, but the
+          LabCare site still works.</div>
+        </div>
+        <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener">🔬 Open the LabCare site</a>
+        <button class="ghost" onclick="location.reload()">Reload this window</button>
+        <div class="foot">${esc(SITE)}</div>`;
+    }
+
+    // Paint something immediately — the window must never show a blank frame.
+    document.getElementById("root").innerHTML =
+      `<div class="brand">LabCare</div><div class="tag">Starting…</div>`;
 
     (async () => {
-      const s = await L.getState();
-      if (s && s.signedIn) home();
-      else loginScreen();
+      try {
+        if (!L) return bridgeMissing();
+        const s = await L.getState();
+        if (s && s.signedIn) {
+          window.myName = s.name || "";
+          window.myEmail = s.email || "";
+          home();
+        } else {
+          loginScreen();
+        }
+        // Reflect a sign-out that happened from the tray menu.
+        if (L.onState) L.onState((st) => {
+          if (st && !st.signedIn) { window.myName = ""; window.myEmail = ""; loginScreen(); }
+          else if (st && st.signedIn) { window.myName = st.name || ""; window.myEmail = st.email || ""; home(); }
+        });
+      } catch (e) {
+        bridgeMissing();
+      }
     })();
   </script>
 </body>

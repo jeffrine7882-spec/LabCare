@@ -110,6 +110,19 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # Gate: the 1.1.0 installer was built from an allowlist that silently
+      # dropped bubble.html/bubble-preload.js, so the installed app showed a
+      # blank alert bubble and had no working link to the site. Both checks run
+      # in plain Node (no Electron binary, no display) and fail the build rather
+      # than shipping another installer that cannot reach labcare.insforge.site.
+      - name: Verify every runtime file is packaged
+        working-directory: apps/desktop
+        run: npm run verify:package
+
+      - name: Smoke test the app (window shows, Site tab opens the site)
+        working-directory: apps/desktop
+        run: node smoke-test.js
+
       - name: Build the Windows installer (NSIS)
         working-directory: apps/desktop
         run: npx electron-builder --win nsis --publish never
@@ -150,7 +163,7 @@ jobs:
           test -s Release/android/LabCare-Alerts-v1.3.apk
           exe="$(find Release/windows -maxdepth 1 -name '*.exe' -type f | head -1)"
           [ -n "$exe" ] || { echo "::error::no exe artifact downloaded"; exit 1; }
-          [ "$exe" = "Release/windows/LabCare-Alerts-Setup-1.1.0.exe" ] || mv "$exe" "Release/windows/LabCare-Alerts-Setup-1.1.0.exe"
+          [ "$exe" = "Release/windows/LabCare-Alerts-Setup-1.2.0.exe" ] || mv "$exe" "Release/windows/LabCare-Alerts-Setup-1.2.0.exe"
           ls -la Release/android Release/windows
 
       - name: Write Release/README.md
@@ -177,7 +190,7 @@ jobs:
           Note: each CI build uses a fresh signing key, so uninstall any older CI
           build before installing a new one.
 
-          ## Windows — windows/LabCare-Alerts-Setup-1.1.0.exe
+          ## Windows — windows/LabCare-Alerts-Setup-1.2.0.exe
           1. Run the installer. SmartScreen will warn about an "unrecognized app"
              (self-signed) — choose **More info → Run anyway**.
           2. It installs under %LOCALAPPDATA%\\LabCare Alerts, adds Start-menu +
@@ -186,6 +199,17 @@ jobs:
              notification floats an always-on-top bubble banner (top-right of
              your screen) with the alert sound + dismiss/open buttons, plus a
              Windows notification. Clicking either opens the web app.
+          4. The **Site** tab opens the LabCare web app itself
+             (https://labcare.insforge.site) inside the app, already signed in
+             with the account you used here — as does the **Open the LabCare
+             site** button on Home and the tray menu. If the site cannot load
+             you get a page with **Retry** and **Open the site in my browser**,
+             never a blank window.
+
+          This is 1.2.0. In 1.1.0 the installer left out the alert-bubble files
+          and never showed its window, so the EXE opened a blank page with no
+          way through to the LabCare site. Uninstall 1.1.0 first (Settings →
+          Apps → LabCare Alerts), then install this build.
 
           ## Web app (no install)
           https://labcare.insforge.site — also installable as a PWA

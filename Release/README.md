@@ -20,6 +20,19 @@ Note: each CI build uses a fresh signing key, so uninstall any older CI
 build before installing a new one.
 
 ## Windows — windows/LabCare-Alerts-Setup-1.1.0.exe
+
+> **Do not use this 1.1.0 build.** Its installer left out the alert-bubble
+> files (`bubble.html`, `bubble-preload.js`) and its window was created hidden
+> with nothing ever showing it, so the EXE opened a **blank page** and had no
+> working way through to the LabCare site. **1.2.0** fixes this: the window
+> shows on launch, a **Site** tab opens https://labcare.insforge.site inside
+> the app (already signed in), and every failure path offers **Retry** /
+> **Open the site in my browser** instead of a blank page.
+>
+> 1.2.0 is built by the *Build release binaries* workflow on a `[release]`
+> commit and replaces this file. Until it lands here, use the web app below —
+> it is the same product and needs no install.
+
 1. Run the installer. SmartScreen will warn about an "unrecognized app"
    (self-signed) — choose **More info → Run anyway**.
 2. It installs under %LOCALAPPDATA%\LabCare Alerts, adds Start-menu +
@@ -28,6 +41,8 @@ build before installing a new one.
    notification floats an always-on-top bubble banner (top-right of
    your screen) with the alert sound + dismiss/open buttons, plus a
    Windows notification. Clicking either opens the web app.
+4. The **Site** tab (1.2.0+) opens the LabCare web app inside the app;
+   Home and the tray menu also offer **Open LabCare site**.
 
 ## Web app (no install)
 https://labcare.insforge.site — also installable as a PWA
