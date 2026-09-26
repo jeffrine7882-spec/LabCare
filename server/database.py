@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS customers (
     phone TEXT DEFAULT '',
     address TEXT DEFAULT '',
     city TEXT DEFAULT '',
+    pending_care INTEGER DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -107,6 +108,16 @@ CREATE TABLE IF NOT EXISTS customers (
 -- stored on users.customer_id; extra customers are linked here. Together they
 -- form the admin's full scope (their "care list").
 CREATE TABLE IF NOT EXISTS admin_customer_links (
+    admin_id INTEGER NOT NULL,
+    customer_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (admin_id, customer_id)
+);
+
+-- A tenant admin who says a join-request organization is not theirs is
+-- recorded here, so the request stays visible to the other tenant admins and
+-- to the master instead of disappearing for everyone.
+CREATE TABLE IF NOT EXISTS pending_care_declines (
     admin_id INTEGER NOT NULL,
     customer_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
@@ -420,6 +431,19 @@ def _sqlite_migrate(c):
     # those live in audit_logs, which is a separate table.
     c.execute("DROP TABLE IF EXISTS attachments")
 
+    # An organization created by a join request stays "pending care" until a
+    # tenant admin claims it or says it is not theirs. Declines are recorded
+    # per admin so the request stays visible to the others and to the master.
+    try:
+        c.execute("ALTER TABLE customers ADD COLUMN pending_care INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    c.execute("CREATE TABLE IF NOT EXISTS pending_care_declines ("
+              "admin_id INTEGER NOT NULL, "
+              "customer_id INTEGER NOT NULL, "
+              "created_at TEXT NOT NULL, "
+              "PRIMARY KEY (admin_id, customer_id))")
+
     _sqlite_migrate_roles(c)
 
 
@@ -604,10 +628,21 @@ CREATE TABLE IF NOT EXISTS customers (
     phone TEXT DEFAULT '',
     address TEXT DEFAULT '',
     city TEXT DEFAULT '',
+    pending_care INTEGER DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS admin_customer_links (
+    admin_id BIGINT NOT NULL,
+    customer_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (admin_id, customer_id)
+);
+
+-- A tenant admin who says a join-request organization is not theirs is
+-- recorded here, so the request stays visible to the other tenant admins and
+-- to the master instead of disappearing for everyone.
+CREATE TABLE IF NOT EXISTS pending_care_declines (
     admin_id BIGINT NOT NULL,
     customer_id BIGINT NOT NULL,
     created_at TEXT NOT NULL,
@@ -1007,6 +1042,16 @@ def _pg_migrate(c):
     # The audit trail ("Added file" history entries) is deliberately kept —
     # those live in audit_logs, which is a separate table.
     c.execute("DROP TABLE IF EXISTS attachments")
+
+    # An organization created by a join request stays "pending care" until a
+    # tenant admin claims it or says it is not theirs. Declines are recorded
+    # per admin so the request stays visible to the others and to the master.
+    c.execute("ALTER TABLE customers ADD COLUMN IF NOT EXISTS pending_care INTEGER DEFAULT 0")
+    c.execute("CREATE TABLE IF NOT EXISTS pending_care_declines ("
+              "admin_id BIGINT NOT NULL, "
+              "customer_id BIGINT NOT NULL, "
+              "created_at TEXT NOT NULL, "
+              "PRIMARY KEY (admin_id, customer_id))")
 
 
 
