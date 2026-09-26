@@ -42,56 +42,55 @@ function withToken(path, token) {
 
 const API = {
   token: store.get("labcare_token"),
-  async req(method, path, body) {
+  async req(method, path, body, options = {}) {
     const headers = { "Content-Type": "application/json" };
     if (this.token) headers["Authorization"] = "Bearer " + this.token;
-    // The backend may be waking from scale-to-zero (a few seconds). Retry
-    // transient failures a couple of times so a cold-start blip never surfaces
-    // as a full-page "Couldn't load …" error.
-    let res, lastErr;
-    let attempts = (method === "GET") ? 3 : 1;  // never repeat writes
+    const attempts = method === "GET" ? (options.attempts || 3) : 1;
     for (let i = 0; i < attempts; i++) {
+      const controller = new AbortController();
+      // Bound both the response headers AND body. A stalled API must never
+      // leave startup (or a sign-in button) waiting indefinitely.
+      const timer = setTimeout(() => controller.abort(), options.timeoutMs || 15000);
+      let failure;
       try {
-        res = await fetch(withToken(path), {
-          method,
-          headers,
-          credentials: "same-origin", // send the auth cookie (belt & suspenders)
+        const res = await fetch(withToken(path), {
+          method, headers, credentials: "same-origin",
           body: body ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
         });
-        lastErr = null;
-        // only retry on gateway blips / unavailable-backend statuses
-        if (!(res.status === 502 || res.status === 503 || res.status === 504) || i === attempts - 1) {
-          break;
+        if ([502, 503, 504].includes(res.status)) {
+          throw Object.assign(new Error("The LabCare server is temporarily unavailable. Please try again shortly."), { status: res.status });
         }
+        let data;
+        if ((res.headers.get("content-type") || "").includes("application/json")) {
+          data = await res.json();
+        } else {
+          throw Object.assign(new Error("Unexpected response from the LabCare server (" + res.status + "). Please try again."), { status: res.status });
+        }
+        if (!res.ok) {
+          throw Object.assign(new Error((data && typeof data.error === "string" && data.error) || "Request failed (" + res.status + ")"), { status: res.status });
+        }
+        return data;
       } catch (e) {
-        lastErr = e;
+        if (controller.signal.aborted) {
+          failure = new Error("The LabCare server took too long to respond. Please try again shortly.");
+        } else if (e instanceof SyntaxError) {
+          failure = new Error("Invalid response from the LabCare server. Please try again shortly.");
+        } else if (e.status) {
+          failure = e;
+        } else {
+          failure = new Error("Cannot reach the LabCare server. Check your connection and try again.");
+        }
+        const retryable = !e.status || [502, 503, 504].includes(e.status);
+        // Never repeat writes, and don't retry authentication/validation errors.
+        if (!retryable || i === attempts - 1) throw failure;
+      } finally {
+        clearTimeout(timer);
       }
       await new Promise((r) => setTimeout(r, 600 * (i + 1)));
     }
-    if (!res) {
-      throw new Error(lastErr ? "Cannot reach the server. Check your internet connection." : "Backend not connected.");
-    }
-    // 502/503/504 = the frontend is up but the API backend behind it is not
-    // (e.g. an unset/wrong netlify.toml /api proxy target).
-    if (!res.ok || res.status >= 500) {
-      if (res.status === 502 || res.status === 503 || res.status === 504) {
-        throw new Error("Backend not connected (error " + res.status + "). The API server is unreachable — check that the /api proxy points to a running backend.");
-      }
-    }
-    let data = {};
-    const ct = (res.headers.get("content-type") || "");
-    if (ct.includes("application/json")) {
-      try { data = await res.json(); } catch (e) { /* keep {} */ }
-    } else {
-      // Netlify error page or proxy HTML — don't dump it into the toast
-      data = { error: "Unexpected response from server (" + res.status + ")." };
-    }
-    if (!res.ok) {
-      throw new Error((typeof data.error === "string" && data.error) || "Request failed (" + res.status + ")");
-    }
-    return data;
   },
-  get(p) { return this.req("GET", p); },
+  get(p, options) { return this.req("GET", p, undefined, options); },
   post(p, b) { return this.req("POST", p, b); },
   put(p, b) { return this.req("PUT", p, b); },
   patch(p, b) { return this.req("PATCH", p, b); },
@@ -287,6 +286,8 @@ async function login(email, password) {
   store.set("labcare_token", data.token);   // best effort; the HttpOnly cookie
                                             // is the reliable fallback path
   state.user = data.user;
+  $("#startupStatus").textContent = "";
+  $("#startupRetry").classList.add("hidden");
 }
 
 function logout() {
@@ -3949,6 +3950,7 @@ $("#joinForm").addEventListener("submit", async (e) => {
 // ---------------------------------------------------------------- Event wiring
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (bootInProgress) return;
   $("#loginError").classList.add("hidden");
   const note = $("#joinNote");
   note.textContent = "";
@@ -4021,55 +4023,62 @@ Object.assign(window, {
 
 const BUILD_VERSION = "49";
 
-async function boot() {
-  // Bust stale WebView or browser caches automatically if a newer version was deployed
+async function checkVersion() {
+  // Advisory only: a version endpoint outage must not block sign-in/session
+  // restoration. Keep BUILD_VERSION aligned with the backend release number.
   try {
-    const ver = await API.get("/api/version");
+    const ver = await API.get("/api/version", { attempts: 1, timeoutMs: 8000 });
     if (ver && ver.version && ver.version !== BUILD_VERSION) {
       if (!sessionStorage.getItem("reloaded_for_version_" + ver.version)) {
         sessionStorage.setItem("reloaded_for_version_" + ver.version, "1");
-        location.href = location.pathname + "?_t=" + Date.now();
-        return;
+        const url = new URL(location.href);
+        url.searchParams.set("_t", Date.now());
+        location.replace(url.href);
       }
     }
-  } catch (e) { /* ignore */ }
-
-  // Try to restore a session. Even without a stored token, the HttpOnly auth
-  // cookie may still be valid, so always ask the server who we are.
-  try {
-    state.user = await API.get("/api/me");
-  } catch (e) {
-    API.token = null;
-    store.remove("labcare_token");
-  }
-  render();
-  booted = true;
-  if (state.user) {
-    refreshBell(true); // baseline sync — no sound on login
-    syncPushAlerts();  // re-register any existing desktop-alert subscription
-  }
-
-  // Detect a Netlify-style split deployment where the frontend is live but the
-  // /api proxy target is missing or down — show a clear banner instead of a
-  // mysterious "cannot sign in". Only probe when not signed in.
-  if (!state.user && location.hostname.includes("netlify.app")) {
-    try {
-      const r = await fetch("/api/ping", { cache: "no-store" });
-      if (!r.ok) showBackendBanner();
-    } catch (e) {
-      showBackendBanner();
-    }
-  }
+  } catch (e) { /* version checks are best effort */ }
 }
 
-function showBackendBanner() {
-  const ls = $("#loginScreen");
-  if (!ls || ls.querySelector(".backend-warn")) return;
-  const bar = document.createElement("div");
-  bar.className = "backend-warn";
-  bar.innerHTML = `<b>⚠️ Backend not connected.</b> This site is serving the frontend only — the API server is unreachable (login will fail). Check that <code>netlify.toml</code>'s <code>/api/*</code> proxy points to a running HTTPS backend.`;
-  ls.prepend(bar);
+async function boot() {
+  if (bootInProgress) return;
+  bootInProgress = true;
+  const status = $("#startupStatus");
+  const retry = $("#startupRetry");
+  const loginBtn = $("#loginBtn");
+  const joinBtn = $("#showJoinBtn");
+  status.textContent = "Connecting to LabCare…";
+  retry.classList.add("hidden");
+  loginBtn.disabled = joinBtn.disabled = true;
+  render(); // paint before any network request, including for saved sessions
+  let startupError = null;
+  try {
+    const user = await API.get("/api/me", { attempts: 1, timeoutMs: 8000 });
+    if (!user || !user.id || !user.role) throw new Error("Invalid session response from the LabCare server. Please try again.");
+    state.user = user;
+  } catch (e) {
+    if (e.status === 401) {
+      // Only an explicit expired/invalid session should discard the token.
+      API.token = null;
+      store.remove("labcare_token");
+    } else {
+      startupError = e;
+    }
+  } finally {
+    status.textContent = startupError ? startupError.message : "";
+    retry.classList.toggle("hidden", !startupError);
+    loginBtn.disabled = joinBtn.disabled = false;
+    bootInProgress = false;
+    booted = true;
+    render();
+  }
+  if (state.user) {
+    refreshBell(true);
+    syncPushAlerts();
+  }
+  if (!startupError) void checkVersion();
 }
 
 let booted = false;
+let bootInProgress = false;
+$("#startupRetry").addEventListener("click", boot);
 boot();

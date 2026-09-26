@@ -8,7 +8,7 @@
 # ordinary push):
 #   * a push to the Arena working branch or main whose commit message carries
 #     the deploy tag (see the `if:` on the job below)
-#   * manual "Run workflow" (Actions tab)
+#   * manual "Run workflow" (Actions tab); choose frontend for a static-only fix
 #
 # Required repository secret:
 #   INSFORGE_API_KEY   — the InsForge project API key (ik_…). The InsForge CLI
@@ -30,6 +30,15 @@ on:
   push:
     branches: [arena/01a0d728-labcare, arena/01a0d8b3-labcare, arena/01a0d940-labcare, 'arena/**', main]
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'What to deploy (frontend leaves compute and the database unchanged)'
+        type: choice
+        options:
+          - all
+          - frontend
+        default: all
+        required: true
 
 permissions:
   contents: read
@@ -64,6 +73,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Test frontend startup and API failure recovery
+        run: node --test scripts/test_frontend_startup.js
+
       - name: Check the INSFORGE_API_KEY secret is configured
         env:
           K: ${{ secrets.INSFORGE_API_KEY }}
@@ -75,6 +87,7 @@ jobs:
           echo "INSFORGE_API_KEY is set (value not shown)."
 
       - name: Install flyctl (needed for the compute source build)
+        if: inputs.target != 'frontend'
         run: |
           curl -fsSL https://fly.io/install.sh -o /tmp/fly_install.sh
           FLYCTL_INSTALL="$HOME/.fly" sh /tmp/fly_install.sh >/dev/null
@@ -89,6 +102,7 @@ jobs:
           test -s .insforge/project.json
 
       - name: Write .env.production (DSN fetched from InsForge, never echoed)
+        if: inputs.target != 'frontend'
         env:
           LABCARE_VAPID_PRIVATE: ${{ secrets.LABCARE_VAPID_PRIVATE }}
           LABCARE_VAPID_PUBLIC: ${{ secrets.LABCARE_VAPID_PUBLIC }}
@@ -112,12 +126,14 @@ jobs:
           echo "wrote .env.production ($(wc -l < .env.production) entries; contents not echoed)"
 
       - name: Deploy backend (InsForge compute — remote build)
+        if: inputs.target != 'frontend'
         run: |
           npx --yes @insforge/cli compute deploy . \
             --name "$SERVICE_NAME" --port "$SERVICE_PORT" --region "$FLY_REGION" \
             --env-file .env.production --always-on
 
       - name: Health check — backend
+        if: inputs.target != 'frontend'
         run: |
           for i in $(seq 1 30); do
             if out="$(curl -fsS -m 60 "$BACKEND_ENDPOINT/api/health" 2>/dev/null)"; then
@@ -132,5 +148,6 @@ jobs:
 
       - name: Health check — frontend
         run: |
-          curl -fsS -m 60 -o /dev/null "$SITE_URL/"
+          curl --retry 3 --retry-delay 5 --retry-all-errors -fsS -m 30 -o /dev/null "$SITE_URL/"
+          curl --retry 3 --retry-delay 5 --retry-all-errors -fsS -m 30 -o /dev/null "$SITE_URL/app.js?v=49.1"
           echo "frontend live — $SITE_URL"
