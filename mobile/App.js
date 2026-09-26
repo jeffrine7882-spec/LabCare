@@ -39,8 +39,8 @@ import * as Notifications from "expo-notifications";
 const API_BASE = Constants.expoConfig?.extra?.apiBase || "https://labcare.insforge.site";
 
 const COLORS = {
-  teal: "#b91c1c",
-  tealDark: "#115e59",
+  #b91c1c: "#b91c1c",
+  #b91c1cDark: "#7f1d1d",
   ink: "#111827",
   inkSoft: "#6b7280",
   bg: "#f3f5f9",
@@ -184,7 +184,7 @@ export default function App() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={COLORS.teal} size="large" />
+        <ActivityIndicator color={COLORS.#b91c1c} size="large" />
         <Text style={styles.muted}>Loading LabSynch…</Text>
       </View>
     );
@@ -217,7 +217,7 @@ export default function App() {
               <Switch
                 value={alerts}
                 onValueChange={toggleAlerts}
-                trackColor={{ false: "#d1d5db", true: COLORS.teal }}
+                trackColor={{ false: "#d1d5db", true: COLORS.#b91c1c }}
                 thumbColor="#fff"
               />
             </View>
@@ -232,7 +232,7 @@ export default function App() {
                   {Device.isDevice ? "" : " (Emulator/Expo Go: push may not arrive)"}.
                 </Text>
               </View>
-              <Text style={{ color: COLORS.teal, fontSize: 22 }}>🔔</Text>
+              <Text style={{ color: COLORS.#b91c1c, fontSize: 22 }}>🔔</Text>
             </View>
           </View>
 
@@ -301,7 +301,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: COLORS.bg },
   container: { padding: 20, flexGrow: 1 },
   header: { alignItems: "center", marginBottom: 20, marginTop: 8 },
-  appName: { fontSize: 34, fontWeight: "800", color: COLORS.teal, letterSpacing: 0.5 },
+  appName: { fontSize: 34, fontWeight: "800", color: COLORS.#b91c1c, letterSpacing: 0.5 },
   appTag: { fontSize: 13, color: COLORS.inkSoft, marginTop: 4, textAlign: "center" },
   card: {
     backgroundColor: COLORS.card,
@@ -312,7 +312,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   hello: { fontSize: 18, fontWeight: "700", color: COLORS.ink },
-  role: { fontSize: 13, color: COLORS.teal, marginTop: 4, fontWeight: "600" },
+  role: { fontSize: 13, color: COLORS.#b91c1c, marginTop: 4, fontWeight: "600" },
   muted: { fontSize: 14, color: COLORS.inkSoft, marginTop: 2 },
   row: { flexDirection: "row", alignItems: "center" },
   rowTitle: { fontSize: 16, fontWeight: "700", color: COLORS.ink },
@@ -328,7 +328,7 @@ const styles = StyleSheet.create({
     color: COLORS.ink,
   },
   primaryBtn: {
-    backgroundColor: COLORS.teal,
+    backgroundColor: COLORS.#b91c1c,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: "center",

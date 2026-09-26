@@ -104,7 +104,7 @@
           <div class="notif"><div class="t" style="font-weight:700">${esc(window.myName || window.myEmail || "—")}</div></div>
         </div>
         <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener"
-           onclick="openSite(); return false;">🔬 Open the LabSynch site</a>
+           onclick="openSite(); return false;"> Open the LabSynch site</a>
         <div class="card" style="margin-top:12px">
           <div class="notif"><div class="t">🔔 Rings for every new bell notification</div></div>
           <div class="notif"><div class="t">▶ Opens the web app when you click an alert</div></div>
@@ -120,7 +120,7 @@
     function site() {
       shell("Site", "The LabSynch web app", "site", `
         <div class="card">
-          <div class="notif"><div class="t">🔬 Complaints, breakdowns, equipment, PM and reports</div></div>
+          <div class="notif"><div class="t"> Complaints, breakdowns, equipment, PM and reports</div></div>
           <div class="notif"><div class="t">🔑 Opens signed in with this app's account</div></div>
         </div>
         <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener"
@@ -218,7 +218,7 @@
           <button class="primary" id="btn">Sign in &amp; enable alerts</button>
         </div>
         <a class="sitelink ghost" style="color:#7f1d1d" href="${esc(SITE)}" target="_blank" rel="noopener"
-           onclick="openSite(); return false;">🔬 Just take me to the LabSynch site</a>
+           onclick="openSite(); return false;"> Just take me to the LabSynch site</a>
         <div class="foot">Uses the same account as the LabSynch web app.<br>Runs in the system tray and starts with Windows.</div>
       `;
       const btn = document.getElementById("btn");
@@ -263,7 +263,7 @@
           <div class="muted">This window couldn't load its own controls, but the
           LabSynch site still works.</div>
         </div>
-        <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener">🔬 Open the LabSynch site</a>
+        <a class="sitelink" href="${esc(SITE)}" target="_blank" rel="noopener"> Open the LabSynch site</a>
         <button class="ghost" onclick="location.reload()">Reload this window</button>
         <div class="foot">${esc(SITE)}</div>`;
     }

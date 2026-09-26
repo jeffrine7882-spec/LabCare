@@ -406,7 +406,8 @@ function showLoadFailure(target, title, message, retryUrl) {
   body { margin:0; background:#f3f5f9; color:#111827;
          font:15px/1.55 -apple-system,"Segoe UI",Roboto,sans-serif; }
   .box { max-width:520px; margin:0 auto; padding:44px 26px; text-align:center; }
-  .logo { font-size:40px; }
+  .logo { font-size:40px; display:flex; justify-content:center; }
+  .logo img { width:64px; height:64px; border-radius:14px; }
   h1 { font-size:20px; margin:12px 0 6px; color:#b91c1c; }
   p { color:#6b7280; font-size:14px; margin:0 0 20px; word-break:break-word; }
   a.btn { display:block; padding:13px; border-radius:12px; font-weight:700;
@@ -416,7 +417,7 @@ function showLoadFailure(target, title, message, retryUrl) {
   .url { font-size:12px; color:#94a3b8; margin-top:14px; word-break:break-all; }
 </style></head>
 <body><div class="box">
-  <div class="logo">🔬</div>
+  <div class="logo"></div>
   <h1>${esc(title)}</h1>
   <p>${esc(message)}<br>Check your internet connection, then try again.</p>
   <a class="btn primary" href="${esc(SITE_URL)}">Retry</a>
@@ -453,7 +454,7 @@ function createBubble() {
     show: false,
     alwaysOnTop: true,
     skipTaskbar: true,
-    focusable: false,           // never steal focus from whatever the user is doing
+    focusable: false,           // never s#b91c1c focus from whatever the user is doing
     transparent: true,          // lets the rounded-corner bubble look work
     backgroundColor: "#00000000",
     webPreferences: {

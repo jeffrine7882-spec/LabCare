@@ -140,7 +140,7 @@
   <button class="siren-arm hidden" id="sirenArm" onclick="armSiren(true)" title="Enable alert sound">🔕 Enable alert sound</button>
   <div class="wrap">
     <div id="content"><div class="empty">Loading…</div></div>
-    <footer>Powered by 🔬 LabSynch</footer>
+    <footer>Powered by <img src="/icons/icon-192.png" alt="LS" style="width:18px;height:18px;border-radius:4px;vertical-align:middle"> LabSynch</footer>
   </div>
   <script>
     "use strict";
@@ -238,7 +238,7 @@
 
       box.innerHTML = `
         <div class="hero">
-          <div class="brand">🔬 LABSYNCH SERVICE PORTAL</div>
+          <div class="brand">LS LABSYNCH SERVICE PORTAL</div>
           <h1>Report an equipment issue</h1>
           <div class="meta">${esc(info.customer_name || "")}</div>
           ${eqLabel ? `<div class="tag">⚙ ${esc(eqLabel)}</div>` : ""}

@@ -213,7 +213,8 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
 .hero h2 { font-size: 19px; font-weight: 800; }
 .hero p { opacity: .9; font-size: 13px; margin-top: 3px; }
 .hero::after {
-  content: "🔬"; position: absolute; right: -8px; bottom: -14px; font-size: 84px; opacity: .15;
+  content: ""; position: absolute; right: -10px; bottom: -10px; width: 90px; height: 90px;
+  background: url('/icons/icon-192.png') center/contain no-repeat; opacity: .18; pointer-events: none;
 }
 
 /* ---------- Section ---------- */
@@ -321,7 +322,8 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
   width: 100%; background: #fff; border-radius: 22px; padding: 28px 24px;
   box-shadow: 0 24px 60px rgba(0,0,0,.35);
 }
-.login-logo { font-size: 52px; text-align: center; }
+.login-logo { font-size: 52px; text-align: center; display:flex; align-items:center; justify-content:center; }
+.login-logo img { display:block; }
 .login-title { text-align: center; font-size: 26px; font-weight: 800; margin-top: 4px; }
 .login-sub { text-align: center; color: var(--ink-soft); font-size: 13px; margin: 2px 0 20px; }
 
@@ -580,7 +582,7 @@ main#view { flex: 1; overflow-y: auto; padding: 14px 14px calc(var(--nav-h) + 20
     padding: 48px 42px; color: #fff;
     background: linear-gradient(160deg, #b91c1c, #7f1d1d);
   }
-  .login-brand .login-logo { text-align: left; font-size: 56px; }
+  .login-brand .login-logo { text-align: left; font-size: 56px; justify-content: flex-start; }
   .login-brand .login-title { text-align: left; font-size: 30px; color: #fff; }
   .login-brand .login-sub { text-align: left; color: rgba(255,255,255,.85); font-size: 14.5px; }
   .login-points { list-style: none; margin-top: 26px; display: flex; flex-direction: column; gap: 12px; }
