@@ -121,7 +121,43 @@ def _log_table(comments):
     return t
 
 
-def service_report(complaint, breakdowns, comments):
+def _feedback_flowables(feedback):
+    """The customer's rating and comments on a settled ticket.
+
+    Returns nothing when the customer left no rating and no comment: feedback is
+    optional, so an unrated ticket simply has no section rather than an empty one
+    drawing attention to the absence.
+
+    Stars are drawn as ASCII because the built-in Helvetica encoding has no star
+    glyph; the on-screen UI uses the real characters."""
+    if not feedback:
+        return []
+    rating = feedback.get("rating")
+    comments = feedback.get("comments") or []
+    if not rating and not comments:
+        return []
+    out = [Paragraph("Customer feedback", H2)]
+    if rating:
+        stars = int(rating.get("rating") or 0)
+        stars = max(0, min(5, stars))
+        out.append(Paragraph(
+            '<b>%d / 5</b> <font face="Courier" size="11">%s</font>'
+            % (stars, "*" * stars + "." * (5 - stars)), BODY))
+        out.append(Paragraph(
+            '<font size="8" color="#64748B">rated by %s</font>'
+            % (rating.get("rated_by") or "Customer"), BODY))
+    else:
+        out.append(Paragraph("No rating given.", BODY))
+    out.append(Spacer(1, 6))
+    if comments:
+        out.append(_log_table([
+            {"user_name": c.get("author_name") or "Customer",
+             "created_at": c.get("created_at", ""),
+             "text": c.get("text", "")} for c in comments]))
+    return out
+
+
+def service_report(complaint, breakdowns, comments, feedback=None):
     """Build a single-ticket service report PDF and return raw bytes."""
     buf = io.BytesIO()
     doc = init_doc(buf, f"Service Report {complaint.get('code', '')}")
@@ -180,12 +216,14 @@ def service_report(complaint, breakdowns, comments):
     story.append(Paragraph("Conversation log", H2))
     story.append(_log_table(comments) if comments else Paragraph("No comments.", BODY))
 
+    # the customer's own verdict, when they chose to give one
+    story.extend(_feedback_flowables(feedback))
 
     doc.build(story)
     return buf.getvalue()
 
 
-def breakdown_report(breakdown, comments, source_complaint=None):
+def breakdown_report(breakdown, comments, source_complaint=None, feedback=None):
     """Build a single-breakdown service report PDF and return raw bytes.
 
     The breakdown counterpart of service_report(): the same LabCare letterhead,
@@ -271,6 +309,9 @@ def breakdown_report(breakdown, comments, source_complaint=None):
     story.append(Paragraph("Work log", H2))
     story.append(_log_table(comments) if comments
                  else Paragraph("No work log entries.", BODY))
+
+    # the customer's own verdict, when they chose to give one
+    story.extend(_feedback_flowables(feedback))
 
     doc.build(story)
     return buf.getvalue()

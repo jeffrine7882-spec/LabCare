@@ -3910,9 +3910,10 @@ def complaint_report_pdf(cid):
     comments = rows_to_dicts(c.execute(
         "SELECT cm.*, u.name AS user_name FROM comments cm JOIN users u ON u.id=cm.user_id "
         "WHERE cm.entity_type='complaint' AND cm.entity_id=? ORDER BY cm.created_at", (cid,)).fetchall())
+    feedback = _feedback_payload(c, "complaint", cid)
     c.close()
 
-    pdf = report_mod.service_report(comp, breakdowns, comments)
+    pdf = report_mod.service_report(comp, breakdowns, comments, feedback=feedback)
     return Response(pdf, mimetype="application/pdf", headers={
         "Content-Disposition": f'inline; filename="service_report_{comp["code"]}.pdf"'})
 
@@ -3943,9 +3944,10 @@ def breakdown_report_pdf(bid):
         crow = c.execute("SELECT code, subject FROM complaints WHERE id=?",
                          (row["complaint_id"],)).fetchone()
         src = dict(crow) if crow else None
+    feedback = _feedback_payload(c, "breakdown", bid)
     c.close()
 
-    pdf = report_mod.breakdown_report(brk, comments, src)
+    pdf = report_mod.breakdown_report(brk, comments, src, feedback=feedback)
     return Response(pdf, mimetype="application/pdf", headers={
         "Content-Disposition": f'inline; filename="service_report_{brk["code"]}.pdf"'})
 
