@@ -135,7 +135,7 @@ def service_report(complaint, breakdowns, comments):
         _kv_table([
             ("Report no.", complaint.get("code")),
             ("Date issued", now_dt().strftime("%d %b %Y %H:%M (MYT)")),
-            ("Customer", complaint.get("customer_name")),
+            ("Organization", complaint.get("customer_name")),
             ("Equipment", complaint.get("equipment_name") or "General"),
             ("Category", complaint.get("category") or "General"),
             ("Priority", (complaint.get("priority") or "").title()),
@@ -209,7 +209,7 @@ def breakdown_report(breakdown, comments, source_complaint=None):
     pairs = [
         ("Report no.", breakdown.get("code")),
         ("Date issued", now_dt().strftime("%d %b %Y %H:%M (MYT)")),
-        ("Customer", breakdown.get("customer_name")),
+        ("Organization", breakdown.get("customer_name")),
     ]
     if location:
         pairs.append(("Location/Department", location))

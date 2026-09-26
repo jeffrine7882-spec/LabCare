@@ -146,7 +146,7 @@ class TenantAdminCreatesUsersTest(unittest.TestCase):
         r = self.post("/api/users", self.t1, {
             "name": "Cust NoOrg", "email": "c1@t.test", "password": PW, "role": "customer"})
         self.assertEqual(r.status_code, 400)
-        self.assertEqual(r.get_json()["error"], "Linked customer is required for customer accounts")
+        self.assertEqual(r.get_json()["error"], "Linked organization is required for customer accounts")
         r = self.post("/api/users", self.t1, {
             "name": "Cust Org", "email": "c2@t.test", "password": PW,
             "role": "customer", "customer_id": str(self.org_b)})
@@ -158,7 +158,7 @@ class TenantAdminCreatesUsersTest(unittest.TestCase):
             "name": "Eng Hijack", "email": "e3@t.test", "password": PW,
             "role": "engineer", "responsible_admin_id": self.ta2["id"]})
         self.assertEqual(r.status_code, 403)
-        self.assertIn("does not care for any organisation you manage", r.get_json()["error"])
+        self.assertIn("does not care for any organization you manage", r.get_json()["error"])
 
     def test_masters_labcare_wide_staff_are_unchanged(self):
         """No regression: the master's unbound engineers still see everything."""
@@ -205,7 +205,7 @@ class TenantAdminCreatesUsersTest(unittest.TestCase):
             "role": "customer", "customer_id": self.org_b}).get_json()
         r = self.patch("/api/users/%d" % cust["id"], self.t1, {"customer_id": None})
         self.assertEqual(r.status_code, 400)
-        self.assertEqual(r.get_json()["error"], "Linked customer is required for customer accounts")
+        self.assertEqual(r.get_json()["error"], "Linked organization is required for customer accounts")
 
 
 if __name__ == "__main__":

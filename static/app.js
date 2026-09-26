@@ -362,7 +362,7 @@ function render() {
   const titles = {
     dashboard: "Dashboard", complaints: "Complaints", breakdowns: "Breakdowns",
     equipment: "Equipment", equipmentDetail: "Equipment", more: "Menu",
-    customers: "Organizations", customerDetail: "Customer", users: "Team",
+    customers: "Organizations", customerDetail: "Organization", users: "Team",
     complaintDetail: "Complaint", breakdownDetail: "Breakdown", profile: "My Account",
     pm: "Maintenance", pmDetail: "Maintenance", portals: "QR Portal",
     locations: "Organizations", departments: "Organizations", org: "Organizations",
@@ -424,9 +424,9 @@ async function viewDashboard(v) {
       </div>
 
       ${!isCust() ? `
-      <div class="section-title">Customer base &amp; maintenance</div>
+      <div class="section-title">Organization base &amp; maintenance</div>
       <div class="stats-grid">
-        <div class="stat tone-brand"><span class="stat-num">${c.total_customers}</span><span class="stat-label">Customers</span></div>
+        <div class="stat tone-brand"><span class="stat-num">${c.total_customers}</span><span class="stat-label">Organizations</span></div>
         <div class="stat tone-green"><span class="stat-num">${c.resolved_complaints}</span><span class="stat-label">Resolved complaints</span></div>
         <div class="stat ${c.pm_due ? "tone-amber" : "tone-green"}" onclick="navigate('pm')" style="cursor:pointer"><span class="stat-num">${c.pm_due}</span><span class="stat-label">PM due</span></div>
         <div class="stat tone-blue" onclick="navigate('pm')" style="cursor:pointer"><span class="stat-num">${c.pm_total}</span><span class="stat-label">PM schedules</span></div>
@@ -1247,7 +1247,7 @@ async function viewEquipmentDetail(v) {
       </div>
       <div class="section-title">Asset details</div>
       <div class="card">
-        <div class="kv"><span class="k">Customer</span><span class="v">${esc(e.customer_name || "—")}</span></div>
+        <div class="kv"><span class="k">Organization</span><span class="v">${esc(e.customer_name || "—")}</span></div>
         <div class="kv"><span class="k">Location/Department</span><span class="v">${esc(e.location_name || e.department_name || "—")}</span></div>
         <div class="kv"><span class="k">Serial number</span><span class="v mono">${esc(e.serial_number || "—")}</span></div>
         <div class="kv"><span class="k">Model</span><span class="v">${esc(e.model || "—")}</span></div>
@@ -1269,15 +1269,15 @@ async function viewOrg(v, tab) {
   if (state.orgTab === "departments") state.orgTab = "locations";
   const t = state.orgTab;
   const tabs = isAdmin() || isTech()
-    ? [["customers", "🏢 Customers"], ["locations", "📍 Location/Department"]]
-    : [["customers", "🏢 My organisation"]];
+    ? [["customers", "🏢 Organizations"], ["locations", "📍 Location/Department"]]
+    : [["customers", "🏢 My organization"]];
   const addBtn = t === "customers"
-    ? (isAdmin() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add customer</button>` : "")
+    ? (isAdmin() ? `<button class="btn btn-primary" onclick="openCustomerEditor(false)">＋ Add organization</button>` : "")
     : (isTech() ? `<button class="btn btn-primary" onclick="openLocationEditor(false)">＋ Add location/department</button>` : "");
   v.innerHTML = `
     <div class="hero" style="background:linear-gradient(135deg,#134e4a,#0f766e)">
       <h2>Organizations</h2>
-      <p>Customers and locations/departments in one place.</p>
+      <p>Organizations and locations/departments in one place.</p>
     </div>
     <div class="seg" style="margin:14px 0 12px">
       ${tabs.map(([k, label]) => `<button class="${t === k ? "active" : ""}" onclick="setOrgTab('${k}')">${label}</button>`).join("")}
@@ -1319,7 +1319,7 @@ async function refreshCustomers() {
             <span class="badge b-open">${cu.open_complaints} open complaints</span>
           </div>
         </div>`).join("")}</div>`
-      : emptyState("🏢", "No customers yet", "Add your first customer to start tracking.", "Add customer");
+      : emptyState("🏢", "No organizations yet", "Add your first organization to start tracking.", "Add organization");
   } catch (e) {
     box.innerHTML = `<div class="empty"><h3>Load failed</h3><p>${esc(e.message)}</p></div>`;
   }
@@ -1332,7 +1332,7 @@ async function viewCustomerDetail(v) {
     const list = await API.get("/api/customers");
     state.customers = list;
     const cu = list.find((x) => x.id === id);
-    if (!cu) throw new Error("Customer not found");
+    if (!cu) throw new Error("Organization not found");
     const [eq, cmp, brk, locs] = await Promise.all([
       API.get("/api/equipment?customer_id=" + id),
       API.get("/api/complaints?customer_id=" + id),
@@ -1377,7 +1377,7 @@ async function viewCustomerDetail(v) {
       ${eq.length ? `<div class="list">${eq.map(equipmentCard).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">No equipment registered.</p></div>`}
       <div class="section-title">Recent complaints (${cmp.length})</div>
       ${cmp.length ? `<div class="list">${cmp.slice(0, 3).map(complaintCard).join("")}</div>` : `<div class="card"><p style="color:var(--ink-soft);font-size:13px">None.</p></div>`}
-      ${isAdmin() ? `<div class="action-panel" style="margin-top:14px"><button class="btn btn-ghost" onclick="openCustomerEditor(true)">✏️ Edit customer</button></div>` : ""}
+      ${isAdmin() ? `<div class="action-panel" style="margin-top:14px"><button class="btn btn-ghost" onclick="openCustomerEditor(true)">✏️ Edit organization</button></div>` : ""}
     `;
   } catch (e) {
     v.innerHTML = `<div class="empty"><h3>Could not load</h3><p>${esc(e.message)}</p></div>`;
@@ -1684,13 +1684,13 @@ function viewProfile(v) {
     <div class="card">
       <div class="kv"><span class="k">Phone</span><span class="v">${esc(u.phone || "—")}</span></div>
       <div class="kv"><span class="k">Role</span><span class="v">${roleLabel(u)}</span></div>
-      ${u.customer_name ? `<div class="kv"><span class="k">Organisation</span><span class="v">${esc(u.customer_name)}</span></div>` : ""}
+      ${u.customer_name ? `<div class="kv"><span class="k">Organization</span><span class="v">${esc(u.customer_name)}</span></div>` : ""}
       ${(u.location_name || u.department_name) ? `<div class="kv"><span class="k">Location/Department</span><span class="v">${esc(u.location_name || u.department_name)}</span></div>` : ""}
     </div>
     ${isTenantAdmin ? `
-    <div class="section-title">Customer organisations I care for</div>
+    <div class="section-title">Organizations I care for</div>
     <div class="card">
-      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 10px">Pick which customer organisations you manage. You can add engineers and view tickets, equipment and reports for every organisation on your list.</p>
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 10px">Pick which organizations you manage. You can add engineers and view tickets, equipment and reports for every organization on your list.</p>
       <div id="careListHost"></div>
     </div>` : ""}
     <div class="action-panel" style="margin-top:16px">
@@ -1710,7 +1710,7 @@ async function renderCareList() {
       API.get("/api/my-customers"), API.get("/api/customer-directory"),
     ]);
   } catch (e) {
-    host.innerHTML = `<div class="empty"><p>Couldn't load your organisations: ${esc(e.message)}</p></div>`;
+    host.innerHTML = `<div class="empty"><p>Couldn't load your organizations: ${esc(e.message)}</p></div>`;
     return;
   }
   const linked = mine.customers || [];
@@ -1733,7 +1733,7 @@ async function renderCareList() {
         </select>
         <button class="btn btn-primary-2" style="padding:9px 14px" onclick="addCareCustomer(document.getElementById('careAddSel').value)">＋ Add to my list</button>
       </div>`
-    : `<p style="font-size:13px;color:var(--ink-soft);margin:0">You already care for every customer organisation.</p>`}`;
+    : `<p style="font-size:13px;color:var(--ink-soft);margin:0">You already care for every organization.</p>`}`;
 }
 
 async function addCareCustomer(id) {
@@ -1741,7 +1741,7 @@ async function addCareCustomer(id) {
   showLoading();
   try {
     await API.post("/api/my-customers/" + id);
-    toast("Added to your customer list", "success");
+    toast("Added to your organization list", "success");
     state.user = await API.get("/api/me");
     await renderCareList();
   } catch (e) { toast(e.message, "error"); }
@@ -1749,11 +1749,11 @@ async function addCareCustomer(id) {
 }
 
 async function removeCareCustomer(id) {
-  confirmDialog("Remove organisation", "Deselecting this organisation stops you from managing its users, tickets and equipment.", "Remove", async () => {
+  confirmDialog("Remove organization", "Deselecting this organization stops you from managing its users, tickets and equipment.", "Remove", async () => {
     showLoading();
     try {
       await API.del("/api/my-customers/" + id);
-      toast("Removed from your customer list", "success");
+      toast("Removed from your organization list", "success");
       state.user = await API.get("/api/me");
       await renderCareList();
     } catch (e) { toast(e.message, "error"); }
@@ -1764,7 +1764,7 @@ async function removeCareCustomer(id) {
 function viewMore(v) {
   const items = [];
   items.push(`<button class="menu-item" onclick="navigate('profile')"><span class="mi-ico">👤</span> My account <span class="mi-arrow">›</span></button>`);
-  if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Customers &amp; locations/departments <span class="mi-arrow">›</span></button>`);
+  if (isAdmin() || isTech()) items.push(`<button class="menu-item" onclick="navigate('org')"><span class="mi-ico">🏢</span> Organizations &amp; locations/departments <span class="mi-arrow">›</span></button>`);
   if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('categories')"><span class="mi-ico">🏷️</span> Categories <span class="mi-arrow">›</span></button>`);
   if (isAdmin()) items.push(`<button class="menu-item" onclick="navigate('users')"><span class="mi-ico">👥</span> Team & users <span class="mi-arrow">›</span></button>`);
   if (isMaster()) items.push(`<button class="menu-item" onclick="navigate('onboarding')"><span class="mi-ico">📥</span> Join requests <span class="mi-arrow">›</span></button>`);
@@ -1840,7 +1840,7 @@ async function openComplaintEditor(edit) {
       <label class="field"><span>Subject *</span><input id="fSubject" value="${esc(c ? c.subject : "")}" placeholder="What went wrong?"></label>
       <label class="field"><span>Description</span><textarea id="fDesc" placeholder="Details, symptoms, when it started…">${esc(c ? c.description : "")}</textarea></label>
       ${isTech() ? `
-      <label class="field"><span>Customer *</span>
+      <label class="field"><span>Organization *</span>
         <select id="fCustomer" onchange="onCustPickComplaint()">
           ${customers.map((x) => `<option value="${x.id}" ${c && c.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
@@ -1907,7 +1907,7 @@ async function saveComplaint(id) {
     if (isUnboundStaff() && $("#fRespAdmin")) body.responsible_admin_id = $("#fRespAdmin").value || null;
   }
   if (!body.subject) { toast("Subject is required", "error"); return; }
-  if (isTech() && !body.customer_id) { toast("Customer is required", "error"); return; }
+  if (isTech() && !body.customer_id) { toast("Organization is required", "error"); return; }
   closeSheet();
   showLoading();
   try {
@@ -1951,7 +1951,7 @@ async function openBreakdownEditor(edit, prefill) {
           ${eqOpts(equipment, (b ? b.equipment_id : p.equipment_id), isTech() ? defCust : null, "— Select —")}
         </select></label>
       ${isTech() ? `
-      <label class="field"><span>Customer *</span>
+      <label class="field"><span>Organization *</span>
         <select id="bCustomer" onchange="onCustPickBreakdown()">
           ${customers.map((x) => `<option value="${x.id}" ${(b ? b.customer_id === x.id : p.customer_id === x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
@@ -2013,7 +2013,7 @@ async function saveBreakdown(id) {
     if (isUnboundStaff() && $("#bRespAdmin")) body.responsible_admin_id = $("#bRespAdmin").value || null;
   }
   if (!body.fault_description) { toast("Fault description is required", "error"); return; }
-  if (isTech() && !body.customer_id) { toast("Customer is required", "error"); return; }
+  if (isTech() && !body.customer_id) { toast("Organization is required", "error"); return; }
   closeSheet();
   showLoading();
   try {
@@ -2049,8 +2049,8 @@ async function openEquipmentEditor(edit) {
     <div class="sheet-head"><h3>${edit ? "Edit equipment" : "Add equipment"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
       ${isTech() ? `
-      <div class="section-label">Customer</div>
-      <label class="field"><span>Customer *</span>
+      <div class="section-label">Organization</div>
+      <label class="field"><span>Organization *</span>
         <select id="eqCustomer" onchange="onCustPick('eqCustomer')">
           ${(state.customers || []).map((x) => `<option value="${x.id}" ${e && e.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
@@ -2112,8 +2112,8 @@ async function deleteEquipment(id) {
 // --- shared cascading helpers for the customer → location → department chain ---
 // Tenant admins who may be named as a user's "linked tenant admin". Calling
 // /api/tenant-admins with NO customer_id returns exactly the actor's own tenant:
-// every admin whose primary organisation or care list overlaps theirs — and, for
-// an admin with no organisations yet, just themselves.
+// every admin whose primary organization or care list overlaps theirs — and, for
+// an admin with no organizations yet, just themselves.
 let _peerAdminsCache = null;
 async function tenantAdminPeers() {
   if (_peerAdminsCache) return _peerAdminsCache;
@@ -2302,7 +2302,7 @@ async function saveEquipment(id) {
   if (isTech()) body.customer_id = $("#eqCustomer").value;
   if (isTech() && isUnboundStaff() && $("#eqRespAdmin")) body.responsible_admin_id = $("#eqRespAdmin").value || null;
   if (!body.name) { toast("Equipment name is required", "error"); return; }
-  if (isTech() && !body.customer_id) { toast("Customer is required", "error"); return; }
+  if (isTech() && !body.customer_id) { toast("Organization is required", "error"); return; }
   if (isTech() && !body.location_id) { toast("Location/department is required", "error"); return; }
   closeSheet();
   showLoading();
@@ -2320,9 +2320,9 @@ async function saveEquipment(id) {
 async function openCustomerEditor(edit) {
   const cu = edit ? state.customers?.find((x) => x.id === state.viewParams.id) : null;
   openSheet(`
-    <div class="sheet-head"><h3>${edit ? "Edit customer" : "Add customer"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-head"><h3>${edit ? "Edit organization" : "Add organization"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
-      <label class="field"><span>Organisation name *</span><input id="cuName" value="${esc(cu ? cu.name : "")}" placeholder="e.g. Hospital/Clinic"></label>
+      <label class="field"><span>Organization name *</span><input id="cuName" value="${esc(cu ? cu.name : "")}" placeholder="e.g. Hospital/Clinic"></label>
       <label class="field"><span>Contact person</span><input id="cuContact" value="${esc(cu ? cu.contact_name : "")}"></label>
       <label class="field"><span>Email</span><input id="cuEmail" type="email" value="${esc(cu ? cu.email : "")}"></label>
       <label class="field"><span>Phone</span><input id="cuPhone" value="${esc(cu ? cu.phone : "")}"></label>
@@ -2341,7 +2341,7 @@ async function deleteCustomer(id) {
     showLoading();
     try {
       await API.del("/api/customers/" + id);
-      toast("Customer deleted", "success");
+      toast("Organization deleted", "success");
       closeSheet();
       state.customers = null;
       if (state.view === "customerDetail") navigate("customers");
@@ -2360,13 +2360,13 @@ async function saveCustomer(id) {
     city: $("#cuCity").value.trim(),
     address: $("#cuAddress").value.trim(),
   };
-  if (!body.name) { toast("Organisation name is required", "error"); return; }
+  if (!body.name) { toast("Organization name is required", "error"); return; }
   closeSheet();
   showLoading();
   try {
     if (id) await API.put("/api/customers/" + id, body);
     else await API.post("/api/customers", body);
-    toast(id ? "Customer updated" : "Customer added", "success");
+    toast(id ? "Organization updated" : "Organization added", "success");
     state.customers = null;
     if (state.view === "customerDetail" && id) await viewCustomerDetail($("#view"));
     else if (state.view === "customers" || state.view === "org") await refreshCustomers();
@@ -2388,14 +2388,14 @@ async function openUserEditor(edit, id) {
   // who sees which fields: customers always get the full pickers; the master may
   // bind engineers to a customer or leave them LabCare-wide, and may create
   // tenant admins linked to a customer or entirely unlinked (they create their
-  // own organisations after first login); non-master tenant admins always pick
+  // own organizations after first login); non-master tenant admins always pick
   // which of their care-list customers the new account belongs to.
   const tenantAdmin = isAdmin() && !master;
   const showCustFields = master || startCust || tenantAdmin;
   const showLocDept = startCust;
   // Who may be named as the linked tenant admin:
-  //  * master       -> the admins of whichever organisation is selected
-  //  * tenant admin -> their own peer admins, because the organisation is now
+  //  * master       -> the admins of whichever organization is selected
+  //  * tenant admin -> their own peer admins, because the organization is now
   //                    optional and the account can sit under the tenant's care
   // Tenant staff below admin are still auto-assigned by the backend.
   const startCustId = u && u.customer_id ? u.customer_id : (state.user && !master ? state.user.customer_id : "");
@@ -2421,10 +2421,10 @@ async function openUserEditor(edit, id) {
             .map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("")}
         </select></label>
       <div id="uCustomerFields" style="${showCustFields ? "" : "display:none"}">
-        <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked customer (optional — leave empty for LabCare-wide)" : (tenantAdmin && !startCust ? "Linked customer (optional — leave empty to place them under tenant admin care)" : "Linked customer")}</span>
+        <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked organization (optional — leave empty for LabCare-wide)" : (tenantAdmin && !startCust ? "Linked organization (optional — leave empty to place them under tenant admin care)" : "Linked organization")}</span>
           <select id="uCustomer" onchange="onUserCustPick()">
             ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabCare-wide (no customer) —</option>` : ""}
-            ${tenantAdmin ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— Under tenant admin care (no single organisation) —</option>` : ""}
+            ${tenantAdmin ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— Under tenant admin care (no single organization) —</option>` : ""}
             ${customers.map((x) => `<option value="${x.id}" ${String(x.id) === String(u && u.customer_id ? u.customer_id : (!master ? startCustId : null)) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
           </select></label>
         <label class="field" id="uLocationField" style="${showLocDept ? "" : "display:none"}"><span>Linked location/department</span>
@@ -2438,7 +2438,7 @@ async function openUserEditor(edit, id) {
           <select id="uRespAdmin">${respOptions}</select></label>` : ""}
         ${tenantAdmin ? `<label class="field" id="uRespAdminField" style="${startCust ? "display:none" : ""}"><span>Linked tenant admin</span>
           <select id="uRespAdmin">${respOptions}</select>
-          <small style="display:block;margin-top:4px;color:var(--ink-soft);font-size:12px">With no organisation selected, this account sees every organisation that tenant admin cares for.</small></label>` : ""}
+          <small style="display:block;margin-top:4px;color:var(--ink-soft);font-size:12px">With no organization selected, this account sees every organization that tenant admin cares for.</small></label>` : ""}
       </div>
       <label class="field"><span>${edit ? "New password (leave blank to keep)" : "Password *"}</span><input id="uPassword" type="password" placeholder="${edit ? "••••••••" : "Set a password"}"></label>
     </div>
@@ -2458,20 +2458,20 @@ function toggleCustomerSelect() {
   if (isMaster()) {
     // customer accounts always need the full customer/location/department picker;
     // a tenant admin MAY stay unlinked — after first login they create their own
-    // organisations, which land in their care list automatically.
+    // organizations, which land in their care list automatically.
     $("#uCustomerFields").style.display = (isCustRole || isTenantAdminRole) ? "" : "none";
     const lbl = $("#uCustomerLabel");
     if (lbl) lbl.textContent = isTenantAdminRole
-      ? "Linked customer (optional — they create their own after login)"
-      : "Linked customer (optional — leave empty for LabCare-wide)";
+      ? "Linked organization (optional — they create their own after login)"
+      : "Linked organization (optional — leave empty for LabCare-wide)";
     const emptyOpt = document.querySelector("#uCustomer option[value='']");
     if (emptyOpt) emptyOpt.textContent = isTenantAdminRole
       ? "— Not linked yet (they create their own later) —"
       : "— LabCare-wide (no customer) —";
   } else {
-    // Tenant staff can create for any organisation in their care list (which the
+    // Tenant staff can create for any organization in their care list (which the
     // backend scopes /api/customers to). Customer-role accounts MUST name one, so
-    // default those to the admin's primary organisation. Staff accounts may stay
+    // default those to the admin's primary organization. Staff accounts may stay
     // empty — that places them under the linked tenant admin's care.
     $("#uCustomerFields").style.display = "";
     const sel = $("#uCustomer");
@@ -2480,10 +2480,10 @@ function toggleCustomerSelect() {
     }
     const lbl = $("#uCustomerLabel");
     if (lbl && !isMaster()) lbl.textContent = isCustRole
-      ? "Linked customer"
-      : "Linked customer (optional — leave empty to place them under tenant admin care)";
+      ? "Linked organization"
+      : "Linked organization (optional — leave empty to place them under tenant admin care)";
     // The linked-tenant-admin choice only matters for staff accounts; a customer
-    // account's admin follows from its organisation.
+    // account's admin follows from its organization.
     const respField = $("#uRespAdminField");
     if (respField && !isMaster()) respField.style.display = isCustRole ? "none" : "";
   }
@@ -2525,20 +2525,20 @@ async function saveUser(id) {
     body.location_id = $("#uLocation").value || null;
     const deptMatch = (state.departments || []).find((d) => String(d.location_id) === String(body.location_id));
     body.department_id = $("#uDepartment")?.value || deptMatch?.id || body.location_id || null;
-    if (!body.customer_id) { toast("Linked customer is required for customer accounts", "error"); return; }
+    if (!body.customer_id) { toast("Linked organization is required for customer accounts", "error"); return; }
     if (isMaster() && $("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else if (isMaster()) {
     // a tenant admin may be created WITHOUT a customer — they build their own
-    // organisation after first login; techs/customers may be global or bound
+    // organization after first login; techs/customers may be global or bound
     body.customer_id = $("#uCustomer").value || null;
     body.location_id = null;
     body.department_id = null;
     if ($("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else {
-    // Tenant staff creating an engineer/application account: the organisation is
+    // Tenant staff creating an engineer/application account: the organization is
     // OPTIONAL. Left empty, the account sits under the linked tenant admin's care
     // and inherits that admin's care list instead of being tied to one
-    // organisation — so there is no fallback to the admin's primary any more.
+    // organization — so there is no fallback to the admin's primary any more.
     body.customer_id = ($("#uCustomer") && $("#uCustomer").value) || null;
     body.location_id = null;
     body.department_id = null;
@@ -2702,7 +2702,7 @@ async function openPMEditor(edit) {
     <div class="sheet-body">
       <label class="field"><span>Title *</span><input id="pmTitle" value="${esc(p ? p.title : "")}" placeholder="e.g. Centrifuge annual service"></label>
       <label class="field"><span>Description</span><textarea id="pmDesc">${esc(p ? p.description : "")}</textarea></label>
-      ${isTech() ? `<label class="field"><span>Customer *</span>
+      ${isTech() ? `<label class="field"><span>Organization *</span>
         <select id="pmCustomer" onchange="onCustPickPM()">
           ${customers.map((x) => `<option value="${x.id}" ${String(defCust) === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>` : ""}
@@ -2865,7 +2865,7 @@ async function openPortalEditor(edit) {
     <div class="sheet-body">
       ${loadErr ? `<div class="form-error">⚠️ ${esc(loadErr)}</div>` : ""}
       <label class="field"><span>Label</span><input id="plLabel" value="${esc(p ? p.label : "")}" placeholder="e.g. Freezer QR — Lab A"></label>
-      <label class="field"><span>Customer *</span>
+      <label class="field"><span>Organization *</span>
         <select id="plCustomer" onchange="onPortalCust()">
           ${customers.length
             ? customers.map((x) => `<option value="${x.id}" ${String(x.id) === String(selCust) ? "selected" : ""}>${esc(x.name)}</option>`).join("")
@@ -2891,7 +2891,7 @@ async function savePortal(id) {
     customer_id: $("#plCustomer").value,
     equipment_id: $("#plEquipment").value || null,
   };
-  if (!body.customer_id) { toast("Customer is required", "error"); return; }
+  if (!body.customer_id) { toast("Organization is required", "error"); return; }
   closeSheet();
   showLoading();
   try {
@@ -3494,9 +3494,9 @@ async function loadJoinOptions() {
   try {
     const opts = await API.get("/api/lookup/options");
     const custSel = $("#jnCustomer");
-    custSel.innerHTML = `<option value="">— Select your organisation —</option>` +
+    custSel.innerHTML = `<option value="">— Select your organization —</option>` +
       opts.customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("") +
-      `<option value="__new__">＋ Create new organisation…</option>`;
+      `<option value="__new__">＋ Create new organization…</option>`;
     state.signup = { customers: opts.customers, locations: opts.locations, departments: opts.departments };
   } catch (e) { /* ignore */ }
 }
@@ -3511,7 +3511,7 @@ function onJoinCust() {
   if (!isNewCust && $("#jnNewCustomer")) $("#jnNewCustomer").value = "";
 
   if (isNewCust) {
-    // When creating a new organisation, user can choose from existing location/department names in the system or create a new one
+    // When creating a new organization, user can choose from existing location/department names in the system or create a new one
     const allNames = [
       ...(state.signup?.locations || []).map((l) => l.name),
       ...(state.signup?.departments || []).map((d) => d.name),
@@ -3601,7 +3601,7 @@ $("#joinForm").addEventListener("submit", async (e) => {
       const newCustName = ($("#jnNewCustomer")?.value || "").trim();
       if (!newCustName) {
         const el = $("#joinError");
-        el.textContent = "Please enter the new organisation name";
+        el.textContent = "Please enter the new organization name";
         el.classList.remove("hidden");
         return;
       }
@@ -3610,7 +3610,7 @@ $("#joinForm").addEventListener("submit", async (e) => {
       body.customer_id = custVal;
     } else {
       const el = $("#joinError");
-      el.textContent = "Please select or create an organisation";
+      el.textContent = "Please select or create an organization";
       el.classList.remove("hidden");
       return;
     }

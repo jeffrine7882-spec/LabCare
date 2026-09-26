@@ -108,7 +108,7 @@ def email_complaint_created(recip, complaint):
         [
             f"A new complaint has been logged by {complaint.get('created_by_name') or 'a customer'}.",
             f"<b>{complaint['subject']}</b>",
-            f"Customer: {complaint.get('customer_name')}  ·  Equipment: {complaint.get('equipment_name') or 'General'}",
+            f"Organization: {complaint.get('customer_name')}  ·  Equipment: {complaint.get('equipment_name') or 'General'}",
             f"Priority: {PRIORITY_LABELS.get(complaint.get('priority'), 'Medium')}  ·  Status: {STATUS_LABELS.get('open', 'Open')}",
         ],
     )
@@ -123,7 +123,7 @@ def email_status_changed(kind, recip, rec, new_status):
             [
                 f"A complaint you are following has changed status to <b>{label}</b>.",
                 f"<b>{rec['subject']}</b>",
-                f"Customer: {rec.get('customer_name')}  ·  Equipment: {rec.get('equipment_name') or 'General'}",
+                f"Organization: {rec.get('customer_name')}  ·  Equipment: {rec.get('equipment_name') or 'General'}",
             ],
         )
     else:
@@ -133,7 +133,7 @@ def email_status_changed(kind, recip, rec, new_status):
             [
                 f"A breakdown you are following has changed status to <b>{label}</b>.",
                 f"<b>{rec.get('equipment_name', '')}</b> — {rec['fault_description'][:120]}",
-                f"Customer: {rec.get('customer_name')}",
+                f"Organization: {rec.get('customer_name')}",
             ],
         )
 
@@ -146,7 +146,7 @@ def email_assigned(kind, recip, rec, assigner_name):
             [
                 f"You have been assigned a complaint by {assigner_name or 'your team'}.",
                 f"<b>{rec['subject']}</b>",
-                f"Customer: {rec.get('customer_name')}  ·  Equipment: {rec.get('equipment_name') or 'General'}",
+                f"Organization: {rec.get('customer_name')}  ·  Equipment: {rec.get('equipment_name') or 'General'}",
                 f"Priority: {PRIORITY_LABELS.get(rec.get('priority'), 'Medium')}",
             ],
         )
@@ -157,7 +157,7 @@ def email_assigned(kind, recip, rec, assigner_name):
             [
                 f"You have been assigned a breakdown work order by {assigner_name or 'your team'}.",
                 f"<b>{rec.get('equipment_name', '')}</b> — {rec['fault_description'][:120]}",
-                f"Customer: {rec.get('customer_name')}",
+                f"Organization: {rec.get('customer_name')}",
                 f"Priority: {PRIORITY_LABELS.get(rec.get('priority'), 'Medium')}",
             ],
         )
@@ -171,7 +171,7 @@ def email_comment(kind, recip, rec, commenter_name, text):
             [
                 f"{commenter_name} commented on complaint <b>{rec['subject']}</b>:",
                 f"“{text[:400]}”",
-                f"Customer: {rec.get('customer_name')}",
+                f"Organization: {rec.get('customer_name')}",
             ],
         )
     else:
@@ -181,6 +181,6 @@ def email_comment(kind, recip, rec, commenter_name, text):
             [
                 f"{commenter_name} commented on breakdown <b>{rec.get('equipment_name', '')}</b>:",
                 f"“{text[:400]}”",
-                f"Customer: {rec.get('customer_name')}",
+                f"Organization: {rec.get('customer_name')}",
             ],
         )

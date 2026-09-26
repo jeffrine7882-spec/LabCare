@@ -160,7 +160,7 @@ def is_tenant_admin(u):
     """True for any administrator who is not the one Master System Admin.
 
     A tenant admin may be created WITHOUT a linked customer (unbound): after
-    first login they create their own organisation, which lands in their care
+    first login they create their own organization, which lands in their care
     list; until then their scope is an empty list (they see nothing)."""
     return u.get("role") == "admin" and not is_master_admin(u)
 
@@ -201,7 +201,7 @@ def tenant_scope(u, c):
     * Tenant engineer: their single customer.
     * Engineer/application with NO customer but a linked tenant admin: that
       admin's care list — the account belongs to the tenant, not to one
-      organisation, so it must not become system-wide.
+      organization, so it must not become system-wide.
     * Master admin / provider engineer (no customer, no tenant admin): None =
       unscoped (all)."""
     if not u:
@@ -209,15 +209,15 @@ def tenant_scope(u, c):
     if u.get("role") == "admin":
         if is_master_admin(u):
             return None
-        # tenant admin — empty list when they have no organisations yet
+        # tenant admin — empty list when they have no organizations yet
         return _admin_scope_ids(c, u["id"], u)
     if u.get("role")  in ("engineer", "application"):
         if u.get("customer_id"):
             return [u["customer_id"]]
-        # No organisation of their own: they were placed under a tenant admin's
+        # No organization of their own: they were placed under a tenant admin's
         # care, so they inherit exactly that admin's care list. Deliberately NOT
         # unscoped — otherwise a tenant admin could mint an account that sees
-        # every organisation on the system. The master's own LabCare-wide staff
+        # every organization on the system. The master's own LabCare-wide staff
         # have no link (or are linked to the master) and stay unscoped.
         ra = u.get("responsible_admin_id")
         if ra:
@@ -237,11 +237,11 @@ def in_scope(col, scope):
 def customer_scope_filter(c, u, col="customer_id"):
     """Return (sql_where, params) limiting a query to the actor's customers.
 
-    * Customer users -> their one organisation.
-    * Tenant engineer -> its one organisation.
-    * Engineer with no organisation -> the care list of the tenant admin they
+    * Customer users -> their one organization.
+    * Tenant engineer -> its one organization.
+    * Engineer with no organization -> the care list of the tenant admin they
       are linked to (empty list = they see nothing, never everything).
-    * Tenant admin -> every organisation in their care list.
+    * Tenant admin -> every organization in their care list.
     * Master / LabCare-wide engineer -> no restriction ("", []).
     """
     role = u.get("role")
@@ -253,7 +253,7 @@ def customer_scope_filter(c, u, col="customer_id"):
         if cid:
             return (f"{col} = ?", [cid])
         # Customer-less staff: mirror tenant_scope rather than falling through to
-        # "no restriction", which would hand them every organisation system-wide.
+        # "no restriction", which would hand them every organization system-wide.
         scope = tenant_scope(u, c)
         if scope is None:
             return "", []
@@ -267,7 +267,7 @@ def customer_scope_filter(c, u, col="customer_id"):
     if scope is None:
         return "", []
     if not scope:
-        # tenant admin with no organisations yet sees nothing (not everything)
+        # tenant admin with no organizations yet sees nothing (not everything)
         return "0=1", []
     return in_scope(col, scope)
 
@@ -290,7 +290,7 @@ def tenant_guard(u, customer_id, c=None):
     if u.get("role") != "admin":
         bound = scoped_customer_id(u)
         if bound and customer_id != bound:
-            return jsonify({"error": "Not authorised — this record belongs to another organisation"}), 403
+            return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
         return None, None
     if is_master_admin(u):
         return None, None
@@ -300,7 +300,7 @@ def tenant_guard(u, customer_id, c=None):
     try:
         scope = tenant_scope(u, c)
         if customer_id not in (scope or []):
-            return jsonify({"error": "Not authorised — this record belongs to another organisation"}), 403
+            return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
         return None, None
     finally:
         if own:
@@ -320,7 +320,7 @@ def assignee_allowed(u, assignee_id, c):
     if scope is None:
         return True            # master / provider engineer actor
     if not scope:
-        return False           # tenant admin with no organisations yet
+        return False           # tenant admin with no organizations yet
     row = c.execute("SELECT role, customer_id FROM users WHERE id=?", (assignee_id,)).fetchone()
     if not row or row["role"] not in ("engineer", "application", "admin"):
         return False
@@ -337,7 +337,7 @@ def validate_responsible_admin(c, customer_id, responsible_admin_id, customerles
     when the record itself is customer-less.
 
     `customerless_user` relaxes that last rule for USER ACCOUNTS only: a staff
-    account with no organisation is placed under a tenant admin's care, so a
+    account with no organization is placed under a tenant admin's care, so a
     bound tenant admin is exactly the right link (their care list becomes the
     account's scope). Tickets and equipment keep the strict LabCare-wide rule.
     Returns (error_json, code) on failure, or (None, None) when valid/empty."""
@@ -356,7 +356,7 @@ def validate_responsible_admin(c, customer_id, responsible_admin_id, customerles
     else:
         admin_custs = _admin_scope_ids(c, row["id"], row)
         if customer_id not in admin_custs:
-            return jsonify({"error": "Responsible tenant admin does not care for the selected organisation"}), 400
+            return jsonify({"error": "Responsible tenant admin does not care for the selected organization"}), 400
     return None, None
 
 
@@ -416,7 +416,7 @@ def resolve_responsible_admin(c, u, customer_id, provided, customerless_user=Fal
     if not ra_id and customer_id and u["role"] != "customer":
         if len(_customer_tenant_admin_ids(c, customer_id)) > 1:
             return None, jsonify({
-                "error": "This organisation has several tenant admins — please choose the responsible one"}), 400
+                "error": "This organization has several tenant admins — please choose the responsible one"}), 400
     err, code = validate_responsible_admin(c, customer_id, ra_id, customerless_user)
     if err:
         return None, err, code
@@ -494,8 +494,8 @@ def _id(v):
     """Coerce a JSON-supplied foreign key to int, or None when unset.
 
     Browsers send <select> values as strings, while these ids are compared
-    against integer care-list scopes. Without this, an organisation a tenant
-    admin legitimately picked reads as "not an organisation you care for" and the
+    against integer care-list scopes. Without this, an organization a tenant
+    admin legitimately picked reads as "not an organization you care for" and the
     request is rejected. "", None, 0 and "0" all mean "not set"."""
     if v in (None, "", 0, "0"):
         return None
@@ -508,10 +508,10 @@ def _id(v):
 def _staff_in_tenant_care(c, admin_id, user_row, scope):
     """True when a customer-less staff account belongs to this tenant admin.
 
-    An engineer/application account with no organisation of its own is owned by
+    An engineer/application account with no organization of its own is owned by
     the tenant admin named in its responsible_admin_id. The actor may manage it
     when they ARE that admin, or when that admin is a peer who cares for at least
-    one organisation the actor also cares for."""
+    one organization the actor also cares for."""
     row = dict(user_row)
     if row.get("role") not in ("engineer", "application"):
         return False
@@ -554,11 +554,11 @@ def _validate_loc_dept(c, customer_id, location_id, department_id):
     if location_id:
         loc = c.execute("SELECT customer_id FROM locations WHERE id=?", (location_id,)).fetchone()
         if not loc or loc["customer_id"] != customer_id:
-            return jsonify({"error": "Location does not belong to the selected customer"}), 400
+            return jsonify({"error": "Location does not belong to the selected organization"}), 400
     if department_id:
         dept = c.execute("SELECT customer_id, location_id FROM departments WHERE id=?", (department_id,)).fetchone()
         if not dept or dept["customer_id"] != customer_id:
-            return jsonify({"error": "Department does not belong to the selected customer"}), 400
+            return jsonify({"error": "Department does not belong to the selected organization"}), 400
         if location_id and dept["location_id"] != location_id:
             return jsonify({"error": "Department is not within the selected location"}), 400
     return None, None
@@ -816,7 +816,7 @@ def my_customers():
     c = conn()
     if is_master_admin(u):
         c.close()
-        return jsonify({"error": "Master admin already manages every customer"}), 400
+        return jsonify({"error": "Master admin already manages every organization"}), 400
     scope = tenant_scope(u, c)
     ids = scope or []
     rows = c.execute(
@@ -840,7 +840,7 @@ def add_my_customer(cid):
     cust = c.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
     if not cust:
         c.close()
-        return jsonify({"error": "Customer not found"}), 404
+        return jsonify({"error": "Organization not found"}), 404
     c.execute(
         "INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
         (u["id"], cid, now()))
@@ -853,12 +853,12 @@ def add_my_customer(cid):
 def remove_my_customer(cid):
     """Remove a customer from the tenant admin's care list.
 
-    The primary customer cannot be removed (it is the admin's own organisation)."""
+    The primary customer cannot be removed (it is the admin's own organization)."""
     u, err, code = require_role("admin")
     if err:
         return err, code
     if u.get("customer_id") == cid:
-        return jsonify({"error": "Your primary organisation cannot be removed"}), 400
+        return jsonify({"error": "Your primary organization cannot be removed"}), 400
     c = conn()
     c.execute("DELETE FROM admin_customer_links WHERE admin_id=? AND customer_id=?", (u["id"], cid))
     c.commit()
@@ -868,7 +868,7 @@ def remove_my_customer(cid):
 
 @app.get("/api/customer-directory")
 def customer_directory():
-    """Admin-only: every customer organisation, flagged with whether the
+    """Admin-only: every customer organization, flagged with whether the
     requesting tenant admin already cares for it (used by the self-select UI)."""
     u, err, code = require_role("admin")
     if err:
@@ -936,7 +936,7 @@ def signup():
     customer_id = b.get("customer_id") or None
     location_id = b.get("location_id") or None
     department_id = b.get("department_id") or None
-    new_cust_name = (b.get("new_customer_name") or b.get("new_organisation_name") or b.get("new_customer") or "").strip()
+    new_cust_name = (b.get("new_customer_name") or b.get("new_organization_name") or b.get("new_customer") or "").strip()
     new_loc_name = (b.get("new_location_name") or b.get("new_location") or "").strip()
     if role == "customer":
         if new_cust_name:
@@ -960,7 +960,7 @@ def signup():
                     department_id = None
         elif not customer_id:
             c.close()
-            return jsonify({"error": "Select your organisation or create a new one"}), 400
+            return jsonify({"error": "Select your organization or create a new one"}), 400
 
         if new_loc_name:
             # Location and department are unified: create or resolve location/department for this customer
@@ -1120,9 +1120,9 @@ def list_customers():
 
 @app.post("/api/customers")
 def create_customer():
-    """Create a customer organisation.
+    """Create a customer organization.
 
-    The master may create any organisation. A tenant admin may also create one;
+    The master may create any organization. A tenant admin may also create one;
     it is automatically added to that admin's care list so they can immediately
     set up locations, equipment, users and tickets for it."""
     u, err, code = require_role("admin")
@@ -1130,7 +1130,7 @@ def create_customer():
         return err, code
     b = get_body()
     if not (b.get("name") or "").strip():
-        return jsonify({"error": "Customer name is required"}), 400
+        return jsonify({"error": "Organization name is required"}), 400
     c = conn()
     cur = c.execute(
         "INSERT INTO customers (name,contact_name,email,phone,address,city,created_at) VALUES (?,?,?,?,?,?,?)",
@@ -1138,7 +1138,7 @@ def create_customer():
          b.get("address", ""), b.get("city", ""), now()),
     )
     new_id = cur.lastrowid
-    # A tenant admin who creates an organisation automatically starts caring for
+    # A tenant admin who creates an organization automatically starts caring for
     # it (the master already manages every customer).
     if is_tenant_admin(u):
         c.execute(
@@ -1187,7 +1187,7 @@ def delete_customer(cid):
             return err_t, code_t
         if u.get("customer_id") == cid:
             c.close()
-            return jsonify({"error": "You cannot delete your own primary organisation"}), 400
+            return jsonify({"error": "You cannot delete your own primary organization"}), 400
     n_equip = c.execute("SELECT COUNT(*) n FROM equipment WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_cmp = c.execute("SELECT COUNT(*) n FROM complaints WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_brk = c.execute("SELECT COUNT(*) n FROM breakdowns WHERE customer_id=?", (cid,)).fetchone()["n"]
@@ -1196,9 +1196,9 @@ def delete_customer(cid):
     n_portal = c.execute("SELECT COUNT(*) n FROM portal_links WHERE customer_id=?", (cid,)).fetchone()["n"]
     if n_equip or n_cmp or n_brk or n_loc or n_pm or n_portal:
         c.close()
-        return jsonify({"error": "Customer has linked locations, equipment, tickets, PM schedules or portal links; cannot delete."}), 409
+        return jsonify({"error": "Organization has linked locations, equipment, tickets, PM schedules or portal links; cannot delete."}), 409
     c.execute("DELETE FROM customers WHERE id=?", (cid,))
-    # drop any care-list links to the removed organisation
+    # drop any care-list links to the removed organization
     c.execute("DELETE FROM admin_customer_links WHERE customer_id=?", (cid,))
     c.commit()
     c.close()
@@ -1428,7 +1428,7 @@ def update_department(did):
     new_loc = c.execute("SELECT customer_id FROM locations WHERE id=?", (new_loc_id,)).fetchone() if new_loc_id else None
     if new_loc_id and (not new_loc or new_loc["customer_id"] != existing["customer_id"]):
         c.close()
-        return jsonify({"error": "Location does not belong to the selected customer"}), 400
+        return jsonify({"error": "Location does not belong to the selected organization"}), 400
     c.execute("UPDATE departments SET name=?,location_id=? WHERE id=?",
               (b.get("name", ""), new_loc_id, did))
     c.commit()
@@ -1625,7 +1625,7 @@ def create_equipment():
         return err, code
     b = get_body()
     if not (b.get("name") or "").strip() or not b.get("customer_id"):
-        return jsonify({"error": "Equipment name and customer are required"}), 400
+        return jsonify({"error": "Equipment name and organization are required"}), 400
     err_t, code_t = tenant_guard(u, b["customer_id"])
     if err_t:
         return err_t, code_t
@@ -1844,10 +1844,10 @@ def create_complaint():
         if scope:
             if customer_id not in scope:
                 c.close()
-                return jsonify({"error": "You can only raise complaints for your own organisation"}), 403
+                return jsonify({"error": "You can only raise complaints for your own organization"}), 403
             if equipment_id and eq_cust is not None and eq_cust != customer_id:
                 c.close()
-                return jsonify({"error": "Equipment does not belong to your organisation"}), 403
+                return jsonify({"error": "Equipment does not belong to your organization"}), 403
         if not assignee_allowed(u, b.get("assigned_to") or None, c):
             c.close()
             return jsonify({"error": "You can only assign to your own team"}), 403
@@ -1865,7 +1865,7 @@ def create_complaint():
 
     if not customer_id:
         c.close()
-        return jsonify({"error": "Customer is required"}), 400
+        return jsonify({"error": "Organization is required"}), 400
     ra_id, err_r, code_r = resolve_responsible_admin(c, u, customer_id, b.get("responsible_admin_id"))
     if err_r:
         c.close()
@@ -2096,12 +2096,12 @@ def update_complaint(cid):
     if scope:
         if "customer_id" in b and b["customer_id"] not in scope:
             c.close()
-            return jsonify({"error": "You cannot move this complaint to another organisation"}), 403
+            return jsonify({"error": "You cannot move this complaint to another organization"}), 403
         if "equipment_id" in b and b["equipment_id"]:
             e_row = c.execute("SELECT customer_id FROM equipment WHERE id=?", (b["equipment_id"],)).fetchone()
             if not e_row or e_row["customer_id"] not in scope:
                 c.close()
-                return jsonify({"error": "Equipment does not belong to this organisation"}), 403
+                return jsonify({"error": "Equipment does not belong to this organization"}), 403
         if "assigned_to" in b and not assignee_allowed(u, b["assigned_to"] or None, c):
             c.close()
             return jsonify({"error": "You can only assign to your own team"}), 403
@@ -2315,10 +2315,10 @@ def create_breakdown():
         if scope:
             if customer_id not in scope:
                 c.close()
-                return jsonify({"error": "You can only raise breakdowns for your own organisation"}), 403
+                return jsonify({"error": "You can only raise breakdowns for your own organization"}), 403
             if equipment_id and eq_cust is not None and eq_cust != customer_id:
                 c.close()
-                return jsonify({"error": "Equipment does not belong to your organisation"}), 403
+                return jsonify({"error": "Equipment does not belong to your organization"}), 403
         if not assignee_allowed(u, b.get("assigned_to") or None, c):
             c.close()
             return jsonify({"error": "You can only assign to your own team"}), 403
@@ -2335,7 +2335,7 @@ def create_breakdown():
 
     if not customer_id:
         c.close()
-        return jsonify({"error": "Customer is required"}), 400
+        return jsonify({"error": "Organization is required"}), 400
     ra_id, err_r, code_r = resolve_responsible_admin(c, u, customer_id, b.get("responsible_admin_id"))
     if err_r:
         c.close()
@@ -2401,12 +2401,12 @@ def update_breakdown(bid):
     if scope:
         if "customer_id" in b and b["customer_id"] not in scope:
             c.close()
-            return jsonify({"error": "You cannot move this breakdown to another organisation"}), 403
+            return jsonify({"error": "You cannot move this breakdown to another organization"}), 403
         if "equipment_id" in b and b["equipment_id"]:
             e_row = c.execute("SELECT customer_id FROM equipment WHERE id=?", (b["equipment_id"],)).fetchone()
             if not e_row or e_row["customer_id"] not in scope:
                 c.close()
-                return jsonify({"error": "Equipment does not belong to this organisation"}), 403
+                return jsonify({"error": "Equipment does not belong to this organization"}), 403
         if "assigned_to" in b and not assignee_allowed(u, b["assigned_to"] or None, c):
             c.close()
             return jsonify({"error": "You can only assign to your own team"}), 403
@@ -2738,37 +2738,37 @@ def create_user():
         if c is None:
             _conn_tmp.close()
     elif role  in ("engineer", "application"):
-        # A tenant admin may leave the organisation EMPTY: the account then sits
+        # A tenant admin may leave the organization EMPTY: the account then sits
         # under the linked tenant admin's care and inherits that admin's care
-        # list (see tenant_scope) rather than being tied to one organisation.
-        # When an organisation IS named it must be on their care list.
+        # list (see tenant_scope) rather than being tied to one organization.
+        # When an organization IS named it must be on their care list.
         # The master may optionally bind an engineer to a customer (tenant engineer).
         if scope is not None:
             customer_id = _id(b.get("customer_id"))
             if customer_id and customer_id not in scope:
                 if c: c.close()
-                return jsonify({"error": "You can only create accounts for an organisation you care for"}), 403
+                return jsonify({"error": "You can only create accounts for an organization you care for"}), 403
         else:
             customer_id = (u.get("customer_id") if u.get("role")  in ("engineer", "application") else
                            _id(b.get("customer_id")))
         location_id = department_id = None
     else:  # admin — only the master may create one, and it is always a tenant admin.
         # The tenant admin may deliberately be left UNLINKED: after first login
-        # they create their own organisation (auto-added to their care list),
+        # they create their own organization (auto-added to their care list),
         # then its locations, departments, equipment and user accounts.
         customer_id = _id(b.get("customer_id"))
         location_id = department_id = None
 
     # A customer-less staff account is allowed — it belongs to the tenant admin's
-    # care instead of to one organisation. Customer-role accounts still have to
-    # name one (enforced just below), and any organisation that IS named must be
+    # care instead of to one organization. Customer-role accounts still have to
+    # name one (enforced just below), and any organization that IS named must be
     # on the actor's care list.
     if scope is not None and customer_id and customer_id not in scope:
         if c: c.close()
-        return jsonify({"error": "You can only create accounts for an organisation you care for"}), 403
+        return jsonify({"error": "You can only create accounts for an organization you care for"}), 403
     if role == "customer" and not customer_id:
         if c: c.close()
-        return jsonify({"error": "Linked customer is required for customer accounts"}), 400
+        return jsonify({"error": "Linked organization is required for customer accounts"}), 400
 
     if c is None:
         c = conn()
@@ -2784,14 +2784,14 @@ def create_user():
         c.close()
         return err_r, code_r
     # A tenant admin may only hand a customer-less account to themselves or to a
-    # peer who cares for at least one of the same organisations — otherwise they
+    # peer who cares for at least one of the same organizations — otherwise they
     # could push an account into a tenant they do not manage.
     if scope is not None and not customer_id and ra_id and ra_id != u["id"]:
         peer = c.execute("SELECT * FROM users WHERE id=?", (ra_id,)).fetchone()
         peer_scope = _admin_scope_ids(c, ra_id, peer) if peer else []
         if not (set(peer_scope) & set(scope)):
             c.close()
-            return jsonify({"error": "That tenant admin does not care for any organisation you manage"}), 403
+            return jsonify({"error": "That tenant admin does not care for any organization you manage"}), 403
     if (b["email"] or "").strip().lower() == FORMER_USER_EMAIL:
         c.close()
         return jsonify({"error": "That email is reserved for the system placeholder account"}), 400
@@ -2830,7 +2830,7 @@ def update_user(uid):
             return jsonify({"error": "The Master System Admin account cannot change role"}), 403
         if "customer_id" in b and b["customer_id"]:
             c.close()
-            return jsonify({"error": "The Master System Admin account cannot be linked to a customer"}), 403
+            return jsonify({"error": "The Master System Admin account cannot be linked to an organization"}), 403
         if b.get("active") is not None and b["active"] != 1:
             c.close()
             return jsonify({"error": "The Master System Admin account cannot be disabled"}), 403
@@ -2842,14 +2842,14 @@ def update_user(uid):
             return jsonify({"error": "Only the master administrator can manage admin accounts"}), 403
         scope = tenant_scope(u, c)
         new_role = b.get("role", existing["role"])
-        # An account with no organisation of its own belongs to whichever tenant
+        # An account with no organization of its own belongs to whichever tenant
         # admin it is linked to, so it stays manageable by that admin (or a peer
-        # who shares an organisation with them) rather than falling out of scope.
+        # who shares an organization with them) rather than falling out of scope.
         in_care = (existing["customer_id"] in scope if existing["customer_id"]
                    else _staff_in_tenant_care(c, u["id"], existing, scope))
         if not in_care:
             c.close()
-            return jsonify({"error": "Not authorised — user belongs to an organisation you do not care for"}), 403
+            return jsonify({"error": "Not authorised — user belongs to an organization you do not care for"}), 403
         if new_role == "admin":
             c.close()
             return jsonify({"error": "Only the master administrator can create admin accounts"}), 403
@@ -2857,12 +2857,12 @@ def update_user(uid):
             wanted = _id(b["customer_id"])
             if wanted and wanted not in scope:
                 c.close()
-                return jsonify({"error": "You can only link accounts to an organisation you care for"}), 403
-            # Clearing the organisation is fine for staff (they move under the
+                return jsonify({"error": "You can only link accounts to an organization you care for"}), 403
+            # Clearing the organization is fine for staff (they move under the
             # linked tenant admin's care) but not for a customer-role account.
             if not wanted and new_role == "customer":
                 c.close()
-                return jsonify({"error": "Linked customer is required for customer accounts"}), 400
+                return jsonify({"error": "Linked organization is required for customer accounts"}), 400
     elif u["role"]  in ("engineer", "application") and u.get("customer_id"):
         # tenant engineers: same restrictions, single customer
         if existing["role"] == "admin":
@@ -2870,7 +2870,7 @@ def update_user(uid):
             return jsonify({"error": "Only the master administrator can manage admin accounts"}), 403
         if existing["customer_id"] != u["customer_id"]:
             c.close()
-            return jsonify({"error": "Not authorised — user belongs to another organisation"}), 403
+            return jsonify({"error": "Not authorised — user belongs to another organization"}), 403
         if b.get("role") == "admin":
             c.close()
             return jsonify({"error": "Only the master administrator can create admin accounts"}), 403
@@ -3667,7 +3667,7 @@ def create_pm():
     if not (b.get("title") or "").strip():
         return jsonify({"error": "Title is required"}), 400
     if not b.get("customer_id"):
-        return jsonify({"error": "Customer is required"}), 400
+        return jsonify({"error": "Organization is required"}), 400
     err_t, code_t = tenant_guard(u, b["customer_id"])
     if err_t:
         return err_t, code_t
@@ -3871,7 +3871,7 @@ def create_portal_link():
         return err, code
     b = get_body()
     if not b.get("customer_id"):
-        return jsonify({"error": "Customer is required"}), 400
+        return jsonify({"error": "Organization is required"}), 400
     err_t, code_t = tenant_guard(u, b["customer_id"])
     if err_t:
         return err_t, code_t

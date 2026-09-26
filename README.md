@@ -41,7 +41,7 @@ working against plain SQLite for local development.
   `ap-southeast`). The container connects using `LABCARE_DATABASE_URL`
   (= InsForge `db connection-string`).
 - **Fresh data policy:** the database starts empty and is seeded with only the
-  **Master System Admin** account. Customers, users, equipment and tickets are
+  **Master System Admin** account. Organizations, users, equipment and tickets are
   created in-app.
 - **Redeploy:** `./deploy.sh` (backend), `./deploy.sh frontend` (frontend),
   `./deploy.sh all` (both), `./deploy.sh push` (git). The script recovers
@@ -127,76 +127,76 @@ Password for the account below is **`Demo123!`**.
 | Master System Admin | admin@labcare.com |
 
 The InsForge database starts **fresh**: only the Master System Admin exists.
-The master creates **tenant admins** (linked to a customer, or entirely
-unlinked — an unlinked tenant admin creates their own organisation after
-first login). Tenant admins then create their own customers, users,
-locations, departments, equipment and tickets in-app under **Admin → Customer
-organisations** and **Admin → Team & users**.
+The master creates **tenant admins** (linked to an organization, or entirely
+unlinked — an unlinked tenant admin creates their own organization after
+first login). Tenant admins then create their own organizations, users,
+locations, departments, equipment and tickets in-app under **Admin →
+Organizations** and **Admin → Team & users**.
 
 ## Key behaviour
 
 - **Roles & multi-tenant scoping**: one shared database with strict
   `customer_id` scoping.
   - **Master System Admin** — a single, identity-bound account
-    (`admin@labcare.com`) that sees and manages everything: customers,
+    (`admin@labcare.com`) that sees and manages everything: organizations,
     categories, onboarding/join requests and all users. Only this account can
-    create or edit admin accounts and customers, and it can never be disabled,
-    demoted or linked to a customer. Every other admin is a tenant admin.
+    create or edit admin accounts and organizations, and it can never be
+    disabled, demoted or linked to an organization. Every other admin is a tenant admin.
     **Only the Master System Admin can delete a complaint or breakdown
     ticket.** The master can also **delete any user account** — deleting a
     user never cascades: their tickets, equipment, PM schedules and other
     records are kept and simply become unlinked/unassigned (history rows
     render the author as "Former user").
   - **Tenant admin** (any admin who is not the Master) manages only the
-    organisations in their care list — their locations, departments,
+    organizations in their care list — their locations, departments,
     equipment, tickets, PM schedules and users. The master may create a tenant
-    admin **without linking any customer/equipment/organisation**: after first
-    login that tenant admin creates their **own** customer organisation (it is
+    admin **without linking any organization**: after first login that tenant
+    admin creates their **own** organization (it is
     automatically added to their care list), then its users (technicians and
     customer accounts), locations, departments and equipment. They **cannot**
-    create or edit any admin account, cannot see other organisations' data,
+    create or edit any admin account, cannot see other organizations' data,
     and can only assign work to their own team or LabCare's provider
     technicians.
   - **Technician**: provider technicians (`customer_id NULL` **and** no linked
-    tenant admin — created by the master) work across all customers; tenant
-    technicians (`customer_id` set) are restricted to their customer. A
-    technician a tenant admin creates **without** an organisation is neither:
+    tenant admin — created by the master) work across all organizations; tenant
+    technicians (`customer_id` set) are restricted to their organization. A
+    technician a tenant admin creates **without** an organization is neither:
     `customer_id` is NULL but `responsible_admin_id` names that tenant admin, so
     they are restricted to **that admin's care list**. This distinction is a
-    security boundary, not a convenience — in `tenant_scope()` a NULL customer
-    means "unscoped", i.e. every organisation on the platform, so a
+    security boundary, not a convenience — in `tenant_scope()` a NULL
+    `customer_id` means "unscoped", i.e. every organization on the platform, so a
     customer-less account with no linked admin would see other tenants' data.
     The link is therefore what defines the scope, and a tenant admin can never
-    mint a system-wide account. An unbound tenant admin (no organisations yet)
+    mint a system-wide account. An unbound tenant admin (no organizations yet)
     has an empty care list, so the accounts they create see nothing at all.
-  - **Customer** users are restricted to their own organisation, location and
+  - **Customer** users are restricted to their own organization, location and
     department.
   - The master can create tenant admins (linked **or** unlinked), technicians
     and customer users directly (via Team & users) and approve self-sign-ups;
     tenant admins can only create technicians and customer users for their own
-    customers — or, for technicians and application accounts, for their **tenant
-    as a whole** by leaving the organisation empty (see *Responsible tenant
-    admin* below). Customer-role accounts always have to name an organisation,
-    since those are an organisation's own people.
+    organizations — or, for technicians and application accounts, for their **tenant
+    as a whole** by leaving the organization empty (see *Responsible tenant
+    admin* below). Customer-role accounts always have to name an organization,
+    since those are an organization's own people.
 - **Responsible tenant admin**: every user, piece of equipment, complaint and
   breakdown carries an explicit `responsible_admin_id` — the tenant admin who
   "cares for" that record. The master (and provider staff) see a *Responsible
   tenant admin* picker on each form and the choice is validated server-side
-  (must be an active admin of the record's organisation). When a customer has
+  (must be an active admin of the record's organization). When an organization has
   exactly one tenant admin it is filled in automatically; with several, one must
   be chosen explicitly; tenant admins/technicians are always assigned
-  automatically (themselves or their customer's admin).
+  automatically (themselves or their organization's admin).
 
   On the **Add user** form a tenant admin sees a *Linked tenant admin* picker
-  next to the now-**optional** *Linked customer* — it defaults to themselves and
+  next to the now-**optional** *Linked organization* — it defaults to themselves and
   lists only their peer admins (`GET /api/tenant-admins` with no `customer_id`,
   which the backend already scopes to the caller's care list). Leaving the
-  organisation empty places the account under the named admin's care. A tenant
+  organization empty places the account under the named admin's care. A tenant
   admin may only name themselves or a peer who cares for at least one of the
-  same organisations, so an account cannot be pushed into a tenant they do not
+  same organizations, so an account cannot be pushed into a tenant they do not
   manage. Ids from these pickers are coerced server-side: browsers send
   `<select>` values as strings, which previously failed an integer care-list
-  comparison and rejected a legitimately chosen organisation with a 403.
+  comparison and rejected a legitimately chosen organization with a 403.
 - **Ticket numbering**: complaints `CMP-0001…`, breakdowns `BRK-0001…`.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.
