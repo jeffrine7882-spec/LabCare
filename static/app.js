@@ -2679,8 +2679,12 @@ async function openUserEditor(edit, id) {
       <label class="field"><span>Phone</span><input id="uPhone" value="${esc(u ? u.phone : "")}"></label>
       <label class="field"><span>Role</span>
         <select id="uRole" onchange="toggleCustomerSelect()">
-          ${(master ? [["admin", "Tenant admin"], ["engineer", "Engineer"], ["application", "Application"], ["customer", "Customer"]] : [["engineer", "Engineer"], ["application", "Application"], ["customer", "Customer"]])
-            .map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("")}
+          ${(() => {
+            const base = [["engineer", "Engineer"], ["application", "Application"]];
+            // When editing, keep the existing role visible even if it's customer/admin
+            if (u && !base.find(([r]) => r === u.role)) base.unshift([u.role, u.role === "admin" ? "Tenant admin" : (u.role === "customer" ? "Customer" : u.role)]);
+            return base.map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("");
+          })()}
         </select></label>
       <div id="uCustomerFields" style="${showCustFields ? "" : "display:none"}">
         <label class="field" id="uCustomerField"><span id="uCustomerLabel">${master && !startCust ? "Linked organization (optional — leave empty for LabSynch-wide)" : (tenantAdmin && !startCust ? "Linked organization (optional — leave empty to place them under tenant admin care)" : "Linked organization")}</span>
