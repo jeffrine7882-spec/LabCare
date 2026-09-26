@@ -924,9 +924,11 @@ class _PGCursor:
     """Cursor shim: same shape the app expects from sqlite3 (dict rows + lastrowid)."""
 
     # Tables without an `id` column (sessions: token PK; notification_pings:
-    # user_id PK; admin_customer_links: composite PK). RETURNING id is skipped
-    # for these, because lastrowid is never read from them either.
-    _NO_ID_TABLES = {"sessions", "notification_pings", "admin_customer_links"}
+    # user_id PK; admin_customer_links and pending_care_declines: composite PK).
+    # RETURNING id is skipped for these, because lastrowid is never read from
+    # them either.
+    _NO_ID_TABLES = {"sessions", "notification_pings", "admin_customer_links",
+                     "pending_care_declines"}
 
     def __init__(self, pg_conn):
         self._cur = pg_conn.cursor(row_factory=dict_row)
@@ -962,6 +964,15 @@ class _PGCursor:
     @property
     def lastrowid(self):
         return self._lastrowid
+
+    @property
+    def rowcount(self):
+        """Rows affected, so a guarded UPDATE can tell whether it won a race.
+
+        sqlite3 cursors expose this natively; claiming a pending organization
+        relies on it so "the first tenant admin to claim wins" also holds on
+        Postgres, where two admins could otherwise both pass the pre-check."""
+        return self._cur.rowcount
 
     def fetchone(self):
         return _norm_row(self._cur.fetchone())

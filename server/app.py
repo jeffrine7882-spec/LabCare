@@ -165,6 +165,26 @@ def is_tenant_admin(u):
     return u.get("role") == "admin" and not is_master_admin(u)
 
 
+def _tenant_admin_ids(c, exclude_id=None):
+    """Ids of every active tenant admin (the master is identified by email).
+
+    Used when a join request creates a brand-new organization: all of them are
+    asked whether it is under their care, and the first to claim it wins."""
+    rows = c.execute(
+        "SELECT id FROM users WHERE role='admin' AND active=1 AND lower(email)<>?",
+        (MASTER_ADMIN_EMAIL,)).fetchall()
+    return [r["id"] for r in rows if r["id"] != exclude_id]
+
+
+def _other_admin_ids(c, exclude_id=None):
+    """Ids of every active admin except one — the master included.
+
+    Used to tell the others that a pending organization has been settled, so
+    their notification lists stop offering an action that is no longer open."""
+    rows = c.execute("SELECT id FROM users WHERE role='admin' AND active=1").fetchall()
+    return [r["id"] for r in rows if r["id"] != exclude_id]
+
+
 def _admin_scope_ids(c, admin_id, user_row=None):
     """Customer ids a tenant admin cares for (primary + linked), primary first.
 
@@ -866,6 +886,149 @@ def remove_my_customer(cid):
     return jsonify({"ok": True})
 
 
+@app.get("/api/customers/pending-care")
+def pending_care_list():
+    """Organizations created by a join request that nobody has claimed yet.
+
+    Every tenant admin sees them, minus the ones they already answered "not
+    mine" — a decline only hides it from that admin, so the others and the
+    master can still act. The master sees all of them plus the tenant admins
+    available to take an assignment."""
+    u, err, code = require_role("admin")
+    if err:
+        return err, code
+    c = conn()
+    where, params = "WHERE cu.pending_care=1", []
+    if not is_master_admin(u):
+        where += (" AND cu.id NOT IN "
+                  "(SELECT customer_id FROM pending_care_declines WHERE admin_id=?)")
+        params.append(u["id"])
+    rows = c.execute(
+        "SELECT cu.id, cu.name, cu.contact_name, cu.email, cu.phone, cu.city, cu.created_at, "
+        "(SELECT a.name FROM onboarding_apps a WHERE a.customer_id=cu.id ORDER BY a.id DESC LIMIT 1) "
+        "AS requested_by, "
+        "(SELECT a.email FROM onboarding_apps a WHERE a.customer_id=cu.id ORDER BY a.id DESC LIMIT 1) "
+        "AS requested_by_email, "
+        "(SELECT COUNT(*) FROM pending_care_declines d WHERE d.customer_id=cu.id) AS declines "
+        f"FROM customers cu {where} ORDER BY cu.created_at DESC", params).fetchall()
+    out = rows_to_dicts(rows)
+    resp = {"customers": out}
+    if is_master_admin(u):
+        resp["tenant_admins"] = rows_to_dicts(c.execute(
+            "SELECT id, name, email, customer_id FROM users "
+            "WHERE role='admin' AND active=1 AND lower(email)<>? ORDER BY name",
+            (MASTER_ADMIN_EMAIL,)).fetchall())
+    c.close()
+    return jsonify(resp)
+
+
+@app.post("/api/customers/<int:cid>/take-care")
+def take_care(cid):
+    """A tenant admin claims a join-request organization: first to claim wins.
+
+    Once claimed it leaves the pending list for everyone at the same moment, so
+    two admins cannot both take it. After that the organization behaves like any
+    other and the usual shared-care rules apply again."""
+    u, err, code = require_role("admin")
+    if err:
+        return err, code
+    if not is_tenant_admin(u):
+        return jsonify({"error": "Only a tenant admin can take an organization into their care"}), 403
+    c = conn()
+    cust = c.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
+    if not cust:
+        c.close()
+        return jsonify({"error": "Organization not found"}), 404
+    if not cust["pending_care"]:
+        c.close()
+        return jsonify({"error": "This organization is no longer awaiting a care decision"}), 409
+    # The guarded UPDATE is what makes the claim exclusive: whoever reaches it
+    # first flips the flag, and everyone else matches zero rows.
+    cur = c.execute("UPDATE customers SET pending_care=0 WHERE id=? AND pending_care=1", (cid,))
+    if (cur.rowcount or 0) < 1:
+        c.close()
+        return jsonify({"error": "Another tenant admin took this organization first"}), 409
+    c.execute("INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
+              (u["id"], cid, now()))
+    c.execute("DELETE FROM pending_care_declines WHERE customer_id=?", (cid,))
+    c.commit()
+    for aid in _other_admin_ids(c, exclude_id=u["id"]):
+        notify(aid, f"{u['name']} took {cust['name']} into their care.", "pending_care", cid, None)
+    c.close()
+    return jsonify({"ok": True, "customer_id": cid})
+
+
+@app.post("/api/customers/<int:cid>/decline-care")
+def decline_care(cid):
+    """A tenant admin says a join-request organization is not under their care.
+
+    It leaves their list only — the other tenant admins and the master can still
+    claim or assign it, so nobody can make a decision disappear for everyone."""
+    u, err, code = require_role("admin")
+    if err:
+        return err, code
+    if not is_tenant_admin(u):
+        return jsonify({"error": "Only a tenant admin can decline an organization"}), 403
+    c = conn()
+    cust = c.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
+    if not cust:
+        c.close()
+        return jsonify({"error": "Organization not found"}), 404
+    if not cust["pending_care"]:
+        c.close()
+        return jsonify({"error": "This organization is no longer awaiting a care decision"}), 409
+    c.execute("INSERT OR IGNORE INTO pending_care_declines (admin_id, customer_id, created_at) VALUES (?,?,?)",
+              (u["id"], cid, now()))
+    c.commit()
+    # The master hears about it, since assigning it is now the likely next step.
+    for r in c.execute("SELECT id FROM users WHERE role='admin' AND active=1 AND lower(email)=?",
+                       (MASTER_ADMIN_EMAIL,)).fetchall():
+        notify(r["id"], f"{u['name']} said {cust['name']} is not under their care.",
+               "pending_care", cid, None)
+    c.close()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/customers/<int:cid>/assign-care")
+def assign_care(cid):
+    """The master decides which tenant admin looks after a join-request
+    organization."""
+    u, err, code = require_master()
+    if err:
+        return err, code
+    b = get_body()
+    admin_id = _id(b.get("admin_id"))
+    if not admin_id:
+        return jsonify({"error": "Choose the tenant admin who will care for this organization"}), 400
+    c = conn()
+    cust = c.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
+    if not cust:
+        c.close()
+        return jsonify({"error": "Organization not found"}), 404
+    if not cust["pending_care"]:
+        c.close()
+        return jsonify({"error": "This organization is no longer awaiting a care decision"}), 409
+    target = c.execute("SELECT * FROM users WHERE id=?", (admin_id,)).fetchone()
+    # Rows are sqlite3.Row objects here (no .get), so the master check compares
+    # the email directly rather than calling is_master_admin().
+    if (not target or target["role"] != "admin" or not target["active"]
+            or (target["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL):
+        c.close()
+        return jsonify({"error": "Choose an active tenant admin"}), 400
+    c.execute("UPDATE customers SET pending_care=0 WHERE id=?", (cid,))
+    c.execute("INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
+              (admin_id, cid, now()))
+    c.execute("DELETE FROM pending_care_declines WHERE customer_id=?", (cid,))
+    c.commit()
+    notify(admin_id, f"The master assigned {cust['name']} to your care.", "pending_care", cid, None)
+    for aid in _other_admin_ids(c, exclude_id=admin_id):
+        if aid == u["id"]:
+            continue
+        notify(aid, f"{cust['name']} was assigned to {target['name']}.", "pending_care", cid, None)
+    c.close()
+    return jsonify({"ok": True, "admin_id": admin_id})
+
+
 @app.get("/api/customer-directory")
 def customer_directory():
     """Admin-only: every customer organization, flagged with whether the
@@ -918,10 +1081,13 @@ def signup():
     b = get_body()
     name = (b.get("name") or "").strip()
     email = (b.get("email") or "").strip().lower()
+    phone = (b.get("phone") or "").strip()
     pw = b.get("password") or ""
     role = b.get("role") or "customer"
     if not name or not email or not pw:
         return jsonify({"error": "Name, email and password are required"}), 400
+    if not phone:
+        return jsonify({"error": "A phone number is required"}), 400
     if len(pw) < 6:
         return jsonify({"error": "Password must be at least 6 characters"}), 400
     if role not in ("engineer", "application", "customer"):
@@ -938,6 +1104,9 @@ def signup():
     department_id = b.get("department_id") or None
     new_cust_name = (b.get("new_customer_name") or b.get("new_organization_name") or b.get("new_customer") or "").strip()
     new_loc_name = (b.get("new_location_name") or b.get("new_location") or "").strip()
+    # Set when this signup creates an organization that did not exist before:
+    # that one has no tenant admin yet, so it needs a care decision.
+    new_org_created = False
     if role == "customer":
         if new_cust_name:
             existing_cust = c.execute(
@@ -948,10 +1117,12 @@ def signup():
                 customer_id = existing_cust["id"]
             else:
                 cur_cust = c.execute(
-                    "INSERT INTO customers (name,contact_name,email,phone,address,city,created_at) VALUES (?,?,?,?,?,?,?)",
-                    (new_cust_name, name, email, b.get("phone", ""), "", "", now()),
+                    "INSERT INTO customers (name,contact_name,email,phone,address,city,pending_care,created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (new_cust_name, name, email, phone, "", "", 1, now()),
                 )
                 customer_id = cur_cust.lastrowid
+                new_org_created = True
             if location_id and not new_loc_name:
                 ref_loc = c.execute("SELECT name FROM locations WHERE id=?", (location_id,)).fetchone()
                 if ref_loc:
@@ -1014,7 +1185,7 @@ def signup():
     cur = c.execute(
         "INSERT INTO onboarding_apps (name,email,phone,password_hash,role,customer_id,location_id,department_id,status,created_at) "
         "VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (name, email, b.get("phone", ""), hash_password(pw), role, customer_id, location_id, department_id, "pending", now()),
+        (name, email, phone, hash_password(pw), role, customer_id, location_id, department_id, "pending", now()),
     )
     c.commit()
     # Notify the master admin that a new joiner is waiting for approval
@@ -1023,6 +1194,21 @@ def signup():
                        (MASTER_ADMIN_EMAIL,)).fetchall():
         notify(r["id"], f"New join request from {name} ({email}) is awaiting your approval.",
                "onboarding", cur.lastrowid, None)
+    # A brand-new organization has no tenant admin yet, so every tenant admin
+    # is asked whether it is under their care and the first to claim it wins.
+    # The master is told as well, because they may assign it instead.
+    if new_org_created:
+        for aid in _tenant_admin_ids(c):
+            notify(aid,
+                   f"{name} ({email}) asked to join a new organization, {new_cust_name}. "
+                   f"Is it under your care?",
+                   "pending_care", customer_id, None)
+        for r in c.execute("SELECT id FROM users WHERE role='admin' AND active=1 AND lower(email)=?",
+                           (MASTER_ADMIN_EMAIL,)).fetchall():
+            notify(r["id"],
+                   f"{new_cust_name} is a new organization awaiting a care decision. "
+                   f"You can assign it to a tenant admin.",
+                   "pending_care", customer_id, None)
     c.close()
     return jsonify({"ok": True, "message": "Request submitted. An admin must approve it before you can sign in."}), 201
 
@@ -1061,6 +1247,7 @@ def review_onboarding(aid):
     if app["status"] != "pending":
         c.close()
         return jsonify({"error": "This request has already been reviewed"}), 409
+    withdrawn = None
     if decision == "approve":
         if c.execute("SELECT id FROM users WHERE lower(email)=?", (app["email"],)).fetchone():
             c.close()
@@ -1076,7 +1263,23 @@ def review_onboarding(aid):
     else:
         c.execute("UPDATE onboarding_apps SET status='rejected', reviewed_by=?, reviewed_at=? WHERE id=?",
                   (u["id"], now(), aid))
+        # A rejected request must not leave its organization sitting in the
+        # pending-care list for tenant admins to claim. The organization row
+        # itself is kept: it already has a location and department, and a later
+        # signup naming the same organization reuses it.
+        if app["customer_id"]:
+            pc = c.execute("SELECT id, name FROM customers WHERE id=? AND pending_care=1",
+                           (app["customer_id"],)).fetchone()
+            if pc:
+                c.execute("UPDATE customers SET pending_care=0 WHERE id=?", (pc["id"],))
+                c.execute("DELETE FROM pending_care_declines WHERE customer_id=?", (pc["id"],))
+                withdrawn = pc["name"]
     c.commit()
+    if withdrawn:
+        for aid_ in _other_admin_ids(c, exclude_id=u["id"]):
+            notify(aid_,
+                   f"The join request for {withdrawn} was rejected, so it no longer needs a care decision.",
+                   "pending_care", app["customer_id"], None)
     c.close()
     return jsonify({"ok": True, "decision": decision})
 
@@ -3272,9 +3475,30 @@ def list_notifications():
                 f"SELECT id FROM breakdowns WHERE id IN ({marks}) AND accepted_by IS NOT NULL",
                 br_ids).fetchall():
             accepted.add(("breakdown", rr["id"]))
+    # Care decisions: say whether the organization is still unclaimed, who took
+    # it, or whether the request was withdrawn — so the notification stops
+    # offering buttons for a decision that is already settled.
+    pc_ids = [r["entity_id"] for r in out if r.get("entity_type") == "pending_care" and r.get("entity_id")]
+    care = {}
+    if pc_ids:
+        marks = ", ".join("?" for _ in pc_ids)
+        for rr in c.execute(f"SELECT id, pending_care FROM customers WHERE id IN ({marks})", pc_ids).fetchall():
+            care[rr["id"]] = {"pending": bool(rr["pending_care"]), "claimed_by": None}
+        still = [i for i, v in care.items() if not v["pending"]]
+        if still:
+            marks2 = ", ".join("?" for _ in still)
+            for rr in c.execute(
+                    f"SELECT l.customer_id, u.name AS admin_name FROM admin_customer_links l "
+                    f"LEFT JOIN users u ON u.id=l.admin_id WHERE l.customer_id IN ({marks2}) "
+                    f"ORDER BY l.created_at DESC", still).fetchall():
+                if not care[rr["customer_id"]]["claimed_by"]:
+                    care[rr["customer_id"]]["claimed_by"] = rr["admin_name"] or "another admin"
     c.close()
     for r in out:
         r["accepted"] = (r.get("entity_type"), r.get("entity_id")) in accepted
+        st = care.get(r.get("entity_id")) if r.get("entity_type") == "pending_care" else None
+        r["care_pending"] = bool(st and st["pending"])
+        r["care_claimed_by"] = (st or {}).get("claimed_by")
     return jsonify(out)
 
 
