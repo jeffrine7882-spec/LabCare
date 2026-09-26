@@ -2151,6 +2151,8 @@ def get_complaint(cid):
         "SELECT cm.*, COALESCE(u.name, 'Former user') AS user_name FROM comments cm LEFT JOIN users u ON u.id=cm.user_id "
         "WHERE cm.entity_type='complaint' AND cm.entity_id=? ORDER BY cm.created_at", (cid,)).fetchall()
     out["comments"] = rows_to_dicts(comments)
+    out["feedback"] = _feedback_payload(c, "complaint", cid)
+    out["feedback_open"] = row["status"] in FEEDBACK_STATUSES["complaint"]
     c.close()
     return jsonify(out)
 
@@ -2581,6 +2583,8 @@ def get_breakdown(bid):
         "SELECT cm.*, COALESCE(u.name, 'Former user') AS user_name FROM comments cm LEFT JOIN users u ON u.id=cm.user_id "
         "WHERE cm.entity_type='breakdown' AND cm.entity_id=? ORDER BY cm.created_at", (bid,)).fetchall()
     out["comments"] = rows_to_dicts(comments)
+    out["feedback"] = _feedback_payload(c, "breakdown", bid)
+    out["feedback_open"] = row["status"] in FEEDBACK_STATUSES["breakdown"]
     c.close()
     return jsonify(out)
 
@@ -2788,6 +2792,187 @@ def add_comment():
         else:
             rc.close()
     return jsonify(dict(row)), 201
+
+
+# --------------------------------------------------------------------------
+# Customer feedback on settled tickets
+# --------------------------------------------------------------------------
+# A ticket accepts feedback only once it is settled: a complaint when resolved
+# or closed, a breakdown when resolved (breakdowns have no closed status).
+# Feedback is deliberately inert — it never changes a ticket's status,
+# assignment or position in any list, and a ticket nobody rates or comments on
+# behaves exactly as it did before.
+FEEDBACK_STATUSES = {"complaint": ("resolved", "closed"), "breakdown": ("resolved",)}
+FEEDBACK_TABLES = {"complaint": "complaints", "breakdown": "breakdowns"}
+FEEDBACK_MAX_LEN = 2000
+
+
+def _feedback_ticket(c, kind, tid):
+    return c.execute("SELECT * FROM %s WHERE id=?" % FEEDBACK_TABLES[kind], (tid,)).fetchone()
+
+
+def _feedback_settled(row, kind):
+    return row["status"] in FEEDBACK_STATUSES[kind]
+
+
+def _feedback_payload(c, kind, tid):
+    """The rating and comment thread for one ticket, to embed in its payload.
+
+    Portal visitors have no user row, so a stored display name is the fallback
+    and an unnamed visitor simply reads as "Customer"."""
+    rating = c.execute(
+        "SELECT r.rating, r.updated_at, "
+        "COALESCE(NULLIF(u.name,''), NULLIF(r.rated_by_name,''), 'Customer') AS rated_by "
+        "FROM ticket_ratings r LEFT JOIN users u ON u.id=r.user_id "
+        "WHERE r.entity_type=? AND r.entity_id=?", (kind, tid)).fetchone()
+    comments = c.execute(
+        "SELECT f.id, f.text, f.created_at, "
+        "COALESCE(NULLIF(u.name,''), NULLIF(f.author_name,''), 'Customer') AS author_name "
+        "FROM ticket_feedback f LEFT JOIN users u ON u.id=f.user_id "
+        "WHERE f.entity_type=? AND f.entity_id=? ORDER BY f.created_at, f.id", (kind, tid)).fetchall()
+    return {"rating": dict(rating) if rating else None, "comments": rows_to_dicts(comments)}
+
+
+def _feedback_summary(c, kind, ids):
+    """Ratings and comment counts for a batch of tickets, in two queries."""
+    if not ids:
+        return {}
+    marks = ", ".join("?" for _ in ids)
+    out = {}
+    for r in c.execute(
+            "SELECT entity_id, rating FROM ticket_ratings "
+            "WHERE entity_type=? AND entity_id IN (%s)" % marks, [kind] + list(ids)).fetchall():
+        out.setdefault(r["entity_id"], {})["rating"] = r["rating"]
+    for r in c.execute(
+            "SELECT entity_id, COUNT(*) AS n FROM ticket_feedback "
+            "WHERE entity_type=? AND entity_id IN (%s) GROUP BY entity_id" % marks,
+            [kind] + list(ids)).fetchall():
+        out.setdefault(r["entity_id"], {})["comments"] = r["n"]
+    return out
+
+
+def _save_rating(c, kind, tid, customer_id, rating, user_id, display_name):
+    """Insert or replace the one rating a ticket has. Returns (id, created)."""
+    existing = c.execute(
+        "SELECT id FROM ticket_ratings WHERE entity_type=? AND entity_id=?", (kind, tid)).fetchone()
+    if existing:
+        c.execute("UPDATE ticket_ratings SET rating=?, user_id=?, rated_by_name=?, updated_at=? WHERE id=?",
+                  (rating, user_id, display_name, now(), existing["id"]))
+        return existing["id"], False
+    cur = c.execute(
+        "INSERT INTO ticket_ratings (entity_type,entity_id,customer_id,user_id,rated_by_name,rating,"
+        "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        (kind, tid, customer_id, user_id, display_name, rating, now(), now()))
+    return cur.lastrowid, True
+
+
+def _rating_value(b):
+    """A submitted star rating if it is a whole number of stars from 1 to 5.
+
+    Deliberately not routed through _id(): that coerces with int(), which would
+    quietly truncate 3.5 stars to 3 and store a rating nobody chose. Browsers
+    send values as strings, so "4" and 4.0 are accepted; fractions, zero,
+    negatives and anything out of range are refused."""
+    raw = b.get("rating")
+    if isinstance(raw, bool) or raw is None or raw == "":
+        return None
+    try:
+        v = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if not v.is_integer():
+        return None
+    v = int(v)
+    return v if 1 <= v <= 5 else None
+
+
+def _require_customer_side(u):
+    """Feedback is the customer's to give — staff do the work being rated.
+
+    require_role() waves any admin through whatever roles it was given, so the
+    customer-only rule has to be stated explicitly here."""
+    if u["role"] != "customer":
+        return jsonify({"error": "Only the customer side can leave feedback on a ticket"}), 403
+    return None
+
+
+def _feedback_guard(u, row, kind, c):
+    """Shared checks for the authenticated feedback endpoints."""
+    err = _require_customer_side(u)
+    if err:
+        return err
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"], c):
+        return jsonify({"error": "Not authorised"}), 403
+    if not _feedback_settled(row, kind):
+        return jsonify({"error": "Feedback opens once this ticket is resolved or closed"}), 409
+    return None
+
+
+@app.post("/api/tickets/<kind>/<int:tid>/rating")
+def rate_ticket(kind, tid):
+    """A customer rates a settled ticket from 1 to 5 stars.
+
+    Optional: nothing depends on it. Re-rating replaces the previous score, so a
+    ticket carries one current rating rather than an accumulating vote."""
+    if kind not in FEEDBACK_TABLES:
+        return jsonify({"error": "Invalid ticket type"}), 400
+    u, err, code = require_role("customer")
+    if err:
+        return err, code
+    rating = _rating_value(get_body())
+    if not rating:
+        return jsonify({"error": "Choose a rating from 1 to 5 stars"}), 400
+    c = conn()
+    row = _feedback_ticket(c, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    guard = _feedback_guard(u, row, kind, c)
+    if guard:
+        c.close()
+        return guard
+    rid, created = _save_rating(c, kind, tid, row["customer_id"], rating, u["id"], u.get("name") or "")
+    c.commit()
+    c.close()
+    audit(kind, tid, u, "rating", "%d star%s" % (rating, "" if rating == 1 else "s"))
+    return jsonify({"ok": True, "id": rid, "rating": rating, "created": created}), (201 if created else 200)
+
+
+@app.post("/api/tickets/<kind>/<int:tid>/feedback")
+def comment_ticket_feedback(kind, tid):
+    """A customer adds a comment to a settled ticket's feedback thread.
+
+    The thread stays open after the ticket is settled, so a customer can add
+    that the fix held — or that it did not — without reopening anything."""
+    if kind not in FEEDBACK_TABLES:
+        return jsonify({"error": "Invalid ticket type"}), 400
+    u, err, code = require_role("customer")
+    if err:
+        return err, code
+    text = (get_body().get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Please write your feedback"}), 400
+    if len(text) > FEEDBACK_MAX_LEN:
+        return jsonify({"error": "Feedback is limited to %d characters" % FEEDBACK_MAX_LEN}), 400
+    c = conn()
+    row = _feedback_ticket(c, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    guard = _feedback_guard(u, row, kind, c)
+    if guard:
+        c.close()
+        return guard
+    cur = c.execute(
+        "INSERT INTO ticket_feedback (entity_type,entity_id,customer_id,user_id,author_name,text,created_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (kind, tid, row["customer_id"], u["id"], u.get("name") or "", text, now()))
+    c.commit()
+    new_id = cur.lastrowid
+    c.close()
+    audit(kind, tid, u, "feedback", text[:120])
+    return jsonify({"ok": True, "id": new_id, "author_name": u.get("name") or "Customer",
+                    "text": text}), 201
 
 
 # --------------------------------------------------------------------------
@@ -3406,6 +3591,21 @@ def dashboard():
     te_sql += " GROUP BY e.name ORDER BY n DESC LIMIT 5"
     top_equip = c.execute(te_sql, te_pp).fetchall()
 
+    # Customer satisfaction on settled tickets. Ratings are all-time rather than
+    # windowed like the counts above: this is a cumulative service-quality
+    # figure, and letting it slide over a 3-month window would make the average
+    # move as tickets age out rather than as service changes.
+    fb_ratings = []
+    for fb_kind, fb_table in (("complaint", "complaints"), ("breakdown", "breakdowns")):
+        fb_sql, fb_pp = scoped(
+            "SELECT r.rating AS rating FROM ticket_ratings r "
+            "JOIN %s t ON t.id=r.entity_id AND r.entity_type='%s'" % (fb_table, fb_kind),
+            cols={"customer_id": "t.customer_id", "location_id": "t.location_id",
+                  "department_id": "t.department_id"})
+        fb_ratings += [x["rating"] for x in c.execute(fb_sql, fb_pp).fetchall()]
+    fb_count = len(fb_ratings)
+    fb_avg = round(sum(fb_ratings) / float(fb_count), 2) if fb_count else None
+
     # recent activity (3-month window)
     rc_sql, rc_pp = scoped(
         "SELECT cmp.id, cmp.code, cmp.subject, cmp.status, cmp.priority, cmp.created_at, cmp.customer_id, "
@@ -3441,6 +3641,10 @@ def dashboard():
         "top_equipment": [dict(r) for r in top_equip],
         "recent_complaints": [dict(r) for r in recent_cmp],
         "recent_breakdowns": [dict(r) for r in recent_brk],
+        "customer_feedback": {
+            "average_rating": fb_avg,
+            "rating_count": fb_count,
+        },
     })
 
 
@@ -4342,10 +4546,137 @@ def portal_history(token):
         "b.accepted_by, b.accepted_at, b.accept_reply, u.name AS accepted_by_name "
         "FROM breakdowns b LEFT JOIN users u ON u.id=b.accepted_by "
         "WHERE b.customer_id=? ORDER BY b.created_at DESC LIMIT 20", (row["customer_id"],)).fetchall()
-    c.close()
     out = [dict(r, kind="complaint") for r in cmp_rows] + [dict(r, kind="breakdown") for r in brk_rows]
     out.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-    return jsonify(out[:20])
+    out = out[:20]
+    # Satisfaction rides along with the history rows so the portal can show a
+    # rating and offer the feedback form without a request per ticket.
+    for kind in ("complaint", "breakdown"):
+        ids = [r["id"] for r in out if r["kind"] == kind]
+        summ = _feedback_summary(c, kind, ids)
+        for r in out:
+            if r["kind"] != kind:
+                continue
+            s = summ.get(r["id"], {})
+            r["rating"] = s.get("rating")
+            r["feedback_comments"] = s.get("comments", 0)
+            r["feedback_open"] = r["status"] in FEEDBACK_STATUSES[kind]
+    c.close()
+    return jsonify(out)
+
+def _portal_link(c, token):
+    return c.execute("SELECT * FROM portal_links WHERE token=? AND active=1", (token,)).fetchone()
+
+
+def _portal_ticket(c, link, kind, tid):
+    """The ticket a portal visitor may give feedback on, or None.
+
+    Scoped exactly like the portal's own history list — every ticket belonging
+    to the link's organization — so a visitor can respond to any settled ticket
+    they are shown, and never to another organization's."""
+    if kind not in FEEDBACK_TABLES:
+        return None
+    row = _feedback_ticket(c, kind, tid)
+    if not row or row["customer_id"] != link["customer_id"]:
+        return None
+    return row
+
+
+@app.get("/api/portal/<token>/feedback")
+def portal_feedback(token):
+    """One settled ticket's rating and feedback thread, for the public portal."""
+    kind = (request.args.get("kind") or "complaint").strip().lower()
+    tid = _id(request.args.get("id"))
+    if kind not in FEEDBACK_TABLES or not tid:
+        return jsonify({"error": "Invalid ticket"}), 400
+    c = conn()
+    link = _portal_link(c, token)
+    if not link:
+        c.close()
+        return jsonify({"error": "Invalid or expired link"}), 404
+    row = _portal_ticket(c, link, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    out = _feedback_payload(c, kind, tid)
+    out["settled"] = _feedback_settled(row, kind)
+    out["status"] = row["status"]
+    out["code"] = row["code"]
+    c.close()
+    return jsonify(out)
+
+
+@app.post("/api/portal/<token>/rating")
+def portal_rate(token):
+    """Rate a settled ticket from the QR portal — no account needed.
+
+    The visitor's name is optional; without one the rating is attributed to
+    "Customer"."""
+    body = get_body()
+    kind = (body.get("kind") or "complaint").strip().lower()
+    tid = _id(body.get("id"))
+    if kind not in FEEDBACK_TABLES or not tid:
+        return jsonify({"error": "Invalid ticket"}), 400
+    rating = _rating_value(body)
+    if not rating:
+        return jsonify({"error": "Choose a rating from 1 to 5 stars"}), 400
+    c = conn()
+    link = _portal_link(c, token)
+    if not link:
+        c.close()
+        return jsonify({"error": "Invalid or expired link"}), 404
+    row = _portal_ticket(c, link, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _feedback_settled(row, kind):
+        c.close()
+        return jsonify({"error": "Feedback opens once this ticket is resolved or closed"}), 409
+    name = (body.get("name") or "").strip()[:80]
+    rid, created = _save_rating(c, kind, tid, row["customer_id"], rating, None, name)
+    c.commit()
+    c.close()
+    audit(kind, tid, {"id": None, "name": name or "Customer"}, "rating",
+          "%d star%s" % (rating, "" if rating == 1 else "s"))
+    return jsonify({"ok": True, "id": rid, "rating": rating, "created": created}), (201 if created else 200)
+
+
+@app.post("/api/portal/<token>/feedback")
+def portal_comment(token):
+    """Add a comment to a settled ticket's feedback thread from the QR portal."""
+    body = get_body()
+    kind = (body.get("kind") or "complaint").strip().lower()
+    tid = _id(body.get("id"))
+    if kind not in FEEDBACK_TABLES or not tid:
+        return jsonify({"error": "Invalid ticket"}), 400
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Please write your feedback"}), 400
+    if len(text) > FEEDBACK_MAX_LEN:
+        return jsonify({"error": "Feedback is limited to %d characters" % FEEDBACK_MAX_LEN}), 400
+    c = conn()
+    link = _portal_link(c, token)
+    if not link:
+        c.close()
+        return jsonify({"error": "Invalid or expired link"}), 404
+    row = _portal_ticket(c, link, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _feedback_settled(row, kind):
+        c.close()
+        return jsonify({"error": "Feedback opens once this ticket is resolved or closed"}), 409
+    name = (body.get("name") or "").strip()[:80]
+    cur = c.execute(
+        "INSERT INTO ticket_feedback (entity_type,entity_id,customer_id,user_id,author_name,text,created_at) "
+        "VALUES (?,?,?,?,?,?,?)", (kind, tid, row["customer_id"], None, name, text, now()))
+    c.commit()
+    new_id = cur.lastrowid
+    c.close()
+    audit(kind, tid, {"id": None, "name": name or "Customer"}, "feedback", text[:120])
+    return jsonify({"ok": True, "id": new_id, "author_name": name or "Customer",
+                    "text": text}), 201
+
 
 
 @app.get("/api/portal/<token>/events")
