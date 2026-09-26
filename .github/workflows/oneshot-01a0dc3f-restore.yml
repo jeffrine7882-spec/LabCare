@@ -1,24 +1,19 @@
 # =============================================================================
-# ONE-SHOT — diagnose the API outage and try to restore it.
+# ONE-SHOT — diagnose the API outage (read-only, changes nothing).
 #
-# Context: the compute service labcare-api answers 503 (proxy timeout) and 502
-# since the 05:05Z deploy; its health check then hung for 30 minutes and the run
-# was cancelled, which is also why PR #9's frontend fix never shipped.
+# Context: compute service labcare-api reports status "running" (machine
+# e820549f04ee38, region sin, updated 05:06Z) yet the API answers 503 (proxy
+# timeout, ~55s) and 502. Boot calls init_db() unguarded in server/run.py, and
+# _pg_migrate() drops and re-adds users_role_check / onboarding_apps_role_check
+# on EVERY boot, validating all existing rows — one out-of-set role value makes
+# init_db() raise, the container exits, and nothing is left to route to.
 #
-# Hypothesis: server/run.py calls init_db() unguarded, and _pg_migrate() drops
-# and re-adds users_role_check / onboarding_apps_role_check on EVERY boot,
-# validating all existing rows. One live row with a role outside
-# (admin|engineer|application|customer) makes init_db() raise, the container
-# exits, and the Fly proxy has nothing to route to. This workflow reads the live
-# data (read-only) and the machine events, then attempts the cheap recovery
-# (compute start — no rebuild) and re-probes health.
-#
-# Nothing here writes application data. Results are emitted as check-run
-# annotations (titles LABDIAG_* / LABFIX_*) so they can be read back over the
-# API without log access. Delete once it has served its purpose.
+# This run only reads: machine events, service details, and live role/constraint
+# data. Results are emitted as check-run annotations (title prefix LABDIAG) so
+# they can be read back over the API without log access.
 # =============================================================================
 
-name: One-shot — diagnose and restore the API
+name: One-shot — diagnose the API outage
 
 on:
   push:
@@ -33,15 +28,15 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SITE_URL: https://labcare.insforge.site
   BACKEND_ENDPOINT: https://labcare-api-ee5bd3a7-8f78-4005-87ea-6c57ff5728aa.fly.dev
+  SITE_URL: https://labcare.insforge.site
   API_BASE_URL: https://yj675q8e.ap-southeast.insforge.app
   SERVICE_NAME: labcare-api
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +48,7 @@ jobs:
         env:
           INSFORGE_API_KEY: ${{ secrets.INSFORGE_API_KEY }}
         run: |
+          set +e
           if [ -z "${INSFORGE_API_KEY:-}" ]; then
             echo "::error title=Missing repository secret::INSFORGE_API_KEY is not set."
             exit 1
@@ -60,9 +56,9 @@ jobs:
           npx --yes @insforge/cli link \
             --api-base-url "$API_BASE_URL" --api-key "$INSFORGE_API_KEY" --guard off --json
 
-      - name: Service state and machine events
+      - name: Machine events, service details and API probes
         run: |
-          set -uo pipefail
+          set +e
           emit() { # emit <title> <file>
             local title="$1" f="$2" n=0 text chunk
             text="$(tr '\n\r\t' '   ' < "$f" 2>/dev/null | sed 's/  */ /g' | cut -c1-18000)"
@@ -73,22 +69,29 @@ jobs:
               n=$((n+1))
             done
           }
-          npx --yes @insforge/cli --json compute list > /tmp/services.json 2>&1 || true
-          emit LABDIAG_SERVICES /tmp/services.json
-          id="$(jq -r '(.services // .data // .) | if type=="array" then .[] else . end | select((.name // .serviceName // "")=="'"$SERVICE_NAME"'") | (.id // .serviceId // .name) ' /tmp/services.json 2>/dev/null | head -n1)"
-          echo "resolved service id: ${id:-<none>}"
-          echo "::notice title=LABDIAG_SERVICE_ID::id=${id:-none}"
-          if [ -n "${id:-}" ] && [ "$id" != "null" ]; then
-            npx --yes @insforge/cli --json compute get "$id" > /tmp/service.json 2>&1 || true
-            emit LABDIAG_SERVICE_GET /tmp/service.json
-            npx --yes @insforge/cli --json compute events "$id" > /tmp/events.json 2>&1 || true
-            emit LABDIAG_SERVICE_EVENTS /tmp/events.json
+          npx --yes @insforge/cli --json compute list > /tmp/services.json 2>&1
+          id="$(jq -r 'if type=="array" then .[0].id else (.services // .data // [])[0].id end' /tmp/services.json 2>/dev/null)"
+          [ -n "$id" ] && [ "$id" != "null" ] || id=""
+          if [ -z "$id" ]; then
+            id="$(grep -o '"id": *"[0-9a-f-]\{36\}"' /tmp/services.json | head -n1 | sed 's/.*"\([0-9a-f-]*\)"$/\1/')"
           fi
-          echo "$id" > /tmp/service_id
+          echo "::notice title=LABDIAG_SERVICE_ID::id=${id:-none}"
+          if [ -n "$id" ]; then
+            npx --yes @insforge/cli --json compute get "$id" > /tmp/service.json 2>&1
+            emit LABDIAG_SERVICE_GET /tmp/service.json
+            npx --yes @insforge/cli --json compute events "$id" > /tmp/events.json 2>&1
+            emit LABDIAG_EVENTS /tmp/events.json
+          fi
+          for path in /api/health /api/version; do
+            t0=$(date +%s)
+            code="$(curl -sS -m 70 -o /tmp/p.json -w '%{http_code}' "$BACKEND_ENDPOINT$path" 2>/dev/null)"
+            t1=$(date +%s)
+            echo "::notice title=LABDIAG_PROBE::${path} http=${code:-ERR} seconds=$((t1-t0)) body=$(tr -d '\n\r' < /tmp/p.json 2>/dev/null | head -c 220)"
+          done
 
-      - name: Live data that would break the boot-time role constraints
+      - name: Live data that the boot-time role constraints validate
         run: |
-          set -uo pipefail
+          set +e
           emit() {
             local title="$1" f="$2" n=0 text chunk
             text="$(tr '\n\r\t' '   ' < "$f" 2>/dev/null | sed 's/  */ /g' | cut -c1-9000)"
@@ -100,7 +103,7 @@ jobs:
             done
           }
           q() { # q <label> <sql>
-            npx --yes @insforge/cli --json db query "$2" > "/tmp/q_$1.json" 2>&1 || true
+            npx --yes @insforge/cli --json db query "$2" > "/tmp/q_$1.json" 2>&1
             emit "LABDIAG_DB_$1" "/tmp/q_$1.json"
           }
           q USERS_ROLES "SELECT role, count(*) AS n FROM users GROUP BY role ORDER BY n DESC"
@@ -108,30 +111,6 @@ jobs:
           q OUT_OF_SET_USERS "SELECT id, email, role FROM users WHERE role NOT IN ('admin','engineer','application','customer')"
           q OUT_OF_SET_APPS "SELECT id, email, role FROM onboarding_apps WHERE role NOT IN ('engineer','application','customer')"
           q DUP_SERIALS "SELECT serial_number, count(*) AS n FROM equipment WHERE serial_number IS NOT NULL AND serial_number <> '' GROUP BY serial_number HAVING count(*) > 1"
-          q COUNTRIES "SELECT count(*) AS users, (SELECT count(*) FROM complaints) AS complaints, (SELECT count(*) FROM breakdowns) AS breakdowns, (SELECT count(*) FROM equipment) AS equipment FROM users"
-
-      - name: Recovery attempt — start the stopped service (no rebuild)
-        run: |
-          set -uo pipefail
-          id="$(cat /tmp/service_id 2>/dev/null || true)"
-          if [ -z "${id:-}" ] || [ "$id" = "null" ]; then
-            echo "::warning title=LABFIX_SKIP::no service id resolved — cannot attempt a start"
-            exit 0
-          fi
-          npx --yes @insforge/cli --yes --reason "LabCare API is down (503); restarting the existing compute service, no image rebuild" \
-            --impact "Restores the API for all users; the container re-runs its idempotent boot migrations as it does on any start" \
-            --recommendation "Start the existing service first; only rebuild if it fails to become healthy" \
-            compute start "$id" > /tmp/start.txt 2>&1 || true
-          tr '\n\r' '  ' < /tmp/start.txt | sed 's/  */ /g' | cut -c1-1200 | awk '{print "::notice title=LABFIX_START::" $0}'
-          echo "waiting up to 4 minutes for the API to answer…"
-          ok=0
-          for i in $(seq 1 16); do
-            code="$(curl -sS -m 20 -o /tmp/h.json -w '%{http_code}' "$BACKEND_ENDPOINT/api/health" 2>/dev/null)" || code="ERR"
-            if [ "$code" = "200" ]; then ok=1; echo "healthy after $((i*15))s: $(tr -d '\n' < /tmp/h.json | head -c 200)"; break; fi
-            echo "  attempt $i: http=$code"; sleep 15
-          done
-          echo "::notice title=LABFIX_HEALTH::direct_api_health_200=$ok last_http=$code"
-          code2="$(curl -sS -m 20 -o /tmp/h2.json -w '%{http_code}' "$SITE_URL/api/health" 2>/dev/null)" || code2="ERR"
-          echo "::notice title=LABFIX_HEALTH_PROXY::site_api_health_http=$code2 body=$(tr -d '\n' < /tmp/h2.json 2>/dev/null | head -c 200)"
-          code3="$(curl -sS -m 20 -o /tmp/v.json -w '%{http_code}' "$BACKEND_ENDPOINT/api/version" 2>/dev/null)" || code3="ERR"
-          echo "::notice title=LABFIX_VERSION::http=$code3 body=$(tr -d '\n' < /tmp/v.json 2>/dev/null | head -c 200)"
+          q TOTALS "SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM complaints) AS complaints, (SELECT count(*) FROM breakdowns) AS breakdowns, (SELECT count(*) FROM equipment) AS equipment"
+          q RLS "SELECT count(*) AS policies_on_users FROM pg_policies WHERE tablename IN ('users','complaints','breakdowns','equipment')"
+          q ADVISORY "SELECT version() AS pg_version"
