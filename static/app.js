@@ -2692,7 +2692,9 @@ async function openUserEditor(edit, id) {
         <label class="field" id="uLocationField" style="${showLocDept ? "" : "display:none"}"><span>Linked location/department</span>
           <select id="uLocation" onchange="onUserLocPick()">
             ${locOpts(state.locations || [], u && u.location_id, u && u.customer_id)}
-          </select></label>
+          </select>
+          <small style="display:block;margin-top:6px;color:var(--ink-soft);font-size:12px">If no location appears, create one via <a href="#" onclick="event.preventDefault(); const cust=$('#uCustomer').value; closeSheet(); setTimeout(()=>{openLocationEditor(false); setTimeout(()=>{const s=$('#locCustomer'); if(s&&cust) s.value=cust;},100);},150);" style="color:var(--brand);text-decoration:underline">Organizations → Add location</a> or select "Create new" above.</small>
+        </label>
         <select id="uDepartment" style="display:none">
           ${deptOpts(state.departments || [], u && u.department_id, u && u.location_id)}
         </select>
@@ -2756,7 +2758,19 @@ function toggleCustomerSelect() {
 
 function onUserCustPick() {
   const cust = $("#uCustomer").value;
-  $("#uLocation").innerHTML = locOpts(state.locations || [], null, cust);
+  // Build location options: existing + create new, so tenant admin can create location directly from user editor
+  const baseOpts = locOpts(state.locations || [], null, cust);
+  const hasCust = !!cust;
+  let extra = "";
+  if (hasCust) {
+    // Check if there are any locations for this customer
+    const list = (state.locations || []).filter((l) => String(l.customer_id) === String(cust));
+    if (!list.length) {
+      extra = `<option value="" disabled>— No locations yet —</option>`;
+    }
+    extra += `<option value="__new__">＋ Create new location/department…</option>`;
+  }
+  $("#uLocation").innerHTML = baseOpts + extra;
   $("#uLocation").value = "";
   if ($("#uDepartment")) {
     $("#uDepartment").innerHTML = deptOpts(state.departments || [], null, null);
@@ -2768,6 +2782,25 @@ function onUserCustPick() {
 
 function onUserLocPick() {
   const loc = $("#uLocation").value;
+  if (loc === "__new__") {
+    const cust = $("#uCustomer").value;
+    if (!cust) {
+      toast("Select an organization first", "error");
+      $("#uLocation").value = "";
+      return;
+    }
+    // Open location editor pre-filled with this customer, then refresh
+    closeSheet();
+    setTimeout(() => {
+      openLocationEditor(false);
+      // Pre-select the customer in the location editor after it opens
+      setTimeout(() => {
+        const sel = $("#locCustomer");
+        if (sel) sel.value = cust;
+      }, 100);
+    }, 150);
+    return;
+  }
   const depts = (state.departments || []).filter((d) => String(d.location_id) === String(loc));
   if ($("#uDepartment")) {
     $("#uDepartment").innerHTML = deptOpts(state.departments || [], depts[0]?.id || null, loc);
@@ -3816,9 +3849,16 @@ function onJoinCust() {
   }
 
   const locs = cust ? (state.signup?.locations || []).filter((l) => String(l.customer_id) === String(cust)) : [];
-  let opts = `<option value="">— Select location/department —</option>`;
-  if (cust) {
-    opts += locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  let opts;
+  if (!cust) {
+    opts = `<option value="">— Select organization first —</option>`;
+  } else {
+    opts = `<option value="">— Select location/department —</option>`;
+    if (locs.length) {
+      opts += locs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+    } else {
+      opts += `<option value="" disabled>— No locations yet —</option>`;
+    }
     opts += `<option value="__new__">＋ Create new location/department…</option>`;
   }
   $("#jnLocation").innerHTML = opts;
