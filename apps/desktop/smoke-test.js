@@ -15,7 +15,11 @@
  *   4. a failed load lands on a recovery page that still links to the site,
  *   5. the tray offers "Open LabSynch site",
  *   6. Quit actually quits (the close handler used to swallow it),
- *   7. an alert still rings when the bubble UI is unavailable.
+ *   7. an alert still rings when the bubble UI is unavailable,
+ *   8. ringing-with-the-app-closed: a per-minute watchdog Scheduled Task
+ *      relaunches the exe hidden, auto-start uses --hidden, a hidden
+ *      relaunch never pops the window, a --hidden launch shows no window,
+ *   9. Quit asks for confirmation and "Keep alerts running" keeps running.
  */
 "use strict";
 
@@ -49,6 +53,9 @@ const menuTemplates = [];
 let shellOpened = [];
 let soundPlayed = [];
 let notifications = [];
+let dialogCalls = [];
+let dialogResponse = 0; // what the mock "user" picks in the quit dialog
+let loginItemCalls = [];
 
 class WebContents {
   constructor(owner) {
@@ -122,6 +129,7 @@ class BrowserWindow {
 
 const app = {
   isQuitting: false,
+  isPackaged: true, // so the watchdog-task registration runs in the test
   _readyCbs: [],
   requestSingleInstanceLock: () => true,
   whenReady: () => Promise.resolve(),
@@ -130,7 +138,7 @@ const app = {
   emit(ev, ...a) { for (const cb of (app._evs[ev] || []).slice()) cb(...a); },
   quit: () => { app.emit("before-quit"); app.quitCalled = (app.quitCalled || 0) + 1; },
   setAppUserModelId: () => {},
-  setLoginItemSettings: () => {},
+  setLoginItemSettings: (s) => { loginItemCalls.push(s); },
   getVersion: () => require(path.join(APP_DIR, "package.json")).version,
   getPath: (k) => path.join(tmp, k),
 };
@@ -157,6 +165,12 @@ const mockElectron = {
     createFromDataURL: () => ({ empty: false }),
   },
   shell: { openExternal: (u) => { shellOpened.push(u); return Promise.resolve(); } },
+  dialog: {
+    showMessageBox: (opts) => {
+      dialogCalls.push(opts);
+      return Promise.resolve({ response: dialogResponse, checkboxChecked: false });
+    },
+  },
   session: {
     fromPartition: () => ({
       cookies: { set: async () => {}, remove: async () => {} },
@@ -185,6 +199,10 @@ Module._load = function (request, parent, isMain) {
 // ---------------------------------------------------------------------------
 (async () => {
   console.log("LabSynch desktop smoke test\n");
+
+  // Run the Windows code paths — the EXE is what ships. The mock Electron and
+  // the intercepted child_process make this safe on any OS the test runs on.
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 
   require(MAIN);
   // let app.whenReady().then(...) and its timers settle
@@ -229,6 +247,61 @@ Module._load = function (request, parent, isMain) {
       html.includes("labcare://open-external") && /Open the site in my browser/.test(html));
     check("the recovery page offers Retry", /Retry/.test(html));
   }
+
+  console.log("\nring even when the app is closed");
+  const watchdog = soundPlayed.find((s) => s.cmd === "schtasks");
+  check("a watchdog Scheduled Task is registered (schtasks)",
+    !!watchdog && watchdog.args.includes("LabSynch Alerts Watchdog"),
+    "schtasks calls: " + JSON.stringify(soundPlayed.filter((s) => s.cmd === "schtasks")));
+  check("the watchdog task re-launches every minute",
+    !!watchdog && watchdog.args.includes("/SC") && watchdog.args.includes("MINUTE"));
+  check("the watchdog relaunch is hidden (--hidden), so no window pops up",
+    !!watchdog && watchdog.args.some((a) => typeof a === "string" && a.includes("--hidden")));
+  check("auto-start logs in with Windows — hidden, straight to the tray",
+    loginItemCalls.some((s) => s.openAtLogin === true
+      && Array.isArray(s.args) && s.args.includes("--hidden")),
+    "setLoginItemSettings calls: " + JSON.stringify(loginItemCalls));
+
+  console.log("\nhidden relaunch must not steal focus");
+  main.hide();
+  app.emit("second-instance", {},
+    ["C:\\Users\\lab\\AppData\\Local\\LabSynch Alerts\\LabSynch Alerts.exe", "--hidden"],
+    "C:\\");
+  await new Promise((r) => setTimeout(r, 10));
+  check("a --hidden relaunch leaves the window hidden", !main.isVisible());
+  app.emit("second-instance", {},
+    ["C:\\Users\\lab\\AppData\\Local\\LabSynch Alerts\\LabSynch Alerts.exe"],
+    "C:\\");
+  await new Promise((r) => setTimeout(r, 10));
+  check("a human relaunch (no --hidden) shows the window", main.isVisible());
+
+  console.log("\nlaunched hidden (auto-start / watchdog)");
+  process.argv.push("--hidden");
+  delete require.cache[require.resolve(MAIN)];
+  require(MAIN); // second instance of main.js, this time started hidden
+  await new Promise((r) => setTimeout(r, 60));
+  const hiddenWin = windows[windows.length - 1];
+  check("a --hidden launch still creates the alerts window (on standby in the tray)", !!hiddenWin);
+  check("a --hidden launch shows no window", !!hiddenWin && !hiddenWin.isVisible(),
+    "the login item / watchdog must start in the tray, not throw a window at boot");
+
+  console.log("\nquit asks first");
+  app.isQuitting = false;
+  const quitsBefore = app.quitCalled || 0;
+  const lastMenu = menuTemplates[menuTemplates.length - 1] || [];
+  const quitItem = lastMenu.find((i) => i.label === "Quit");
+  check("the tray still offers Quit", !!quitItem);
+  dialogResponse = 0; // "Keep alerts running"
+  if (quitItem) quitItem.click();
+  await new Promise((r) => setTimeout(r, 20));
+  check("'Keep alerts running' (the default) does not quit",
+    (app.quitCalled || 0) === quitsBefore);
+  check("the quit dialog explains what silences the PC",
+    dialogCalls.some((c) => /watchdog/i.test(String(c.detail || ""))));
+  dialogResponse = 1; // "Quit anyway"
+  if (quitItem) quitItem.click();
+  await new Promise((r) => setTimeout(r, 20));
+  check("'Quit anyway' really quits", (app.quitCalled || 0) > quitsBefore);
 
   console.log("\nquit really quits");
   app.emit("before-quit");

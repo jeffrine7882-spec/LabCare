@@ -76,13 +76,13 @@ jobs:
           set -euo pipefail
           mkdir -p apps/android/assets   # aapt2 -A requires the dir to exist
           bash apps/android/build.sh
-          test -s apps/android/dist/LabSynch-Alerts-v1.3.apk
-          echo "::notice::APK built: apps/android/dist/LabSynch-Alerts-v1.3.apk ($(du -h apps/android/dist/LabSynch-Alerts-v1.3.apk | cut -f1))"
+          test -s apps/android/dist/LabSynch-Alerts-v1.4.apk
+          echo "::notice::APK built: apps/android/dist/LabSynch-Alerts-v1.4.apk ($(du -h apps/android/dist/LabSynch-Alerts-v1.4.apk | cut -f1))"
 
       - name: Assert device-compat (targetSdk must be 24+ for Android 14+)
         run: |
           set -euo pipefail
-          out="$(python3 scripts/verify_apk_sdk.py apps/android/dist/LabSynch-Alerts-v1.3.apk \
+          out="$(python3 scripts/verify_apk_sdk.py apps/android/dist/LabSynch-Alerts-v1.4.apk \
             --min-sdk 26 --target-sdk 34 2>&1)" || {
               echo "::error title=uses-sdk check failed::$(echo "$out" | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
               exit 1
@@ -92,7 +92,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: labcare-apk
-          path: apps/android/dist/LabSynch-Alerts-v1.3.apk
+          path: apps/android/dist/LabSynch-Alerts-v1.4.apk
           if-no-files-found: error
 
   windows-exe:
@@ -160,12 +160,12 @@ jobs:
       - name: Normalize filenames
         run: |
           set -euo pipefail
-          test -s Release/android/LabSynch-Alerts-v1.3.apk
+          test -s Release/android/LabSynch-Alerts-v1.4.apk
           exe="$(find Release/windows -maxdepth 1 -name '*.exe' -type f | head -1)"
           [ -n "$exe" ] || { echo "::error::no exe artifact downloaded"; exit 1; }
-          # Electron builder names it "LabSynch Alerts Setup 1.2.0.exe" — normalize to dash form
-          if [[ "$exe" != *"LabSynch-Alerts-Setup-1.2.0.exe" ]]; then
-            mv "$exe" "Release/windows/LabSynch-Alerts-Setup-1.2.0.exe"
+          # Electron builder names it "LabSynch Alerts Setup 1.3.0.exe" — normalize to dash form
+          if [[ "$exe" != *"LabSynch-Alerts-Setup-1.3.0.exe" ]]; then
+            mv "$exe" "Release/windows/LabSynch-Alerts-Setup-1.3.0.exe"
           fi
           ls -la Release/android Release/windows
 
@@ -177,42 +177,54 @@ jobs:
           Built by GitHub Actions run [#${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
           from commit $(git rev-parse --short HEAD) on $(date -u +%Y-%m-%d) UTC.
 
-          ## Android — android/LabSynch-Alerts-v1.3.apk
+          ## Android — android/LabSynch-Alerts-v1.4.apk
           Requires Android 8.0+ (API 26) and installs on the latest Android
-          14/15/16 devices (targets SDK 34, includes the FGS data-sync
-          permission). Self-signed — not on the Play Store.
+          14/15/16 devices (targets SDK 34). Self-signed — not on the Play Store.
           1. Copy the APK to the phone (USB / cloud drive / direct download).
           2. Tap it; allow "install unknown apps" when Android asks. The APK is
              self-signed, not from the Play Store — that is expected.
           3. Open "LabSynch Alerts" and sign in with your LabSynch account — the
              app opens the LabSynch site itself (Site tab), plus Notifications
              and the ring-sound picker.
-          4. Keep "Phone alerts" on: every new bell notification drops a heads-up
+          4. **Allow the battery prompt** shown right after sign-in (once): it
+             lets the alert relay run unrestricted while the phone idles.
+          5. Keep "Phone alerts" on: every new bell notification drops a heads-up
              bubble banner on top of the display, rings your chosen sound and
-             vibrates the phone — even with the screen off.
+             vibrates the phone — v1.4 keeps that ringing even when the app is
+             closed, swiped away, the screen is off or the phone reboots
+             (foreground service + wake locks + Doze-proof wake-up alarms +
+             restart alarms + a 60 s watchdog; Home → Ring protection shows
+             status and one-tap fixes).
           Note: each CI build uses a fresh signing key, so uninstall any older CI
           build before installing a new one.
 
-          ## Windows — windows/LabSynch-Alerts-Setup-1.2.0.exe
+          ## Windows — windows/LabSynch-Alerts-Setup-1.3.0.exe
           1. Run the installer. SmartScreen will warn about an "unrecognized app"
              (self-signed) — choose **More info → Run anyway**.
           2. It installs under %LOCALAPPDATA%\\LabSynch Alerts, adds Start-menu +
-             desktop shortcuts, and auto-starts with Windows.
+             desktop shortcuts, and auto-starts with Windows — hidden, straight
+             to the system tray.
           3. Sign in once; the app then lives in the system tray. Every new bell
              notification floats an always-on-top bubble banner (top-right of
              your screen) with the alert sound + dismiss/open buttons, plus a
              Windows notification. Clicking either opens the web app.
-          4. The **Site** tab opens the LabSynch web app itself
+          4. **Rings even when the app is closed:** closing the window only hides
+             it to the tray, the login auto-start runs hidden, and a per-minute
+             watchdog Scheduled Task relaunches the exe if it was quit or killed
+             (hidden, and a no-op when already running). Quit asks for
+             confirmation first. Uninstalling removes the watchdog task and the
+             auto-start entry.
+          5. The **Site** tab opens the LabSynch web app itself
              (https://labcare.insforge.site) inside the app, already signed in
              with the account you used here — as does the **Open the LabSynch
              site** button on Home and the tray menu. If the site cannot load
              you get a page with **Retry** and **Open the site in my browser**,
              never a blank window.
 
-          This is 1.2.0 with new LS logo (interlocked 3D). In 1.1.0 the installer left out the alert-bubble files
-          and never showed its window, so the EXE opened a blank page with no
-          way through to the LabSynch site. Uninstall 1.1.0 first (Settings →
-          Apps → LabSynch Alerts), then install this build.
+          v1.4 APK / 1.3.0 EXE: the alert now rings even with the app closed.
+          Earlier: 1.2.0 fixed the blank-page installer from 1.1.0 (missing
+          bubble files, window never shown). Uninstall older versions first
+          (Settings → Apps → LabSynch Alerts).
 
           ## Web app (no install)
           https://labcare.insforge.site — also installable as a PWA
@@ -239,12 +251,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          apk="Release/android/LabSynch-Alerts-v1.3.apk"
+          apk="Release/android/LabSynch-Alerts-v1.4.apk"
           test -s "$apk"
-          ver="v1.3"
-          notes="LabSynch Alerts ${ver} — updated Android APK with new LS logo (self-signed, not on the Play Store).
+          ver="v1.4"
+          notes="LabSynch Alerts ${ver} — the alert now rings even when the app is closed (self-signed, not on the Play Store).
 
-          - This publish is the updated v1.3 with interlocked 3D LS logo: the Site tab opens the LabSynch site immediately.
+          - Ring-when-closed hardening: wake locks per poll/ring, Doze-proof wake-up alarms every ~12 s, restart alarms when the app is swiped away or killed, a 60 s heartbeat watchdog, reboot + app-update auto-start, and a lock-screen full-screen alert.
+          - Home → Ring protection shows the status of every setting this depends on, with one-tap fixes. Allow the battery prompt shown right after sign-in.
           - Requires Android 8.0+ (API 26); installs on Android 14/15/16 (targetSdk 34).
           - Download \`${apk##*/}\` below (same file as \`Release/android/\` on this tag). Copy it to your phone, tap it, and allow \"install unknown apps\".
           - Uninstall any earlier LabCare/LabSynch Alerts install first — each CI build uses a fresh signing key.
@@ -253,7 +266,7 @@ jobs:
           Installer guide: [Release/README.md](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${ver}/Release/README.md)"
           # `gh release upload --clobber` replaces the APK asset but leaves the
           # tag on the first publish, so the tag tree and source archive keep
-          # the pre-fix APK. Delete and recreate so v1.3 points at this commit.
+          # the pre-fix APK. Delete and recreate so v1.4 points at this commit.
           if gh release view "$ver" >/dev/null 2>&1; then
             gh release delete "$ver" --yes --cleanup-tag
           fi
@@ -262,7 +275,7 @@ jobs:
             --title "LabSynch Alerts ${ver} (Android APK)" --notes "$notes"
           echo "::notice::GitHub Release ${ver} published with $(basename "$apk") at $(git rev-parse --short HEAD)"
 
-  # One-shot: attach the already-built updated v1.3 APK (the sandbox cannot
+  # One-shot: attach the already-built v1.4 APK (the sandbox cannot
   # reach uploads.github.com). Triggered only by a [publish-apk] commit.
   publish-existing-apk:
     if: contains(github.event.head_commit.message, '[publish-apk]')
@@ -271,36 +284,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Confirm this is the updated site-loading APK
+      - name: Confirm this is the ring-when-closed APK
         run: |
           set -euo pipefail
           python3 - << 'PY'
           import hashlib, pathlib, zipfile
-          p = pathlib.Path("Release/android/LabSynch-Alerts-v1.3.apk")
+          p = pathlib.Path("Release/android/LabSynch-Alerts-v1.4.apk")
           if not p.exists():
-              p = pathlib.Path("Release/android/LabCare-Alerts-v1.3.apk")
+              p = pathlib.Path("Release/android/LabCare-Alerts-v1.4.apk")
           data = p.read_bytes()
           digest = hashlib.sha256(data).hexdigest()
           print("sha256", digest)
-          # Allow any new build with LS logo - just check dex contains site loading fix
+          # The v1.4 fix must be inside: the watchdog chains + relay stop flag.
           dex = zipfile.ZipFile(p).read("classes.dex")
-          if b"Open the site in my browser" not in dex:
-              raise SystemExit("APK is missing the site-loading fix")
-          print("updated v1.3 APK confirmed")
+          if b"relay_user_stopped" not in dex or b"labcare:poll" not in dex:
+              raise SystemExit("APK is missing the ring-when-closed watchdog fix")
+          print("v1.4 ring-when-closed APK confirmed")
           PY
 
-      - name: Publish GitHub Release v1.3
+      - name: Publish GitHub Release v1.4
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          apk="Release/android/LabSynch-Alerts-v1.3.apk"
-          if [ ! -s "$apk" ]; then apk="Release/android/LabCare-Alerts-v1.3.apk"; fi
+          apk="Release/android/LabSynch-Alerts-v1.4.apk"
+          if [ ! -s "$apk" ]; then apk="Release/android/LabCare-Alerts-v1.4.apk"; fi
           test -s "$apk"
-          ver="v1.3"
-          notes="LabSynch Alerts ${ver} — updated Android APK with new LS logo (self-signed, not on the Play Store).
+          ver="v1.4"
+          notes="LabSynch Alerts ${ver} — the alert now rings even when the app is closed (self-signed, not on the Play Store).
 
-          - This publish is the updated v1.3 with LS logo: the Site tab opens the LabSynch site immediately.
+          - Ring-when-closed hardening: wake locks per poll/ring, Doze-proof wake-up alarms every ~12 s, restart alarms when the app is swiped away or killed, a 60 s heartbeat watchdog, reboot + app-update auto-start, and a lock-screen full-screen alert.
+          - Home → Ring protection shows the status of every setting this depends on, with one-tap fixes. Allow the battery prompt shown right after sign-in.
           - Requires Android 8.0+ (API 26); installs on Android 14/15/16 (targetSdk 34).
           - Download \`${apk##*/}\` below (same file as \`Release/android/\` on this tag). Copy it to your phone, tap it, and allow \"install unknown apps\".
           - Uninstall any earlier LabCare/LabSynch Alerts install first — each CI build uses a fresh signing key.

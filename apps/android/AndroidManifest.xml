@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.insforge.labcare"
-    android:versionCode="5"
-    android:versionName="1.3">
+    android:versionCode="6"
+    android:versionName="1.4">
 
     <!-- Android 14+ refuses to install apps without an explicit targetSdk;
          26/34 keeps the APK installable on Android 8 through the latest release. -->
@@ -16,6 +16,24 @@
     <!-- required because AlertRelayService declares foregroundServiceType="dataSync" -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Ring-even-when-closed: hold the CPU awake for each bell check and
+         while the alert sound plays (a foreground service alone does not
+         keep the CPU out of suspend). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Ring-even-when-closed: ask (once) to be exempt from battery
+         optimisation, so Doze/App Standby never freeze the relay. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Ring-even-when-closed: exact alarms wake the relay every ~12 s even
+         in Doze, and their firing is exempt from the Android 12+ ban on
+         starting foreground services from the background (which is how the
+         relay resurrects itself after the app is swiped away or killed).
+         USE_EXACT_ALARM is granted at install time (this APK is sideloaded,
+         not Play-distributed); SCHEDULE_EXACT_ALARM covers Android 12 where
+         USE_EXACT_ALARM does not exist yet. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Ring-even-when-closed: show the alert over the lock screen. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
         android:label="LabSynch Alerts"
@@ -39,11 +57,16 @@
             android:foregroundServiceType="dataSync" />
 
         <receiver
+            android:name=".WatchdogReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".BootReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

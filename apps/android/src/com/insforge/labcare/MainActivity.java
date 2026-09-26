@@ -110,6 +110,7 @@ public class MainActivity extends Activity {
         render();
         if (isLoggedIn()) {
             ensureRelayRunning();
+            promptRingProtection();
         }
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 100);
@@ -505,7 +506,7 @@ public class MainActivity extends Activity {
         LinearLayout textCol = new LinearLayout(this);
         textCol.setOrientation(LinearLayout.VERTICAL);
         textCol.addView(label("Phone alerts"));
-        textCol.addView(muted("Rings for every bell alert, even with the screen off."));
+        textCol.addView(muted("Rings for every bell alert — even with the app closed, screen off or after a reboot."));
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         textCol.setLayoutParams(tlp);
@@ -522,6 +523,10 @@ public class MainActivity extends Activity {
         row.addView(sw);
         alertBox.addView(row);
         card(alertBox);
+
+        // Battery / alarm / notification settings that decide whether the
+        // relay truly rings with the app closed — with one-tap fixes.
+        renderRingProtection();
 
         // Quick actions
         LinearLayout quick = new LinearLayout(this);
@@ -546,6 +551,123 @@ public class MainActivity extends Activity {
         });
         signOut.setBackgroundColor(Color.rgb(15, 118, 110));
         root.addView(signOut);
+    }
+
+    /**
+     * One-time ask for the battery-optimisation exemption — the single
+     * setting that decides whether Android's Doze/App Standby let the relay
+     * keep ringing with the app closed. The Home "Ring protection" card
+     * keeps offering the fix afterwards.
+     */
+    private void promptRingProtection() {
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName())) return;
+            if (prefs.getBoolean("battery_asked", false)) return;
+            prefs.edit().putBoolean("battery_asked", true).apply();
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("Keep alerts ringing")
+                    .setMessage("To ring even when the app is closed, Android must let LabSynch run without battery restrictions.\n\nTap Allow on the next screen.")
+                    .setPositiveButton("Allow", (d, w) -> requestBatteryExemption())
+                    .setNegativeButton("Later", (d, w) -> d.dismiss())
+                    .setCancelable(true)
+                    .show();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void requestBatteryExemption() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** Status + one-tap fixes for everything closed-app ringing depends on. */
+    private void renderRingProtection() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(label("Ring protection"));
+        boolean allGood = true;
+
+        // Notifications (banner + vibration; the sound rings regardless)
+        try {
+            android.app.NotificationManager nm = (android.app.NotificationManager)
+                    getSystemService(NOTIFICATION_SERVICE);
+            if (nm != null && !nm.areNotificationsEnabled()) {
+                allGood = false;
+                box.addView(muted("Notifications blocked — the alert banner won't show (the sound still rings)."));
+                box.addView(fixButton("Allow notifications", v -> {
+                    try {
+                        startActivity(new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                .putExtra("android.app.extra.APP_PACKAGE", getPackageName()));
+                    } catch (Exception ignored) {
+                    }
+                }));
+            }
+        } catch (Exception ignored) {
+        }
+
+        // Battery optimisation — the big one for Doze
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null || !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                allGood = false;
+                box.addView(muted("Battery restricted — Android may delay alerts while the phone idles."));
+                box.addView(fixButton("Remove battery restriction", v -> requestBatteryExemption()));
+            }
+        } catch (Exception ignored) {
+        }
+
+        // Exact alarms (Android 12+) — Doze-proof wake-ups + resurrect rights
+        if (Build.VERSION.SDK_INT >= 31 && !Alarms.canExact(this)) {
+            allGood = false;
+            box.addView(muted("Alarms & reminders off — wake-up checks may be delayed."));
+            box.addView(fixButton("Allow alarms & reminders", v -> {
+                try {
+                    startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                            Uri.parse("package:" + getPackageName())));
+                } catch (Exception ignored) {
+                }
+            }));
+        }
+
+        // Full-screen alerts (Android 14+)
+        if (Build.VERSION.SDK_INT >= 34) {
+            try {
+                android.app.NotificationManager nm = (android.app.NotificationManager)
+                        getSystemService(NOTIFICATION_SERVICE);
+                if (nm != null && !nm.canUseFullScreenIntent()) {
+                    allGood = false;
+                    box.addView(muted("Full-screen alerts off — locked-screen alerts show as a normal banner."));
+                    box.addView(fixButton("Allow full-screen alerts", v -> {
+                        try {
+                            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                    Uri.parse("package:" + getPackageName())));
+                        } catch (Exception ignored) {
+                        }
+                    }));
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (allGood) {
+            box.addView(muted("All set — alerts ring even when the app is closed, the screen is off, the app is swiped away or the phone reboots."));
+        }
+        card(box);
+    }
+
+    private Button fixButton(String text, View.OnClickListener l) {
+        Button b = button(text, true, l);
+        b.setPadding(dp(12), dp(8), dp(12), dp(8));
+        b.setTextSize(13);
+        return b;
     }
 
     // ------------------------------------------------------------- alerts
@@ -743,6 +865,7 @@ public class MainActivity extends Activity {
                         screen = "site";
                         render();
                         ensureRelayRunning();
+                        promptRingProtection();
                     } else if ("pending".equals(res[0])) {
                         toast("Your account is awaiting administrator approval");
                     } else {
@@ -888,6 +1011,9 @@ public class MainActivity extends Activity {
     void ensureRelayRunning() {
         if (!prefs.getBoolean("alerts", true)) return;
         if (!isLoggedIn()) return;
+        // an explicit start clears any earlier deliberate stop, so the
+        // watchdog chains are allowed to resurrect the relay again
+        prefs.edit().putBoolean("relay_user_stopped", false).apply();
         Intent i = new Intent(this, AlertRelayService.class);
         i.setAction("START");
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
@@ -895,10 +1021,17 @@ public class MainActivity extends Activity {
     }
 
     void stopRelay() {
+        // Remember the deliberate stop BEFORE tearing anything down, or the
+        // watchdog would immediately resurrect the relay.
+        prefs.edit().putBoolean("relay_user_stopped", true).apply();
+        Alarms.cancelAll(this);
         Intent i = new Intent(this, AlertRelayService.class);
         i.setAction("STOP");
-        startService(i);
-        stopService(i);
+        try {
+            startService(i);
+            stopService(i);
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
