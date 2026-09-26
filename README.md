@@ -157,15 +157,27 @@ organisations** and **Admin → Team & users**.
     create or edit any admin account, cannot see other organisations' data,
     and can only assign work to their own team or LabCare's provider
     technicians.
-  - **Technician**: provider technicians (`customer_id NULL`) work across all
-    customers; tenant technicians (`customer_id` set) are restricted to their
-    customer.
+  - **Technician**: provider technicians (`customer_id NULL` **and** no linked
+    tenant admin — created by the master) work across all customers; tenant
+    technicians (`customer_id` set) are restricted to their customer. A
+    technician a tenant admin creates **without** an organisation is neither:
+    `customer_id` is NULL but `responsible_admin_id` names that tenant admin, so
+    they are restricted to **that admin's care list**. This distinction is a
+    security boundary, not a convenience — in `tenant_scope()` a NULL customer
+    means "unscoped", i.e. every organisation on the platform, so a
+    customer-less account with no linked admin would see other tenants' data.
+    The link is therefore what defines the scope, and a tenant admin can never
+    mint a system-wide account. An unbound tenant admin (no organisations yet)
+    has an empty care list, so the accounts they create see nothing at all.
   - **Customer** users are restricted to their own organisation, location and
     department.
   - The master can create tenant admins (linked **or** unlinked), technicians
     and customer users directly (via Team & users) and approve self-sign-ups;
     tenant admins can only create technicians and customer users for their own
-    customers.
+    customers — or, for technicians and application accounts, for their **tenant
+    as a whole** by leaving the organisation empty (see *Responsible tenant
+    admin* below). Customer-role accounts always have to name an organisation,
+    since those are an organisation's own people.
 - **Responsible tenant admin**: every user, piece of equipment, complaint and
   breakdown carries an explicit `responsible_admin_id` — the tenant admin who
   "cares for" that record. The master (and provider staff) see a *Responsible
@@ -174,6 +186,17 @@ organisations** and **Admin → Team & users**.
   exactly one tenant admin it is filled in automatically; with several, one must
   be chosen explicitly; tenant admins/technicians are always assigned
   automatically (themselves or their customer's admin).
+
+  On the **Add user** form a tenant admin sees a *Linked tenant admin* picker
+  next to the now-**optional** *Linked customer* — it defaults to themselves and
+  lists only their peer admins (`GET /api/tenant-admins` with no `customer_id`,
+  which the backend already scopes to the caller's care list). Leaving the
+  organisation empty places the account under the named admin's care. A tenant
+  admin may only name themselves or a peer who cares for at least one of the
+  same organisations, so an account cannot be pushed into a tenant they do not
+  manage. Ids from these pickers are coerced server-side: browsers send
+  `<select>` values as strings, which previously failed an integer care-list
+  comparison and rejected a legitimately chosen organisation with a 403.
 - **Ticket numbering**: complaints `CMP-0001…`, breakdowns `BRK-0001…`.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.

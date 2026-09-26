@@ -2110,6 +2110,19 @@ async function deleteEquipment(id) {
 }
 
 // --- shared cascading helpers for the customer → location → department chain ---
+// Tenant admins who may be named as a user's "linked tenant admin". Calling
+// /api/tenant-admins with NO customer_id returns exactly the actor's own tenant:
+// every admin whose primary organisation or care list overlaps theirs — and, for
+// an admin with no organisations yet, just themselves.
+let _peerAdminsCache = null;
+async function tenantAdminPeers() {
+  if (_peerAdminsCache) return _peerAdminsCache;
+  try {
+    _peerAdminsCache = await API.get("/api/tenant-admins");
+    return _peerAdminsCache;
+  } catch (e) { return []; }
+}
+
 async function adminsForCustomer(customerId) {
   if (!customerId) return [];
   if (_adminsCache[customerId]) return _adminsCache[customerId];
@@ -2377,16 +2390,25 @@ async function openUserEditor(edit, id) {
   // tenant admins linked to a customer or entirely unlinked (they create their
   // own organisations after first login); non-master tenant admins always pick
   // which of their care-list customers the new account belongs to.
-  const showCustFields = master || startCust || (isAdmin() && !master);
+  const tenantAdmin = isAdmin() && !master;
+  const showCustFields = master || startCust || tenantAdmin;
   const showLocDept = startCust;
-  // responsible tenant admin: only the master picks it (tenant staff are auto-assigned by the backend)
+  // Who may be named as the linked tenant admin:
+  //  * master       -> the admins of whichever organisation is selected
+  //  * tenant admin -> their own peer admins, because the organisation is now
+  //                    optional and the account can sit under the tenant's care
+  // Tenant staff below admin are still auto-assigned by the backend.
   const startCustId = u && u.customer_id ? u.customer_id : (state.user && !master ? state.user.customer_id : "");
-  const respAdmins = (u && u.customer_id) || (state.user && !master && state.user.customer_id)
-    ? await adminsForCustomer(startCustId || null)
-    : [];
+  const respAdmins = tenantAdmin
+    ? await tenantAdminPeers()
+    : ((u && u.customer_id) || (state.user && !master && state.user.customer_id)
+        ? await adminsForCustomer(startCustId || null)
+        : []);
+  // A tenant admin defaults to themselves; the master may leave it unassigned.
+  const respSelected = (u && u.responsible_admin_id) || (tenantAdmin ? state.user.id : null);
   const respOptions = master
-    ? respAdminOpts(respAdmins, u && u.responsible_admin_id, true)
-    : "";
+    ? respAdminOpts(respAdmins, respSelected, true)
+    : (tenantAdmin ? respAdminOpts(respAdmins, respSelected, false) : "");
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit user" : "Add user"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
@@ -2399,9 +2421,10 @@ async function openUserEditor(edit, id) {
             .map(([r, lbl]) => `<option value="${r}" ${startRole === r ? "selected" : ""}>${lbl}</option>`).join("")}
         </select></label>
       <div id="uCustomerFields" style="${showCustFields ? "" : "display:none"}">
-        <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked customer (optional — leave empty for LabCare-wide)" : "Linked customer"}</span>
+        <label class="field"><span id="uCustomerLabel">${master && !startCust ? "Linked customer (optional — leave empty for LabCare-wide)" : (tenantAdmin && !startCust ? "Linked customer (optional — leave empty to place them under tenant admin care)" : "Linked customer")}</span>
           <select id="uCustomer" onchange="onUserCustPick()">
             ${master ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— LabCare-wide (no customer) —</option>` : ""}
+            ${tenantAdmin ? `<option value="" ${!u || !u.customer_id ? "selected" : ""}>— Under tenant admin care (no single organisation) —</option>` : ""}
             ${customers.map((x) => `<option value="${x.id}" ${String(x.id) === String(u && u.customer_id ? u.customer_id : (!master ? startCustId : null)) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
           </select></label>
         <label class="field" id="uLocationField" style="${showLocDept ? "" : "display:none"}"><span>Linked location/department</span>
@@ -2413,6 +2436,9 @@ async function openUserEditor(edit, id) {
         </select>
         ${master ? `<label class="field" id="uRespAdminField" style="${startCustId ? "" : "display:none"}"><span>Responsible tenant admin</span>
           <select id="uRespAdmin">${respOptions}</select></label>` : ""}
+        ${tenantAdmin ? `<label class="field" id="uRespAdminField" style="${startCust ? "display:none" : ""}"><span>Linked tenant admin</span>
+          <select id="uRespAdmin">${respOptions}</select>
+          <small style="display:block;margin-top:4px;color:var(--ink-soft);font-size:12px">With no organisation selected, this account sees every organisation that tenant admin cares for.</small></label>` : ""}
       </div>
       <label class="field"><span>${edit ? "New password (leave blank to keep)" : "Password *"}</span><input id="uPassword" type="password" placeholder="${edit ? "••••••••" : "Set a password"}"></label>
     </div>
@@ -2443,11 +2469,23 @@ function toggleCustomerSelect() {
       ? "— Not linked yet (they create their own later) —"
       : "— LabCare-wide (no customer) —";
   } else {
-    // tenant staff can create for any organisation in their care list
-    // (which the backend scopes /api/customers to). Default to their primary.
+    // Tenant staff can create for any organisation in their care list (which the
+    // backend scopes /api/customers to). Customer-role accounts MUST name one, so
+    // default those to the admin's primary organisation. Staff accounts may stay
+    // empty — that places them under the linked tenant admin's care.
     $("#uCustomerFields").style.display = "";
     const sel = $("#uCustomer");
-    if (sel && !sel.value && state.user && state.user.customer_id) sel.value = String(state.user.customer_id);
+    if (isCustRole && sel && !sel.value && state.user && state.user.customer_id) {
+      sel.value = String(state.user.customer_id);
+    }
+    const lbl = $("#uCustomerLabel");
+    if (lbl && !isMaster()) lbl.textContent = isCustRole
+      ? "Linked customer"
+      : "Linked customer (optional — leave empty to place them under tenant admin care)";
+    // The linked-tenant-admin choice only matters for staff accounts; a customer
+    // account's admin follows from its organisation.
+    const respField = $("#uRespAdminField");
+    if (respField && !isMaster()) respField.style.display = isCustRole ? "none" : "";
   }
   $("#uLocationField").style.display = isCustRole ? "" : "none";
   if ($("#uDepartmentField")) $("#uDepartmentField").style.display = "none";
@@ -2497,11 +2535,14 @@ async function saveUser(id) {
     body.department_id = null;
     if ($("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   } else {
-    // tenant staff: engineers/customer users go under the customer they picked
-    // (defaults to their primary customer)
-    body.customer_id = $("#uCustomer") ? $("#uCustomer").value || (state.user && state.user.customer_id) || null : null;
+    // Tenant staff creating an engineer/application account: the organisation is
+    // OPTIONAL. Left empty, the account sits under the linked tenant admin's care
+    // and inherits that admin's care list instead of being tied to one
+    // organisation — so there is no fallback to the admin's primary any more.
+    body.customer_id = ($("#uCustomer") && $("#uCustomer").value) || null;
     body.location_id = null;
     body.department_id = null;
+    if ($("#uRespAdmin")) body.responsible_admin_id = $("#uRespAdmin").value || null;
   }
   const pw = $("#uPassword").value;
   if (pw) body.password = pw;
