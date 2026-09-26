@@ -1,7 +1,7 @@
 # LabCare — native installers
 
-Built by GitHub Actions run [#36](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36204792795)
-from commit 6170e14 on 2026-09-26 UTC.
+Built by GitHub Actions run [#57](https://github.com/jeffrine7882-spec/LabCare/actions/runs/36219769780)
+from commit 4112acb on 2026-09-26 UTC.
 
 ## Android — android/LabCare-Alerts-v1.3.apk
 Requires Android 8.0+ (API 26) and installs on the latest Android
