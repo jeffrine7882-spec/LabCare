@@ -159,27 +159,42 @@ jobs:
         id: boot_check
         if: inputs.target != 'frontend'
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # The container runs server/run.py, which calls init_db() unguarded:
           # if the schema or a migration fails there, the machine exits, the
           # restart loop begins and the proxy answers 503 — with no traceback
-          # anywhere the app can see. Reproduce that boot here first, where a
-          # failure is visible and production has not been touched yet. It
-          # applies the same idempotent DDL the container applies seconds later.
-          # Only the DSN is read back out: the optional VAPID/FCM values can
-          # contain characters that are fine in an env file but not in a shell.
+          # anywhere the app can see. So run that exact entry point here first,
+          # where a failure is visible and production has not been touched yet.
+          # It applies the same idempotent DDL the container applies seconds
+          # later; only the DSN is read back out of the env file, because the
+          # optional VAPID/FCM values are fine in a file but not in a shell.
+          emit() { # emit <title> <file>
+            local title="$1" f="$2" n=0 text chunk
+            text="$(tr '\n\r\t' '   ' < "$f" 2>/dev/null | sed 's/  */ /g' | cut -c1-6000)"
+            while [ -n "$text" ] && [ "$n" -lt 6 ]; do
+              chunk="$(printf '%s' "$text" | cut -c1-1000)"
+              echo "::error title=${title}_${n}::${chunk}"
+              text="$(printf '%s' "$text" | cut -c1001-6000)"
+              n=$((n+1))
+            done
+          }
           export LABCARE_DATABASE_URL="$(sed -n 's/^LABCARE_DATABASE_URL=//p' .env.production | tail -n1)"
           [ -n "$LABCARE_DATABASE_URL" ] || { echo "::error::no LABCARE_DATABASE_URL in .env.production"; exit 1; }
-          ( cd server && python3 -c "import database; database.init_db(); print('init_db OK')" )
           ( cd server && PORT=8011 nohup python3 run.py > /tmp/boot.log 2>&1 & )
-          for i in $(seq 1 15); do
-            if health="$(curl -fsS -m 5 http://127.0.0.1:8011/api/health 2>/dev/null)"; then
-              echo "boot check passed: $health"; exit 0
+          ok=0
+          for i in $(seq 1 30); do   # ~6 minutes worst case, usually seconds
+            if health="$(curl -fsS -m 10 http://127.0.0.1:8011/api/health 2>/dev/null)"; then
+              ok=1; break
             fi
-            sleep 2
+            grep -q "Traceback" /tmp/boot.log && break   # it already died
+            sleep 3
           done
-          echo "::error title=The app cannot boot against the live database::Deploying now would swap a working container for one that cannot start. Log (tail):"
-          tail -40 /tmp/boot.log || true
+          if [ "$ok" = "1" ]; then
+            echo "boot check passed: $health"
+            exit 0
+          fi
+          echo "::error title=The app cannot boot against the live database::Deploying now would swap a working container for one that cannot start. Log below (as annotations, so it is readable without log access)."
+          emit LABBOOT_FAIL /tmp/boot.log
           exit 1
 
       - name: Deploy backend (InsForge compute — remote build)
