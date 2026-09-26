@@ -229,6 +229,33 @@ Organizations** and **Admin → Team & users**.
   `…/decline-care` and `…/assign-care` (master only). Notifications carry
   `care_pending` / `care_claimed_by` so the client stops offering buttons for a
   decision that is already settled.
+- **Equipment categories**: the Add equipment form offers a prepared laboratory
+  list — *General, Centrifuges, PCR, Cold Storage, Chromatography, Spectroscopy,
+  Sterilization, Analyzers, Histology, Other* — installed on first run from
+  `DEFAULT_CATEGORIES` in `server/seed.py`. Seeding runs at every startup but
+  acts at most once per database: as soon as any prepared category is present
+  the list counts as curated and is left exactly as arranged, so a category the
+  master deletes is **not** resurrected by the next restart. A database holding
+  only hand-made categories still gets the prepared list, because those defaults
+  were never offered before; matching is case-insensitive.
+
+  Categories are global rather than per organization, and `GET /api/categories`
+  returns the whole shared list to every caller so the dropdown is always
+  complete — previously tenant staff saw only the categories their own equipment
+  already used, which left a brand-new tenant staring at an empty picker. Each
+  caller's `equipment_count` still tallies only equipment they may see, so a
+  tenant admin is not told how many instruments another tenant has.
+
+  **Anyone who may add equipment** (tenant admins, engineers and application
+  accounts) may also add a category when the one they need is missing: the
+  equipment form offers *＋ New category…* and registers it through
+  `POST /api/categories`. Renaming and deleting stay with the **master only** —
+  those rewrite every tenant's equipment records, while adding one can only
+  lengthen a shared pick-list. Deleting a category moves its equipment to
+  *Other*, which itself cannot be deleted. The Categories screen (More →
+  Categories) remains master-only.
+
+  The complaint form keeps its own fixed category list and is unaffected.
 - **Ticket numbering**: complaints `CMP-0001…`, breakdowns `BRK-0001…`.
 - **FIFO storage**: each ticket type is capped (default 2000). The oldest
   tickets roll off into `ticket_history.log` (JSON lines) so nothing is lost.
