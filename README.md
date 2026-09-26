@@ -57,6 +57,12 @@ still default to `all`. If an older deployment is stuck at its backend health
 check, cancel that run before publishing so it cannot subsequently overwrite the
 new frontend.
 
+A push suffices when dispatch is not available: the deploy job is gated on the
+`[deploy]` tag in the commit message, so `target: frontend` behaviour can also be
+had by running the frontend steps directly. Since the backend health check is
+bounded to ~10 minutes and the frontend publish runs even when it fails, a stuck
+backend can no longer withhold a merged frontend fix.
+
 The login screen is visible before network requests start. Session restoration
 times out after 8 seconds with a retry option, and transient failures retain the
 saved session token. This makes an API outage visible; it does not repair the API.
@@ -64,6 +70,27 @@ Run the startup regression tests with:
 
 ```bash
 node --test scripts/test_frontend_startup.js
+```
+
+### Why a deploy now boots the app before shipping it
+
+`server/run.py` calls `init_db()` unguarded, so a database schema or migration
+error is not a request error — the container exits, the machine restart-loops and
+the proxy answers 503 with no traceback the app can see. That is how the API went
+down on 2026-09-26: `_PG_SCHEMA` declared `ticket_feedback.text` without a type
+(`text NOT NULL` — the column is *named* `text`), which Postgres rejects and
+SQLite accepts, so it only ever failed on the deployed Postgres.
+
+The deploy job therefore (1) runs `server/test_pg_schema_syntax.py` plus the other
+server tests, (2) boots `run.py` against the live Postgres *before* deploying, and
+fails the run if it cannot serve `/api/health`. To see what production is serving
+without log access, push a commit tagged `[probe]` (or dispatch **Probe —
+production status**): it deploys nothing and reports the API, the site's `/api`
+proxy, the frontend markers, the compute machine events, and the boot traceback
+as check-run annotations.
+
+```bash
+cd server && python3 -m unittest test_pg_schema_syntax    # schema parse + engine parity
 ```
 
 ## Running locally (development)

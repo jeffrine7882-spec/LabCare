@@ -730,7 +730,7 @@ CREATE TABLE IF NOT EXISTS ticket_feedback (
     customer_id BIGINT NOT NULL,
     user_id BIGINT,
     author_name TEXT DEFAULT '',
-    text NOT NULL,
+    text TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 
