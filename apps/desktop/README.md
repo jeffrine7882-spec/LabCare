@@ -1,7 +1,7 @@
 # LabSynch Alerts — Windows desktop app
 
 ## Install
-Run **`LabSynch-Alerts-Setup-1.2.0.exe`** (in `Release/windows/`, or `dist/`
+Run **`LabSynch-Alerts-Setup-1.3.0.exe`** (in `Release/windows/`, or `dist/`
 after a local build). It installs to `%LOCALAPPDATA%\LabSynch Alerts`, adds a
 Start-menu + desktop shortcut, and launches on finish. **SmartScreen** will warn
 about an "unrecognized app" (self-signed) — choose **More info → Run anyway**.
@@ -22,15 +22,41 @@ about an "unrecognized app" (self-signed) — choose **More info → Run anyway*
   bundled UI cannot load, the window falls back to the real site; if the site
   cannot load, you get a recovery page with **Retry** and **Open the site in my
   browser**.
-* **System tray** app — sign in once with your LabSynch account, then close the
-  window; it keeps running in the tray.
-* **Auto-starts with Windows** (login item).
+* **System tray** app — sign in once with your LabSynch account, then close
+  the window; it keeps running in the tray.
 * Polls your bell every 10 s. On a new notification it:
   * floats an **always-on-top bubble banner** at the top-right of your screen
     (no focus theft, dismiss or "Open LabSynch" buttons), with **sound**, and
   * adds a native **Windows notification** as a durable breadcrumb.
 * Right-click the tray icon for **Open LabSynch site**, **Open Alerts window**,
   **Alerts on/off**, **Sign out**, **Quit**.
+
+## Ringing with the app closed (mandatory, 1.3.0)
+The alert must ring no matter what happens to the app, so 1.3.0 layers three
+keep-alive mechanisms:
+
+1. **Closing the window never exits.** The window hides to the tray and the
+   poller keeps running — that has always been the main path.
+2. **Auto-start with Windows, hidden.** The login item now starts the exe with
+   `--hidden`, so it boots straight into the tray (no window in your face at
+   login) and begins polling immediately.
+3. **A per-minute watchdog Scheduled Task.** The app registers
+   `LabSynch Alerts Watchdog` (`schtasks`, per-user, no admin) on every start
+   and re-asserts it while polling. If the app is quit or killed, Windows
+   relaunches it within a minute — hidden, straight to the tray. When the app
+   is already running, the single-instance lock makes the relaunch a no-op,
+   and a hidden relaunch never pops a window over your work.
+
+**Quit is guarded.** Tray → Quit asks first
+(*"Keep alerts running" / "Quit anyway"*) and points at **Alerts: OFF** or
+**Sign out** for real silencing. "Quit anyway" still exits, but the watchdog
+brings the app (and the ringing) back within a minute. Uninstalling removes
+the watchdog task and the auto-start entry (`build/uninstaller.nsh`), so a
+removed app never leaves a ghost task behind.
+
+Crash resilience: unhandled errors are written to `errors.log` in the app's
+data folder instead of killing the process, so a single bad poll can never
+silence the daemon.
 
 ## Why 1.2.0 exists
 1.1.0 installed an app that showed a blank page and could not reach the site:
@@ -61,18 +87,13 @@ npm run verify:package   # every runtime file is inside build.files
 node smoke-test.js       # runs main.js against a mock Electron and asserts:
                          #   window shows, UI loads, Site opens the site,
                          #   failed load -> recovery page, Quit quits,
-                         #   an alert still rings without the bubble UI
+                         #   an alert still rings without the bubble UI,
+                         #   watchdog task registered + hidden relaunch,
+                         #   --hidden launch stays in the tray, Quit asks first
 ```
 Both run in the *Build release binaries* workflow **before** the installer is
 built, so a file can never be silently dropped again. Against the old 1.1.0
 source `smoke-test.js` fails 20 checks; against this source it passes all.
-
-## Honest current limitation
-This app rings from its own background polling — works even with the window
-closed, as long as the app is running (it starts with Windows). True push
-even when the app is fully closed needs the same Firebase FCM credentials used
-by the Android app (`apps/README-setup.md`); the server side is already built
-and waiting (`server/apppush.py`).
 
 ## Build
 ```
@@ -81,6 +102,6 @@ npm run pack             # runs the checks, then:
                          # npx electron-builder --win nsis
 ```
 On Linux this needs `wine64` for embedding the icon/version into the .exe; CI
-builds on `windows-latest` instead. If `npm install` cannot download the Electron
-binary (sandboxed network), set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` — the checks
-above still run, since they do not need Electron itself.
+builds on `windows-latest` instead. If `npm install` cannot download the
+Electron binary (sandboxed network), set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` —
+the checks above still run, since they do not need Electron itself.

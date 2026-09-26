@@ -6,6 +6,17 @@
  * same lightweight /api/notifications/ping the web app uses, so enabling
  * "Desktop alerts" in the web app is NOT required — this app works on its own.
  *
+ * RINGING WITH THE APP CLOSED (mandatory): three layers keep the alerts
+ * coming no matter what the user (or Windows) does to the app:
+ *   1. closing the window only hides it — the tray app keeps polling,
+ *   2. it auto-starts with Windows (login item) — hidden, straight to the
+ *      tray via --hidden,
+ *   3. a per-minute "watchdog" Scheduled Task relaunches the exe if it was
+ *      quit or killed; the relaunch passes --hidden, and when the app is
+ *      already running the single-instance lock makes it a no-op. Quitting
+ *      asks for confirmation first, and even "Quit anyway" comes back within
+ *      a minute.
+ *
  * It also *is* a doorway to the LabSynch web app: the "Site" tab opens
  * https://labcare.insforge.site inside the app (already signed in when this
  * app holds a token), the tray menu and every alert bubble/notification open
@@ -13,7 +24,7 @@
  * if the bundled UI cannot load we fall back to the real site, and if the site
  * cannot load we offer "Retry" + "Open the site in my browser".
  */
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, ipcMain, shell, session } = require("electron");
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, ipcMain, shell, session, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
@@ -23,6 +34,15 @@ const API_BASE = SITE_URL.replace(/\/+$/, "");
 const SITE_ORIGIN = new URL(SITE_URL).origin;
 const SITE_PARTITION = "persist:labcare-site";
 const POLL_INTERVAL_MS = 10000;
+
+// Set for the login-item auto-start and every watchdog relaunch: start in
+// the tray, never throw a window in the user's face.
+const HIDDEN_ARGS = ["--hidden"];
+const isHiddenArg = (a) => a === "--hidden" || a === "--minimized";
+// True at launch when we were started hidden (auto-start / watchdog).
+const START_HIDDEN = process.argv.some(isHiddenArg);
+// The Scheduled Task that resurrects the app after a quit/kill.
+const WATCHDOG_TASK = "LabSynch Alerts Watchdog";
 
 let tray = null;
 let win = null;
@@ -79,12 +99,24 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => showWindow());
+  // An alert daemon must never die of an unhandled error: log and keep
+  // running (the watchdog would bring us back anyway, but a live process
+  // keeps polling without a gap).
+  process.on("uncaughtException", (err) => { try { logError("uncaughtException", err); } catch (e) {} });
+  process.on("unhandledRejection", (err) => { try { logError("unhandledRejection", err); } catch (e) {} });
+
+  // A hidden watchdog relaunch while we run must NOT pop the window over
+  // whatever the user is doing; a human double-click (no --hidden) should.
+  app.on("second-instance", (e, argv) => {
+    if ((argv || []).some(isHiddenArg)) return;
+    showWindow();
+  });
 
   app.whenReady().then(() => {
     loadPrefs();
     try { app.setAppUserModelId("com.insforge.labcare"); } catch (e) {}
     setAutoStart();
+    ensureWatchdogTask();
     // Each step is guarded: a missing tray icon must never stop the window
     // from opening (that is how the app used to end up invisible/blank).
     try { createTray(); } catch (e) { tray = null; }
@@ -99,11 +131,43 @@ if (!gotLock) {
   app.on("activate", () => showWindow());
 }
 
+function logError(kind, err) {
+  try {
+    const dir = app.getPath("userData");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, "errors.log"),
+      `\n[${new Date().toISOString()}] ${kind}: ${err && err.stack ? err.stack : String(err)}\n`);
+  } catch (e) {}
+}
+
 function setAutoStart() {
   try {
     if (process.platform === "win32" || process.platform === "darwin") {
-      app.setLoginItemSettings({ openAtLogin: true }); // auto-start with Windows
+      const settings = { openAtLogin: true }; // auto-start with Windows
+      if (process.platform === "win32") settings.args = HIDDEN_ARGS; // straight to the tray
+      app.setLoginItemSettings(settings);
     }
+  } catch (e) {}
+}
+
+/**
+ * Ring-even-when-closed for the EXE. Registers (and re-registers on every
+ * start, so it self-heals) a per-user Scheduled Task that starts this exe
+ * every minute with --hidden. When the app is already running the
+ * single-instance lock turns the relaunch into a no-op; when it was quit or
+ * killed, the app is back (and ringing) within a minute. Removed again by
+ * the uninstaller (build/uninstaller.nsh).
+ */
+function ensureWatchdogTask() {
+  if (process.platform !== "win32" || !app.isPackaged) return;
+  try {
+    const { execFile } = require("child_process");
+    execFile("schtasks", [
+      "/Create", "/F",
+      "/TN", WATCHDOG_TASK,
+      "/TR", `"${process.execPath}" --hidden`,
+      "/SC", "MINUTE", "/MO", "1",
+    ], { windowsHide: true }, () => {});
   } catch (e) {}
 }
 
@@ -135,10 +199,33 @@ function refreshMenu() {
       },
       { label: "Sign out", click: signOut },
       { type: "separator" },
-      { label: "Quit", click: () => { app.isQuitting = true; app.quit(); } },
+      { label: "Quit", click: () => requestQuit() },
     ]);
     tray.setContextMenu(menu);
   } catch (e) {}
+}
+
+/**
+ * Quitting an alert daemon should never be a one-click accident. Confirm
+ * first (and point at "Alerts: OFF" / "Sign out" for real silencing). Even
+ * after "Quit anyway" the watchdog task brings the app back within a minute
+ * — that is the mandatory part — but the user gets an informed choice.
+ */
+function requestQuit() {
+  if (app.isQuitting) { app.quit(); return; }
+  const opts = {
+    type: "warning",
+    title: "Quit LabSynch Alerts?",
+    message: "Quit LabSynch Alerts?",
+    detail: "While LabSynch Alerts is not running, this PC will not ring for new complaints and breakdowns. It restarts with Windows and its watchdog brings it back within a minute. To silence alerts properly, use Alerts: OFF or Sign out.",
+    buttons: ["Keep alerts running", "Quit anyway"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+  Promise.resolve(dialog.showMessageBox(opts))
+    .then(({ response }) => { if (response === 1) { app.isQuitting = true; app.quit(); } })
+    .catch(() => {});
 }
 
 // ---- alerts window ---------------------------------------------------------
@@ -163,10 +250,12 @@ function createWindow() {
 
   // The window used to be created hidden with nothing ever showing it, so the
   // installed app could look dead. Show it as soon as it can paint, and again
-  // on a failsafe timer in case ready-to-show never fires.
-  win.once("ready-to-show", () => { try { win.show(); } catch (e) {} });
+  // on a failsafe timer in case ready-to-show never fires — unless we were
+  // started hidden (auto-start / watchdog relaunch), where staying in the
+  // tray is the point.
+  win.once("ready-to-show", () => { try { if (!START_HIDDEN) win.show(); } catch (e) {} });
   setTimeout(() => {
-    try { if (win && !win.isDestroyed() && !win.isVisible()) win.show(); } catch (e) {}
+    try { if (win && !win.isDestroyed() && !win.isVisible() && !START_HIDDEN) win.show(); } catch (e) {}
   }, 2500);
 
   // Never leave the user on a blank window: any load/render failure falls back
@@ -507,6 +596,9 @@ function schedulePolling() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(pollOnce, POLL_INTERVAL_MS);
   pollOnce();
+  // re-assert the resurrection task while we are alive and healthy, in case
+  // something deleted it since the last start
+  ensureWatchdogTask();
 }
 
 async function pollOnce() {

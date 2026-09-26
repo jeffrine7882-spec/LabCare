@@ -13,6 +13,8 @@ import android.media.RingtoneManager;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.os.SystemClock;
 
 import org.json.JSONObject;
 
@@ -20,7 +22,19 @@ import org.json.JSONObject;
  * Foreground relay: polls the LabSynch bell endpoint and, on a new unread
  * notification, drops a HEADS-UP bubble over the top of the display, rings
  * the user's chosen sound and vibrates — the phone alerts even when the
- * LabSynch app UI is closed or the screen is off.
+ * LabSynch app UI is closed, swiped away or the screen is off.
+ *
+ * "Rings even when the app is closed" is enforced from five sides:
+ *  1. the foreground service itself (Android does not idle-kill it),
+ *  2. a partial wake lock held across every poll and ring — a foreground
+ *     service alone does not keep the CPU out of suspend,
+ *  3. a WAKE alarm every ~12 s ({@link Alarms}) that fires even in Doze,
+ *     because Handler timers freeze once the CPU sleeps,
+ *  4. restart alarms from onTaskRemoved()/onDestroy() — swiping the app
+ *     away or an OEM killer only silences the relay for a couple of seconds,
+ *  5. a WATCHDOG chain that resurrects the relay if its heartbeat ever
+ *     goes stale.
+ * All chains are cancelled when the user turns alerts off or signs out.
  */
 public class AlertRelayService extends Service {
 
@@ -29,6 +43,7 @@ public class AlertRelayService extends Service {
     private Runnable poller;
     private SharedPreferences prefs;
     private long lastId = -1;
+    private boolean polling = false;
 
     @Override
     public void onCreate() {
@@ -39,28 +54,51 @@ public class AlertRelayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && "STOP".equals(intent.getAction())) {
+        String action = intent == null ? null : intent.getAction();
+
+        if ("STOP".equals(action)) {
+            // Deliberate stop ("Phone alerts" off / sign out): everything must
+            // stay down — no sticky restart, no watchdog resurrection.
+            prefs.edit().putBoolean("relay_user_stopped", true).apply();
+            Alarms.cancelAll(this);
+            if (handler != null && poller != null) handler.removeCallbacks(poller);
+            handler = null;
+            poller = null;
+            lastId = -1;
+            stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }
 
-        String token = prefs.getString("token", "");
-        if (token.isEmpty()) {
+        // startForegroundService() contract: startForeground() promptly, even
+        // on the bail-out paths below.
+        startForeground(1001, buildOngoingNotification());
+
+        if (!Alarms.wanted(this)) {
+            // signed out / alerts off / user-stopped — nothing to relay
+            Alarms.cancelAll(this);
+            stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }
 
-        // Persistent notification so Android doesn't kill us when idle.
-        Notification n = new Notification.Builder(this, CHANNEL)
+        if (handler == null) {
+            startPolling();               // fresh start (START, sticky restart, resurrect)
+        } else if ("WAKE".equals(action)) {
+            pollOnce();                   // Doze alarm nudge while already running
+        } else {
+            pollOnce();                   // explicit START refresh
+        }
+        return START_STICKY;
+    }
+
+    private Notification buildOngoingNotification() {
+        return new Notification.Builder(this, CHANNEL)
                 .setContentTitle("LabSynch alerts on")
                 .setContentText("Listening for equipment complaints & breakdowns")
                 .setSmallIcon(R.drawable.ic_stat_bell)
                 .setOngoing(true)
                 .build();
-        startForeground(1001, n);
-
-        startPolling();
-        return START_STICKY;
     }
 
     private void startPolling() {
@@ -68,18 +106,37 @@ public class AlertRelayService extends Service {
         poller = new Runnable() {
             @Override
             public void run() {
-                new Thread(() -> pollOnce()).start();
-                handler.postDelayed(this, 10000);
+                pollOnce();
+                if (handler != null) handler.postDelayed(this, 10000);
             }
         };
         handler.post(poller);
+        // Doze-proof chains (re-armed by WatchdogReceiver on every fire):
+        Alarms.schedule(this, Alarms.ACTION_WAKE, 12000);
+        Alarms.schedule(this, Alarms.ACTION_WATCHDOG, 60000);
     }
 
     private void pollOnce() {
+        if (polling) return; // a WAKE alarm and the loop can overlap — never pile up
+        polling = true;
+        // Hold the CPU awake for the whole check; without this the CPU can
+        // suspend mid-request the moment the screen is off.
+        PowerManager.WakeLock lock = acquire("labcare:poll", 15000);
+        new Thread(() -> {
+            try {
+                doPoll();
+            } finally {
+                polling = false;
+                release(lock);
+            }
+        }).start();
+    }
+
+    private void doPoll() {
         String token = prefs.getString("token", "");
         if (token.isEmpty()) return;
         try {
-            String body = httpGet("/api/notifications/ping", token);
+            String body = Api.get("/api/notifications/ping", token);
             JSONObject j = new JSONObject(body);
             if (j.has("error")) return;
             JSONObject latest = j.optJSONObject("latest");
@@ -98,34 +155,50 @@ public class AlertRelayService extends Service {
                 lastId = id;
             }
         } catch (Exception ignored) {
+        } finally {
+            // Heartbeat even on failure, so the watchdog can tell "alive but
+            // offline" apart from "dead".
+            try {
+                prefs.edit().putLong("relay_heartbeat",
+                        SystemClock.elapsedRealtime()).apply();
+            } catch (Exception ignored) {
+            }
         }
     }
 
     private void ring(String text) {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
 
-        // play the user's chosen sound (from the in-app picker)
-        android.media.MediaPlayer mp = android.media.MediaPlayer.create(
-                this, soundResId(), new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                        .build(), 1);
+        // Play the user's chosen sound (from the in-app picker). The player
+        // holds its own wake lock (setWakeMode) so playback survives the CPU
+        // suspending with the screen off; the ring lock below covers the
+        // setup and the fallback paths.
+        PowerManager.WakeLock ringLock = acquire("labcare:ring", 30000);
+        boolean playerOwnsWake = false;
+        android.media.MediaPlayer mp = null;
         try {
-            if (mp != null) {
+            mp = android.media.MediaPlayer.create(
+                    this, soundResId(), new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                            .build(), 1);
+        } catch (Exception ignored) {
+        }
+        if (mp != null) {
+            try {
+                mp.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK);
                 mp.setOnCompletionListener(android.media.MediaPlayer::release);
                 mp.start();
-            } else {
-                RingtoneManager.getRingtone(this,
-                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)).play();
+                playerOwnsWake = true;
+            } catch (Exception e) {
+                try { mp.release(); } catch (Exception ignored) { }
+                playDefaultRingtone();
             }
-        } catch (Exception e) {
-            try {
-                RingtoneManager.getRingtone(this,
-                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)).play();
-            } catch (Exception ignored) {
-            }
+        } else {
+            playDefaultRingtone();
         }
 
         Intent i = new Intent(this, MainActivity.class);
+        i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pi = PendingIntent.getActivity(this, 0, i,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -139,9 +212,14 @@ public class AlertRelayService extends Service {
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setSmallIcon(R.drawable.ic_stat_bell)
                 .setAutoCancel(true)
-                .setCategory(Notification.CATEGORY_MESSAGE)
+                .setCategory(Notification.CATEGORY_ALARM)
                 .setShowWhen(true)
-                .setContentIntent(pi);
+                .setContentIntent(pi)
+                // Turn the screen on / ring over the lock screen too. Where
+                // the user has not granted full-screen intents (Android 14
+                // asks per-app) it degrades to a normal heads-up banner and
+                // the sound still rings.
+                .setFullScreenIntent(pi, true);
         if (android.os.Build.VERSION.SDK_INT < 26) {
             // heads-up banner pre-O comes from the priority, sound & vibration
             b = b.setPriority(Notification.PRIORITY_MAX)
@@ -149,7 +227,42 @@ public class AlertRelayService extends Service {
                  .setSound(android.net.Uri.parse(
                          "android.resource://" + getPackageName() + "/" + soundResId()));
         }
-        nm.notify((int) (System.currentTimeMillis() % Integer.MAX_VALUE), b.build());
+        try {
+            nm.notify((int) (System.currentTimeMillis() % Integer.MAX_VALUE), b.build());
+        } catch (Exception ignored) {
+        }
+
+        if (playerOwnsWake) release(ringLock);
+        // else: keep the ring lock until its timeout so the default
+        // ringtone (which holds no wake lock) finishes playing.
+    }
+
+    private void playDefaultRingtone() {
+        try {
+            RingtoneManager.getRingtone(this,
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)).play();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private PowerManager.WakeLock acquire(String tag, long timeoutMs) {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm == null) return null;
+            PowerManager.WakeLock l = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag);
+            l.setReferenceCounted(false);
+            l.acquire(timeoutMs); // always times out — no leak if a release is missed
+            return l;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void release(PowerManager.WakeLock l) {
+        try {
+            if (l != null && l.isHeld()) l.release();
+        } catch (Exception ignored) {
+        }
     }
 
     private void buzz() {
@@ -200,14 +313,31 @@ public class AlertRelayService extends Service {
         }
     }
 
-    private String httpGet(String path, String token) throws Exception {
-        return Api.get(path, token);
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        super.onTaskRemoved(rootIntent);
+        // Swiping the app away from Recents kills the whole process on many
+        // phones (Xiaomi/Oppo/Vivo/Huawei and others). We are still alive at
+        // this moment, so restart the relay now and schedule a delayed
+        // restart as backup for the aggressive OEMs.
+        if (Alarms.wanted(this)) {
+            Alarms.poke(this, "START");
+            Alarms.schedule(this, Alarms.ACTION_RESTART, 1500);
+        }
     }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
         if (handler != null && poller != null) handler.removeCallbacks(poller);
+        handler = null;
+        poller = null;
+        if (Alarms.wanted(this)) {
+            // START_STICKY normally brings us back; OEM killers sometimes
+            // swallow the sticky restart, so schedule our own too.
+            Alarms.schedule(this, Alarms.ACTION_RESTART, 2500);
+            Alarms.schedule(this, Alarms.ACTION_WATCHDOG, 60000);
+        }
     }
 
     @Override

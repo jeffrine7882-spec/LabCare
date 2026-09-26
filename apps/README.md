@@ -2,8 +2,8 @@
 
 | App | Installer | Where |
 |---|---|---|
-| **Android** | `LabCare-Alerts-v1.3.apk` | `../Release/android/` (also on the GitHub [Releases](../../releases) page) |
-| **Windows** | `LabCare-Alerts-Setup-1.1.0.exe` | `../Release/windows/` |
+| **Android** | `LabSynch-Alerts-v1.4.apk` | `../Release/android/` (also on the GitHub [Releases](../../releases) page) |
+| **Windows** | `LabSynch-Alerts-Setup-1.3.0.exe` | `../Release/windows/` |
 
 Both sign in with the **same account as the web app**
 (`https://labcare.insforge.site`) and ring the LabSynch chime + show a
@@ -17,10 +17,25 @@ notification for every new bell alert.
   shows a native Windows notification + plays the chime, and opens the web app
   when you click an alert.
 
-## Honest limitation (both apps)
-They ring from their **own background polling**, which keeps working with the
-app window closed / phone screen off — as long as the app process is running
-(both auto-start). Ringing with the app **fully closed/killed** needs
-Firebase Cloud Messaging: the server side is already implemented
-(`server/apppush.py` + `/api/app/register`), and only needs two credentials
-from a free Firebase project — see `README-setup.md`.
+## Ringing with the app closed (mandatory)
+Both apps are built so the alert still rings when the app is closed, killed,
+asleep or rebooted — not only while their windows are open:
+
+- **Android v1.4** layers a foreground service, per-poll/per-ring wake locks,
+  Doze-proof `setExactAndAllowWhileIdle` wake-up alarms every ~12 s, restart
+  alarms on task-removed/destroy (survives being swiped away and OEM killers,
+  with a `setAlarmClock()` allowlist fallback), a 60 s heartbeat watchdog, and
+  a lock-screen full-screen alert. Home → **Ring protection** shows the status
+  of every setting this needs with one-tap fixes; the battery-optimisation
+  exemption is asked for right after sign-in (one Allow).
+- **Windows 1.3.0** hides to the tray on window close, auto-starts with
+  Windows **hidden** (`--hidden`), and registers a per-minute **watchdog
+  Scheduled Task** that relaunches the exe if it was quit or killed — hidden,
+  straight to the tray, and a no-op when already running. Quit asks for
+  confirmation, and the uninstaller removes the watchdog task and the
+  auto-start entry.
+
+Remaining honest limit: an explicit **Force stop** (Android) stops everything
+by OS design, and server-push ringing (app fully closed/force-stopped, or iOS)
+still needs the FCM credentials in `README-setup.md` — the server side is
+already built and waiting (`server/apppush.py` + `/api/app/register`).
