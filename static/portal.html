@@ -63,6 +63,27 @@
     .ticket .t-title { font-weight: 700; font-size: 14px; }
     .ticket .t-sub { color: var(--soft); font-size: 12px; }
     .ticket .t-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    /* customer feedback — optional, only on settled tickets */
+    .fb { margin-top: 10px; padding: 12px; background: #f8fafc; border: 1px solid var(--line); border-radius: 14px; }
+    .fb-q { font-size: 12.5px; font-weight: 700; color: var(--soft); }
+    .fb-stars { display: flex; gap: 8px; margin: 8px 0 2px; }
+    .fb-stars span {
+      font-size: 30px; line-height: 1; color: #cbd5e1; cursor: pointer;
+      transition: color .12s ease, transform .12s ease;
+    }
+    .fb-stars span.on { color: #f59e0b; }
+    .fb-stars span:active { transform: scale(1.22); }
+    .fb-note { font-size: 12px; color: var(--soft); margin-top: 6px; }
+    .fb-c { padding: 9px 0; border-top: 1px dashed var(--line); }
+    .fb-c-who { font-size: 11.5px; font-weight: 700; color: var(--soft); }
+    .fb-c-txt { font-size: 13.5px; margin-top: 2px; white-space: pre-wrap; word-break: break-word; }
+    .fb-form { margin-top: 10px; }
+    .fb-form textarea {
+      width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+      font-family: inherit; font-size: 14px; resize: vertical; background: #fff; color: var(--ink);
+    }
+    .fb-form textarea:focus { outline: none; border-color: var(--brand2); }
+    .fb-form .btn { margin-top: 8px; width: 100%; }
     .toast-host { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 200; width: calc(100% - 32px); max-width: 420px; }
     .toast { background: #0f172a; color: #fff; padding: 12px 16px; border-radius: 12px; font-size: 14px; font-weight: 600; margin-bottom: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.3); }
     .toast.success { background: var(--ok); }
@@ -285,6 +306,109 @@
         </div>`).join("");
     }
 
+    // -------------------------------------------- Customer feedback (portal)
+    // Settled tickets only: the history rows carry feedback_open, set by the
+    // server from the same rule as the signed-in app. Feedback is optional, so
+    // an unsettled or unresponded ticket simply shows nothing extra.
+    const fbKey = (kind, id) => (kind === "breakdown" ? "b" : "c") + id;
+    const fbName = () => {
+      const f = $("#fName");
+      return f ? f.value.trim() : "";
+    };
+
+    function fbBlock(t) {
+      if (!t.feedback_open) return "";
+      const k = fbKey(t.kind, t.id);
+      const r = t.rating || 0;
+      const n = t.feedback_comments || 0;
+      return `
+        <div class="fb">
+          <div class="fb-q">How was our service on ${esc(t.code)}?</div>
+          <div class="fb-stars" id="fbs-${k}">${[1, 2, 3, 4, 5].map((s) =>
+            `<span class="${s <= r ? "on" : ""}" role="button" aria-label="${s} star${s > 1 ? "s" : ""}"
+              onclick="fbRate('${t.kind}', ${t.id}, ${s})">★</span>`).join("")}</div>
+          <div class="fb-note" id="fbn-${k}">${r
+            ? `You rated this ${r} out of 5 — tap a star to change it.`
+            : "Optional — tap a star to rate, or skip it entirely."}</div>
+          <div class="fb-form">
+            <div id="fbl-${k}"></div>
+            <textarea id="fbx-${k}" rows="2" maxlength="2000"
+              placeholder="Add a comment… (optional)"></textarea>
+            <button class="btn btn-primary" id="fbb-${k}"
+              onclick="fbSend('${t.kind}', ${t.id})">${n ? "Add another comment" : "Send comment"}</button>
+          </div>
+        </div>`;
+    }
+
+    function fbCommentHtml(c) {
+      // A comment just sent from this page has no server timestamp yet.
+      const when = c.created_at ? fmtMYT(c.created_at) : "just now";
+      return `
+        <div class="fb-c">
+          <div class="fb-c-who">${esc(c.author_name || "Customer")} · ${esc(when)}</div>
+          <div class="fb-c-txt">${esc(c.text)}</div>
+        </div>`;
+    }
+
+    // Pull the existing threads for settled tickets that have comments. Done
+    // after the list paints so the history never waits on it, and a failure
+    // here must never break the list itself.
+    function hydrateFeedback(list) {
+      (list || []).slice(0, 8).forEach((t) => {
+        if (!t.feedback_open || !t.feedback_comments) return;
+        api(`/api/portal/${token}/feedback?kind=${encodeURIComponent(t.kind)}&id=${t.id}`)
+          .then((f) => {
+            const box = $(`#fbl-${fbKey(t.kind, t.id)}`);
+            if (box) box.innerHTML = (f.comments || []).map(fbCommentHtml).join("");
+          })
+          .catch(() => {});
+      });
+    }
+
+    async function fbRate(kind, id, stars) {
+      const k = fbKey(kind, id);
+      const host = $(`#fbs-${k}`);
+      const note = $(`#fbn-${k}`);
+      // Paint the stars immediately — this is a phone, latency feels like a dead tap.
+      if (host) host.querySelectorAll("span").forEach((s, i) => s.classList.toggle("on", i < stars));
+      try {
+        const r = await api(`/api/portal/${token}/rating`, {
+          method: "POST", body: { kind, id, rating: stars, name: fbName() },
+        });
+        if (note) note.textContent = r.created === false
+          ? `Rating updated to ${stars} out of 5 — thank you.`
+          : `Thank you — you rated this ${stars} out of 5. Tap a star to change it.`;
+      } catch (e) {
+        toast(e.message, "error");
+        if (note) note.textContent = "Couldn't save your rating. Please try again.";
+      }
+    }
+
+    async function fbSend(kind, id) {
+      const k = fbKey(kind, id);
+      const box = $(`#fbx-${k}`);
+      const btn = $(`#fbb-${k}`);
+      const text = box ? box.value.trim() : "";
+      if (!text) { if (box) box.focus(); return; }
+      if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+      const name = fbName();
+      try {
+        await api(`/api/portal/${token}/feedback`, {
+          method: "POST", body: { kind, id, text, name },
+        });
+        const list = $(`#fbl-${k}`);
+        if (list) list.innerHTML += fbCommentHtml({
+          author_name: name || "Customer", created_at: "", text,
+        });
+        if (box) box.value = "";
+        if (btn) btn.textContent = "Add another comment";
+        toast("Thank you — your feedback was recorded", "success");
+      } catch (e) {
+        toast(e.message, "error");
+      }
+      if (btn) { btn.disabled = false; }
+    }
+
     function renderHistory(list) {
       if (!list) return `<p style="color:var(--soft);font-size:13px">Loading…</p>`;
       if (!list.length) return `<p style="color:var(--soft);font-size:13px">No reports yet.</p>`;
@@ -298,6 +422,7 @@
               <b>✔ Accepted by ${esc(t.accepted_by_name || "")}</b>
               ${t.accept_reply ? `<div class="accept-reply">“${esc(t.accept_reply)}”</div>` : ""}
             </div>` : ""}
+          ${fbBlock(t)}
         </div>`).join("");
     }
 
@@ -305,6 +430,7 @@
       try {
         const h = await api("/api/portal/" + token + "/history");
         $("#history").innerHTML = renderHistory(h);
+        hydrateFeedback(h);
       } catch (e) { $("#history").innerHTML = `<p style="color:var(--soft)">Couldn't load history.</p>`; }
     }
 

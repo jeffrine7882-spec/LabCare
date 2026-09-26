@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS customers (
     phone TEXT DEFAULT '',
     address TEXT DEFAULT '',
     city TEXT DEFAULT '',
+    pending_care INTEGER DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -112,6 +113,47 @@ CREATE TABLE IF NOT EXISTS admin_customer_links (
     created_at TEXT NOT NULL,
     PRIMARY KEY (admin_id, customer_id)
 );
+
+-- A tenant admin who says a join-request organization is not theirs is
+-- recorded here, so the request stays visible to the other tenant admins and
+-- to the master instead of disappearing for everyone.
+CREATE TABLE IF NOT EXISTS pending_care_declines (
+    admin_id INTEGER NOT NULL,
+    customer_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (admin_id, customer_id)
+);
+
+-- Customer satisfaction on a settled ticket. Deliberately additive: nothing
+-- here feeds back into ticket status, ordering, assignment or visibility, so a
+-- customer who leaves no rating and no comment is unaffected either way.
+-- One rating per ticket (editable), plus a thread of customer comments.
+CREATE TABLE IF NOT EXISTS ticket_ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    customer_id INTEGER NOT NULL,
+    user_id INTEGER,
+    rated_by_name TEXT DEFAULT '',
+    rating INTEGER NOT NULL CHECK(rating IN (1,2,3,4,5)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS ticket_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    customer_id INTEGER NOT NULL,
+    user_id INTEGER,
+    author_name TEXT DEFAULT '',
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ticket_feedback_entity
+    ON ticket_feedback(entity_type, entity_id);
 
 CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -247,18 +289,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS attachments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entity_type TEXT NOT NULL,
-    entity_id INTEGER NOT NULL,
-    filename TEXT NOT NULL,
-    mime TEXT DEFAULT '',
-    size INTEGER DEFAULT 0,
-    uploaded_by INTEGER NOT NULL,
-    data BLOB NOT NULL,
-    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -423,6 +453,53 @@ def _sqlite_migrate(c):
     # does not fail when multiple equipment are registered without serial numbers.
     c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_equipment_serial_global ON equipment(serial_number) WHERE serial_number IS NOT NULL AND serial_number != ''")
+
+    # File attachments are gone from both ticket types — every ticket offers a
+    # Service Report PDF instead. Drop the table outright so no uploaded file is
+    # left stranded where the UI can neither show nor remove it. IF EXISTS makes
+    # this idempotent: a no-op once the table is gone.
+    # The audit trail ("Added file" history entries) is deliberately kept —
+    # those live in audit_logs, which is a separate table.
+    c.execute("DROP TABLE IF EXISTS attachments")
+
+    # An organization created by a join request stays "pending care" until a
+    # tenant admin claims it or says it is not theirs. Declines are recorded
+    # per admin so the request stays visible to the others and to the master.
+    try:
+        c.execute("ALTER TABLE customers ADD COLUMN pending_care INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    c.execute("CREATE TABLE IF NOT EXISTS pending_care_declines ("
+              "admin_id INTEGER NOT NULL, "
+              "customer_id INTEGER NOT NULL, "
+              "created_at TEXT NOT NULL, "
+              "PRIMARY KEY (admin_id, customer_id))")
+
+    # Customer feedback on settled tickets: one editable 1-5 rating per ticket
+    # plus a thread of comments from the customer side. Purely additive, so an
+    # existing ticket with no feedback behaves exactly as before.
+    c.execute("CREATE TABLE IF NOT EXISTS ticket_ratings ("
+              "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+              "entity_type TEXT NOT NULL, "
+              "entity_id INTEGER NOT NULL, "
+              "customer_id INTEGER NOT NULL, "
+              "user_id INTEGER, "
+              "rated_by_name TEXT DEFAULT '', "
+              "rating INTEGER NOT NULL CHECK(rating IN (1,2,3,4,5)), "
+              "created_at TEXT NOT NULL, "
+              "updated_at TEXT NOT NULL, "
+              "UNIQUE(entity_type, entity_id))")
+    c.execute("CREATE TABLE IF NOT EXISTS ticket_feedback ("
+              "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+              "entity_type TEXT NOT NULL, "
+              "entity_id INTEGER NOT NULL, "
+              "customer_id INTEGER NOT NULL, "
+              "user_id INTEGER, "
+              "author_name TEXT DEFAULT '', "
+              "text TEXT NOT NULL, "
+              "created_at TEXT NOT NULL)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ticket_feedback_entity "
+              "ON ticket_feedback(entity_type, entity_id)")
 
     _sqlite_migrate_roles(c)
 
@@ -608,6 +685,7 @@ CREATE TABLE IF NOT EXISTS customers (
     phone TEXT DEFAULT '',
     address TEXT DEFAULT '',
     city TEXT DEFAULT '',
+    pending_care INTEGER DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -617,6 +695,47 @@ CREATE TABLE IF NOT EXISTS admin_customer_links (
     created_at TEXT NOT NULL,
     PRIMARY KEY (admin_id, customer_id)
 );
+
+-- A tenant admin who says a join-request organization is not theirs is
+-- recorded here, so the request stays visible to the other tenant admins and
+-- to the master instead of disappearing for everyone.
+CREATE TABLE IF NOT EXISTS pending_care_declines (
+    admin_id BIGINT NOT NULL,
+    customer_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (admin_id, customer_id)
+);
+
+-- Customer satisfaction on a settled ticket. Deliberately additive: nothing
+-- here feeds back into ticket status, ordering, assignment or visibility, so a
+-- customer who leaves no rating and no comment is unaffected either way.
+-- One rating per ticket (editable), plus a thread of customer comments.
+CREATE TABLE IF NOT EXISTS ticket_ratings (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id BIGINT NOT NULL,
+    customer_id BIGINT NOT NULL,
+    user_id BIGINT,
+    rated_by_name TEXT DEFAULT '',
+    rating INTEGER NOT NULL CHECK(rating IN (1,2,3,4,5)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS ticket_feedback (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id BIGINT NOT NULL,
+    customer_id BIGINT NOT NULL,
+    user_id BIGINT,
+    author_name TEXT DEFAULT '',
+    text NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ticket_feedback_entity
+    ON ticket_feedback(entity_type, entity_id);
 
 CREATE TABLE IF NOT EXISTS locations (
     id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
@@ -735,18 +854,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id),
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS attachments (
-    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-    entity_type TEXT NOT NULL,
-    entity_id BIGINT NOT NULL,
-    filename TEXT NOT NULL,
-    mime TEXT DEFAULT '',
-    size INTEGER DEFAULT 0,
-    uploaded_by BIGINT NOT NULL,
-    data BYTEA NOT NULL,
     created_at TEXT NOT NULL
 );
 
@@ -905,9 +1012,11 @@ class _PGCursor:
     """Cursor shim: same shape the app expects from sqlite3 (dict rows + lastrowid)."""
 
     # Tables without an `id` column (sessions: token PK; notification_pings:
-    # user_id PK; admin_customer_links: composite PK). RETURNING id is skipped
-    # for these, because lastrowid is never read from them either.
-    _NO_ID_TABLES = {"sessions", "notification_pings", "admin_customer_links"}
+    # user_id PK; admin_customer_links and pending_care_declines: composite PK).
+    # RETURNING id is skipped for these, because lastrowid is never read from
+    # them either.
+    _NO_ID_TABLES = {"sessions", "notification_pings", "admin_customer_links",
+                     "pending_care_declines"}
 
     def __init__(self, pg_conn):
         self._cur = pg_conn.cursor(row_factory=dict_row)
@@ -943,6 +1052,15 @@ class _PGCursor:
     @property
     def lastrowid(self):
         return self._lastrowid
+
+    @property
+    def rowcount(self):
+        """Rows affected, so a guarded UPDATE can tell whether it won a race.
+
+        sqlite3 cursors expose this natively; claiming a pending organization
+        relies on it so "the first tenant admin to claim wins" also holds on
+        Postgres, where two admins could otherwise both pass the pre-check."""
+        return self._cur.rowcount
 
     def fetchone(self):
         return _norm_row(self._cur.fetchone())
@@ -1016,6 +1134,49 @@ def _pg_migrate(c):
     # does not fail when multiple equipment are registered without serial numbers.
     c.execute("UPDATE equipment SET serial_number=NULL WHERE serial_number=''")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_equipment_serial_global ON equipment(serial_number) WHERE serial_number IS NOT NULL AND serial_number != ''")
+    # File attachments are gone from both ticket types — every ticket offers a
+    # Service Report PDF instead. Drop the table outright so no uploaded file is
+    # left stranded where the UI can neither show nor remove it. IF EXISTS makes
+    # this idempotent: a no-op once the table is gone.
+    # The audit trail ("Added file" history entries) is deliberately kept —
+    # those live in audit_logs, which is a separate table.
+    c.execute("DROP TABLE IF EXISTS attachments")
+
+    # An organization created by a join request stays "pending care" until a
+    # tenant admin claims it or says it is not theirs. Declines are recorded
+    # per admin so the request stays visible to the others and to the master.
+    c.execute("ALTER TABLE customers ADD COLUMN IF NOT EXISTS pending_care INTEGER DEFAULT 0")
+    c.execute("CREATE TABLE IF NOT EXISTS pending_care_declines ("
+              "admin_id BIGINT NOT NULL, "
+              "customer_id BIGINT NOT NULL, "
+              "created_at TEXT NOT NULL, "
+              "PRIMARY KEY (admin_id, customer_id))")
+
+    # Customer feedback on settled tickets: one editable 1-5 rating per ticket
+    # plus a thread of comments from the customer side. Purely additive, so an
+    # existing ticket with no feedback behaves exactly as before.
+    c.execute("CREATE TABLE IF NOT EXISTS ticket_ratings ("
+              "id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, "
+              "entity_type TEXT NOT NULL, "
+              "entity_id BIGINT NOT NULL, "
+              "customer_id BIGINT NOT NULL, "
+              "user_id BIGINT, "
+              "rated_by_name TEXT DEFAULT '', "
+              "rating INTEGER NOT NULL CHECK(rating IN (1,2,3,4,5)), "
+              "created_at TEXT NOT NULL, "
+              "updated_at TEXT NOT NULL, "
+              "UNIQUE(entity_type, entity_id))")
+    c.execute("CREATE TABLE IF NOT EXISTS ticket_feedback ("
+              "id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, "
+              "entity_type TEXT NOT NULL, "
+              "entity_id BIGINT NOT NULL, "
+              "customer_id BIGINT NOT NULL, "
+              "user_id BIGINT, "
+              "author_name TEXT DEFAULT '', "
+              "text TEXT NOT NULL, "
+              "created_at TEXT NOT NULL)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ticket_feedback_entity "
+              "ON ticket_feedback(entity_type, entity_id)")
 
 
 

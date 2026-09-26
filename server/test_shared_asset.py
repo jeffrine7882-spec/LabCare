@@ -21,7 +21,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
         c = conn()
         c.execute("PRAGMA foreign_keys = OFF")
         for t in ["pm_logs", "pm_schedules", "portal_links", "push_subscriptions", "app_devices",
-                  "audit_logs", "comments", "attachments", "notifications", "notification_pings",
+                  "audit_logs", "comments", "notifications", "notification_pings",
                   "breakdowns", "complaints", "equipment", "departments", "locations",
                   "admin_customer_links", "onboarding_apps", "sessions", "users", "customers"]:
             c.execute(f"DELETE FROM {t}")
@@ -211,6 +211,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
             "name": "Dr. Sarah",
             "email": "sarah@globalhealth.test",
             "password": "password123",
+            "phone": "+60 12-345 6789",
             "role": "customer",
             "customer_id": c1,
             "new_location_name": "Genomics Core",
@@ -252,6 +253,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
             "name": "Dr. Alex",
             "email": "alex@metrohealth.test",
             "password": "password123",
+            "phone": "+60 12-345 6789",
             "role": "customer",
             "customer_id": c2,
             "new_location_name": "Genomics Core",
@@ -268,6 +270,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
             "name": "Prof. Charles",
             "email": "charles@novabiotech.test",
             "password": "password123",
+            "phone": "+60 12-345 6789",
             "role": "customer",
             "new_customer_name": "Nova Biotech Lab",
             "new_location_name": "Proteomics Facility",
@@ -314,6 +317,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
             "name": "Dr. Diana",
             "email": "diana@novabiotech.test",
             "password": "password123",
+            "phone": "+60 12-345 6789",
             "role": "customer",
             "new_customer_name": "Nova Biotech Lab",
             "new_location_name": "Pathology Suite",
@@ -330,6 +334,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
             "name": "Dr. Evan",
             "email": "evan@apexresearch.test",
             "password": "password123",
+            "phone": "+60 12-345 6789",
             "role": "customer",
             "new_customer_name": "Apex Research",
         })
@@ -344,6 +349,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
             "name": "Dr. Fiona",
             "email": "fiona@zenithdx.test",
             "password": "password123",
+            "phone": "+60 12-345 6789",
             "role": "customer",
             "new_customer_name": "Zenith Diagnostics",
             "new_location_name": "Proteomics Facility",  # chosen from existing list
@@ -360,6 +366,7 @@ class SharedAssetAndLocationTest(unittest.TestCase):
             "name": "Dr. George",
             "email": "george@solisbio.test",
             "password": "password123",
+            "phone": "+60 12-345 6789",
             "role": "customer",
             "new_customer_name": "Solis Bio",
             "location_id": loc_id,  # references existing location to copy name

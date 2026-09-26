@@ -27,7 +27,7 @@ CORS(app)
 MASTER_ADMIN_EMAIL = "admin@labcare.com"
 # Reserved account that absorbs references from deleted users: immutable
 # history columns (complaints.created_by, breakdowns.reported_by, comments,
-# attachments, pm_logs) are NOT NULL with enforced FKs, so they cannot simply
+# pm_logs) are NOT NULL with enforced FKs, so they cannot simply
 # be unlinked — they are reassigned to this inert placeholder. It can never
 # log in, is hidden from user lists, and cannot itself be deleted.
 FORMER_USER_EMAIL = "former-user@labcare.invalid"
@@ -53,7 +53,7 @@ def _archive_and_purge(kind, keep_first=None, limit=TICKET_CAP, log_path=HISTORY
 
     * The newest ``keep_first`` (default ``limit``) tickets stay in the live DB.
     * Any older tickets beyond the cap are moved into the append-only history
-      log file (with their comments + attachments + audit trail) and then
+      log file (with their comments + audit trail) and then
       removed from the database so the cap always holds.
     Returns the number of tickets archived in this run.
     """
@@ -81,10 +81,6 @@ def _archive_and_purge(kind, keep_first=None, limit=TICKET_CAP, log_path=HISTORY
                 "LEFT JOIN users u ON u.id = cm.user_id "
                 "WHERE cm.entity_type=? AND cm.entity_id=? ORDER BY cm.created_at",
                 (entity, r["id"])).fetchall())
-            rec["attachments"] = rows_to_dicts(c.execute(
-                "SELECT id, entity_type, entity_id, filename, mime, size, uploaded_by, created_at "
-                "FROM attachments WHERE entity_type=? AND entity_id=? ORDER BY id",
-                (entity, r["id"])).fetchall())
             rec["audit"] = rows_to_dicts(c.execute(
                 "SELECT * FROM audit_logs WHERE entity_type=? AND entity_id=? ORDER BY id",
                 (entity, r["id"])).fetchall())
@@ -97,7 +93,6 @@ def _archive_and_purge(kind, keep_first=None, limit=TICKET_CAP, log_path=HISTORY
             c.execute("UPDATE breakdowns SET complaint_id=NULL WHERE complaint_id=?", (r["id"],))
         c.execute("DELETE FROM comments WHERE entity_type=? AND entity_id=?", (entity, r["id"]))
         c.execute("DELETE FROM notifications WHERE entity_type=? AND entity_id=?", (entity, r["id"]))
-        c.execute("DELETE FROM attachments WHERE entity_type=? AND entity_id=?", (entity, r["id"]))
         c.execute("DELETE FROM audit_logs WHERE entity_type=? AND entity_id=?", (entity, r["id"]))
         c.execute(f"DELETE FROM {table} WHERE id=?", (r["id"],))
     c.commit()
@@ -165,9 +160,29 @@ def is_tenant_admin(u):
     """True for any administrator who is not the one Master System Admin.
 
     A tenant admin may be created WITHOUT a linked customer (unbound): after
-    first login they create their own organisation, which lands in their care
+    first login they create their own organization, which lands in their care
     list; until then their scope is an empty list (they see nothing)."""
     return u.get("role") == "admin" and not is_master_admin(u)
+
+
+def _tenant_admin_ids(c, exclude_id=None):
+    """Ids of every active tenant admin (the master is identified by email).
+
+    Used when a join request creates a brand-new organization: all of them are
+    asked whether it is under their care, and the first to claim it wins."""
+    rows = c.execute(
+        "SELECT id FROM users WHERE role='admin' AND active=1 AND lower(email)<>?",
+        (MASTER_ADMIN_EMAIL,)).fetchall()
+    return [r["id"] for r in rows if r["id"] != exclude_id]
+
+
+def _other_admin_ids(c, exclude_id=None):
+    """Ids of every active admin except one — the master included.
+
+    Used to tell the others that a pending organization has been settled, so
+    their notification lists stop offering an action that is no longer open."""
+    rows = c.execute("SELECT id FROM users WHERE role='admin' AND active=1").fetchall()
+    return [r["id"] for r in rows if r["id"] != exclude_id]
 
 
 def _admin_scope_ids(c, admin_id, user_row=None):
@@ -204,16 +219,32 @@ def tenant_scope(u, c):
 
     * Tenant admin: their PRIMARY customer plus any added to their care list.
     * Tenant engineer: their single customer.
-    * Master admin / provider engineer (no customer): None = unscoped (all)."""
+    * Engineer/application with NO customer but a linked tenant admin: that
+      admin's care list — the account belongs to the tenant, not to one
+      organization, so it must not become system-wide.
+    * Master admin / provider engineer (no customer, no tenant admin): None =
+      unscoped (all)."""
     if not u:
         return None
     if u.get("role") == "admin":
         if is_master_admin(u):
             return None
-        # tenant admin — empty list when they have no organisations yet
+        # tenant admin — empty list when they have no organizations yet
         return _admin_scope_ids(c, u["id"], u)
     if u.get("role")  in ("engineer", "application"):
-        return [u["customer_id"]] if u.get("customer_id") else None
+        if u.get("customer_id"):
+            return [u["customer_id"]]
+        # No organization of their own: they were placed under a tenant admin's
+        # care, so they inherit exactly that admin's care list. Deliberately NOT
+        # unscoped — otherwise a tenant admin could mint an account that sees
+        # every organization on the system. The master's own LabCare-wide staff
+        # have no link (or are linked to the master) and stay unscoped.
+        ra = u.get("responsible_admin_id")
+        if ra:
+            row = c.execute("SELECT * FROM users WHERE id=?", (ra,)).fetchone()
+            if row and row["role"] == "admin" and not is_master_admin(dict(row)):
+                return _admin_scope_ids(c, row["id"], row)
+        return None
     return None
 
 
@@ -226,10 +257,12 @@ def in_scope(col, scope):
 def customer_scope_filter(c, u, col="customer_id"):
     """Return (sql_where, params) limiting a query to the actor's customers.
 
-    * Customer users -> their one organisation.
-    * Tenant engineer -> its one organisation.
-    * Tenant admin -> every organisation in their care list.
-    * Master / unbound engineer -> no restriction ("", []).
+    * Customer users -> their one organization.
+    * Tenant engineer -> its one organization.
+    * Engineer with no organization -> the care list of the tenant admin they
+      are linked to (empty list = they see nothing, never everything).
+    * Tenant admin -> every organization in their care list.
+    * Master / LabCare-wide engineer -> no restriction ("", []).
     """
     role = u.get("role")
     if role == "customer":
@@ -237,7 +270,16 @@ def customer_scope_filter(c, u, col="customer_id"):
         return (f"{col} = ?", [cid]) if cid else ("", [])
     if role  in ("engineer", "application"):
         cid = u.get("customer_id")
-        return (f"{col} = ?", [cid]) if cid else ("", [])
+        if cid:
+            return (f"{col} = ?", [cid])
+        # Customer-less staff: mirror tenant_scope rather than falling through to
+        # "no restriction", which would hand them every organization system-wide.
+        scope = tenant_scope(u, c)
+        if scope is None:
+            return "", []
+        if not scope:
+            return "0=1", []
+        return in_scope(col, scope)
     # admin
     if is_master_admin(u):
         return "", []
@@ -245,7 +287,7 @@ def customer_scope_filter(c, u, col="customer_id"):
     if scope is None:
         return "", []
     if not scope:
-        # tenant admin with no organisations yet sees nothing (not everything)
+        # tenant admin with no organizations yet sees nothing (not everything)
         return "0=1", []
     return in_scope(col, scope)
 
@@ -268,7 +310,7 @@ def tenant_guard(u, customer_id, c=None):
     if u.get("role") != "admin":
         bound = scoped_customer_id(u)
         if bound and customer_id != bound:
-            return jsonify({"error": "Not authorised — this record belongs to another organisation"}), 403
+            return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
         return None, None
     if is_master_admin(u):
         return None, None
@@ -278,7 +320,7 @@ def tenant_guard(u, customer_id, c=None):
     try:
         scope = tenant_scope(u, c)
         if customer_id not in (scope or []):
-            return jsonify({"error": "Not authorised — this record belongs to another organisation"}), 403
+            return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
         return None, None
     finally:
         if own:
@@ -298,7 +340,7 @@ def assignee_allowed(u, assignee_id, c):
     if scope is None:
         return True            # master / provider engineer actor
     if not scope:
-        return False           # tenant admin with no organisations yet
+        return False           # tenant admin with no organizations yet
     row = c.execute("SELECT role, customer_id FROM users WHERE id=?", (assignee_id,)).fetchone()
     if not row or row["role"] not in ("engineer", "application", "admin"):
         return False
@@ -307,12 +349,17 @@ def assignee_allowed(u, assignee_id, c):
     return row["customer_id"] in scope
 
 
-def validate_responsible_admin(c, customer_id, responsible_admin_id):
+def validate_responsible_admin(c, customer_id, responsible_admin_id, customerless_user=False):
     """Validate an explicit "responsible tenant admin" for a record.
 
     The value must be an active account with role=admin, and that admin must be
     linked to the record's customer (primary or care list) — or be LabCare-wide
     when the record itself is customer-less.
+
+    `customerless_user` relaxes that last rule for USER ACCOUNTS only: a staff
+    account with no organization is placed under a tenant admin's care, so a
+    bound tenant admin is exactly the right link (their care list becomes the
+    account's scope). Tickets and equipment keep the strict LabCare-wide rule.
     Returns (error_json, code) on failure, or (None, None) when valid/empty."""
     if responsible_admin_id in (None, "", 0, "0"):
         return None, None
@@ -324,12 +371,12 @@ def validate_responsible_admin(c, customer_id, responsible_admin_id):
     if row["role"] != "admin":
         return jsonify({"error": "Responsible account must be an administrator"}), 400
     if customer_id is None:
-        if row["customer_id"] is not None:
+        if row["customer_id"] is not None and not customerless_user:
             return jsonify({"error": "A LabCare-wide record needs a LabCare-wide administrator"}), 400
     else:
         admin_custs = _admin_scope_ids(c, row["id"], row)
         if customer_id not in admin_custs:
-            return jsonify({"error": "Responsible tenant admin does not care for the selected organisation"}), 400
+            return jsonify({"error": "Responsible tenant admin does not care for the selected organization"}), 400
     return None, None
 
 
@@ -364,7 +411,7 @@ def _customer_tenant_admin_ids(c, customer_id):
     return ids
 
 
-def resolve_responsible_admin(c, u, customer_id, provided):
+def resolve_responsible_admin(c, u, customer_id, provided, customerless_user=False):
     """Resolve and validate the responsible tenant admin for a new/updated record.
 
     * Tenant admins default to themselves; tenant engineers defer to their
@@ -389,8 +436,8 @@ def resolve_responsible_admin(c, u, customer_id, provided):
     if not ra_id and customer_id and u["role"] != "customer":
         if len(_customer_tenant_admin_ids(c, customer_id)) > 1:
             return None, jsonify({
-                "error": "This organisation has several tenant admins — please choose the responsible one"}), 400
-    err, code = validate_responsible_admin(c, customer_id, ra_id)
+                "error": "This organization has several tenant admins — please choose the responsible one"}), 400
+    err, code = validate_responsible_admin(c, customer_id, ra_id, customerless_user)
     if err:
         return None, err, code
     return ra_id, None, None
@@ -463,6 +510,42 @@ def get_body():
     return request.get_json(force=True, silent=True) or {}
 
 
+def _id(v):
+    """Coerce a JSON-supplied foreign key to int, or None when unset.
+
+    Browsers send <select> values as strings, while these ids are compared
+    against integer care-list scopes. Without this, an organization a tenant
+    admin legitimately picked reads as "not an organization you care for" and the
+    request is rejected. "", None, 0 and "0" all mean "not set"."""
+    if v in (None, "", 0, "0"):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _staff_in_tenant_care(c, admin_id, user_row, scope):
+    """True when a customer-less staff account belongs to this tenant admin.
+
+    An engineer/application account with no organization of its own is owned by
+    the tenant admin named in its responsible_admin_id. The actor may manage it
+    when they ARE that admin, or when that admin is a peer who cares for at least
+    one organization the actor also cares for."""
+    row = dict(user_row)
+    if row.get("role") not in ("engineer", "application"):
+        return False
+    ra = row.get("responsible_admin_id")
+    if not ra:
+        return False
+    if ra == admin_id:
+        return True
+    ar = c.execute("SELECT * FROM users WHERE id=?", (ra,)).fetchone()
+    if not ar or ar["role"] != "admin":
+        return False
+    return bool(set(_admin_scope_ids(c, ra, ar)) & set(scope or []))
+
+
 def is_tech_user(u):
     return u["role"] in ("engineer", "application", "admin")
 
@@ -491,11 +574,11 @@ def _validate_loc_dept(c, customer_id, location_id, department_id):
     if location_id:
         loc = c.execute("SELECT customer_id FROM locations WHERE id=?", (location_id,)).fetchone()
         if not loc or loc["customer_id"] != customer_id:
-            return jsonify({"error": "Location does not belong to the selected customer"}), 400
+            return jsonify({"error": "Location does not belong to the selected organization"}), 400
     if department_id:
         dept = c.execute("SELECT customer_id, location_id FROM departments WHERE id=?", (department_id,)).fetchone()
         if not dept or dept["customer_id"] != customer_id:
-            return jsonify({"error": "Department does not belong to the selected customer"}), 400
+            return jsonify({"error": "Department does not belong to the selected organization"}), 400
         if location_id and dept["location_id"] != location_id:
             return jsonify({"error": "Department is not within the selected location"}), 400
     return None, None
@@ -753,7 +836,7 @@ def my_customers():
     c = conn()
     if is_master_admin(u):
         c.close()
-        return jsonify({"error": "Master admin already manages every customer"}), 400
+        return jsonify({"error": "Master admin already manages every organization"}), 400
     scope = tenant_scope(u, c)
     ids = scope or []
     rows = c.execute(
@@ -777,7 +860,7 @@ def add_my_customer(cid):
     cust = c.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
     if not cust:
         c.close()
-        return jsonify({"error": "Customer not found"}), 404
+        return jsonify({"error": "Organization not found"}), 404
     c.execute(
         "INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
         (u["id"], cid, now()))
@@ -790,12 +873,12 @@ def add_my_customer(cid):
 def remove_my_customer(cid):
     """Remove a customer from the tenant admin's care list.
 
-    The primary customer cannot be removed (it is the admin's own organisation)."""
+    The primary customer cannot be removed (it is the admin's own organization)."""
     u, err, code = require_role("admin")
     if err:
         return err, code
     if u.get("customer_id") == cid:
-        return jsonify({"error": "Your primary organisation cannot be removed"}), 400
+        return jsonify({"error": "Your primary organization cannot be removed"}), 400
     c = conn()
     c.execute("DELETE FROM admin_customer_links WHERE admin_id=? AND customer_id=?", (u["id"], cid))
     c.commit()
@@ -803,9 +886,152 @@ def remove_my_customer(cid):
     return jsonify({"ok": True})
 
 
+@app.get("/api/customers/pending-care")
+def pending_care_list():
+    """Organizations created by a join request that nobody has claimed yet.
+
+    Every tenant admin sees them, minus the ones they already answered "not
+    mine" — a decline only hides it from that admin, so the others and the
+    master can still act. The master sees all of them plus the tenant admins
+    available to take an assignment."""
+    u, err, code = require_role("admin")
+    if err:
+        return err, code
+    c = conn()
+    where, params = "WHERE cu.pending_care=1", []
+    if not is_master_admin(u):
+        where += (" AND cu.id NOT IN "
+                  "(SELECT customer_id FROM pending_care_declines WHERE admin_id=?)")
+        params.append(u["id"])
+    rows = c.execute(
+        "SELECT cu.id, cu.name, cu.contact_name, cu.email, cu.phone, cu.city, cu.created_at, "
+        "(SELECT a.name FROM onboarding_apps a WHERE a.customer_id=cu.id ORDER BY a.id DESC LIMIT 1) "
+        "AS requested_by, "
+        "(SELECT a.email FROM onboarding_apps a WHERE a.customer_id=cu.id ORDER BY a.id DESC LIMIT 1) "
+        "AS requested_by_email, "
+        "(SELECT COUNT(*) FROM pending_care_declines d WHERE d.customer_id=cu.id) AS declines "
+        f"FROM customers cu {where} ORDER BY cu.created_at DESC", params).fetchall()
+    out = rows_to_dicts(rows)
+    resp = {"customers": out}
+    if is_master_admin(u):
+        resp["tenant_admins"] = rows_to_dicts(c.execute(
+            "SELECT id, name, email, customer_id FROM users "
+            "WHERE role='admin' AND active=1 AND lower(email)<>? ORDER BY name",
+            (MASTER_ADMIN_EMAIL,)).fetchall())
+    c.close()
+    return jsonify(resp)
+
+
+@app.post("/api/customers/<int:cid>/take-care")
+def take_care(cid):
+    """A tenant admin claims a join-request organization: first to claim wins.
+
+    Once claimed it leaves the pending list for everyone at the same moment, so
+    two admins cannot both take it. After that the organization behaves like any
+    other and the usual shared-care rules apply again."""
+    u, err, code = require_role("admin")
+    if err:
+        return err, code
+    if not is_tenant_admin(u):
+        return jsonify({"error": "Only a tenant admin can take an organization into their care"}), 403
+    c = conn()
+    cust = c.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
+    if not cust:
+        c.close()
+        return jsonify({"error": "Organization not found"}), 404
+    if not cust["pending_care"]:
+        c.close()
+        return jsonify({"error": "This organization is no longer awaiting a care decision"}), 409
+    # The guarded UPDATE is what makes the claim exclusive: whoever reaches it
+    # first flips the flag, and everyone else matches zero rows.
+    cur = c.execute("UPDATE customers SET pending_care=0 WHERE id=? AND pending_care=1", (cid,))
+    if (cur.rowcount or 0) < 1:
+        c.close()
+        return jsonify({"error": "Another tenant admin took this organization first"}), 409
+    c.execute("INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
+              (u["id"], cid, now()))
+    c.execute("DELETE FROM pending_care_declines WHERE customer_id=?", (cid,))
+    c.commit()
+    for aid in _other_admin_ids(c, exclude_id=u["id"]):
+        notify(aid, f"{u['name']} took {cust['name']} into their care.", "pending_care", cid, None)
+    c.close()
+    return jsonify({"ok": True, "customer_id": cid})
+
+
+@app.post("/api/customers/<int:cid>/decline-care")
+def decline_care(cid):
+    """A tenant admin says a join-request organization is not under their care.
+
+    It leaves their list only — the other tenant admins and the master can still
+    claim or assign it, so nobody can make a decision disappear for everyone."""
+    u, err, code = require_role("admin")
+    if err:
+        return err, code
+    if not is_tenant_admin(u):
+        return jsonify({"error": "Only a tenant admin can decline an organization"}), 403
+    c = conn()
+    cust = c.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
+    if not cust:
+        c.close()
+        return jsonify({"error": "Organization not found"}), 404
+    if not cust["pending_care"]:
+        c.close()
+        return jsonify({"error": "This organization is no longer awaiting a care decision"}), 409
+    c.execute("INSERT OR IGNORE INTO pending_care_declines (admin_id, customer_id, created_at) VALUES (?,?,?)",
+              (u["id"], cid, now()))
+    c.commit()
+    # The master hears about it, since assigning it is now the likely next step.
+    for r in c.execute("SELECT id FROM users WHERE role='admin' AND active=1 AND lower(email)=?",
+                       (MASTER_ADMIN_EMAIL,)).fetchall():
+        notify(r["id"], f"{u['name']} said {cust['name']} is not under their care.",
+               "pending_care", cid, None)
+    c.close()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/customers/<int:cid>/assign-care")
+def assign_care(cid):
+    """The master decides which tenant admin looks after a join-request
+    organization."""
+    u, err, code = require_master()
+    if err:
+        return err, code
+    b = get_body()
+    admin_id = _id(b.get("admin_id"))
+    if not admin_id:
+        return jsonify({"error": "Choose the tenant admin who will care for this organization"}), 400
+    c = conn()
+    cust = c.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
+    if not cust:
+        c.close()
+        return jsonify({"error": "Organization not found"}), 404
+    if not cust["pending_care"]:
+        c.close()
+        return jsonify({"error": "This organization is no longer awaiting a care decision"}), 409
+    target = c.execute("SELECT * FROM users WHERE id=?", (admin_id,)).fetchone()
+    # Rows are sqlite3.Row objects here (no .get), so the master check compares
+    # the email directly rather than calling is_master_admin().
+    if (not target or target["role"] != "admin" or not target["active"]
+            or (target["email"] or "").strip().lower() == MASTER_ADMIN_EMAIL):
+        c.close()
+        return jsonify({"error": "Choose an active tenant admin"}), 400
+    c.execute("UPDATE customers SET pending_care=0 WHERE id=?", (cid,))
+    c.execute("INSERT OR IGNORE INTO admin_customer_links (admin_id, customer_id, created_at) VALUES (?,?,?)",
+              (admin_id, cid, now()))
+    c.execute("DELETE FROM pending_care_declines WHERE customer_id=?", (cid,))
+    c.commit()
+    notify(admin_id, f"The master assigned {cust['name']} to your care.", "pending_care", cid, None)
+    for aid in _other_admin_ids(c, exclude_id=admin_id):
+        if aid == u["id"]:
+            continue
+        notify(aid, f"{cust['name']} was assigned to {target['name']}.", "pending_care", cid, None)
+    c.close()
+    return jsonify({"ok": True, "admin_id": admin_id})
+
+
 @app.get("/api/customer-directory")
 def customer_directory():
-    """Admin-only: every customer organisation, flagged with whether the
+    """Admin-only: every customer organization, flagged with whether the
     requesting tenant admin already cares for it (used by the self-select UI)."""
     u, err, code = require_role("admin")
     if err:
@@ -855,10 +1081,13 @@ def signup():
     b = get_body()
     name = (b.get("name") or "").strip()
     email = (b.get("email") or "").strip().lower()
+    phone = (b.get("phone") or "").strip()
     pw = b.get("password") or ""
     role = b.get("role") or "customer"
     if not name or not email or not pw:
         return jsonify({"error": "Name, email and password are required"}), 400
+    if not phone:
+        return jsonify({"error": "A phone number is required"}), 400
     if len(pw) < 6:
         return jsonify({"error": "Password must be at least 6 characters"}), 400
     if role not in ("engineer", "application", "customer"):
@@ -873,8 +1102,11 @@ def signup():
     customer_id = b.get("customer_id") or None
     location_id = b.get("location_id") or None
     department_id = b.get("department_id") or None
-    new_cust_name = (b.get("new_customer_name") or b.get("new_organisation_name") or b.get("new_customer") or "").strip()
+    new_cust_name = (b.get("new_customer_name") or b.get("new_organization_name") or b.get("new_customer") or "").strip()
     new_loc_name = (b.get("new_location_name") or b.get("new_location") or "").strip()
+    # Set when this signup creates an organization that did not exist before:
+    # that one has no tenant admin yet, so it needs a care decision.
+    new_org_created = False
     if role == "customer":
         if new_cust_name:
             existing_cust = c.execute(
@@ -885,10 +1117,12 @@ def signup():
                 customer_id = existing_cust["id"]
             else:
                 cur_cust = c.execute(
-                    "INSERT INTO customers (name,contact_name,email,phone,address,city,created_at) VALUES (?,?,?,?,?,?,?)",
-                    (new_cust_name, name, email, b.get("phone", ""), "", "", now()),
+                    "INSERT INTO customers (name,contact_name,email,phone,address,city,pending_care,created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (new_cust_name, name, email, phone, "", "", 1, now()),
                 )
                 customer_id = cur_cust.lastrowid
+                new_org_created = True
             if location_id and not new_loc_name:
                 ref_loc = c.execute("SELECT name FROM locations WHERE id=?", (location_id,)).fetchone()
                 if ref_loc:
@@ -897,7 +1131,7 @@ def signup():
                     department_id = None
         elif not customer_id:
             c.close()
-            return jsonify({"error": "Select your organisation or create a new one"}), 400
+            return jsonify({"error": "Select your organization or create a new one"}), 400
 
         if new_loc_name:
             # Location and department are unified: create or resolve location/department for this customer
@@ -951,7 +1185,7 @@ def signup():
     cur = c.execute(
         "INSERT INTO onboarding_apps (name,email,phone,password_hash,role,customer_id,location_id,department_id,status,created_at) "
         "VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (name, email, b.get("phone", ""), hash_password(pw), role, customer_id, location_id, department_id, "pending", now()),
+        (name, email, phone, hash_password(pw), role, customer_id, location_id, department_id, "pending", now()),
     )
     c.commit()
     # Notify the master admin that a new joiner is waiting for approval
@@ -960,6 +1194,21 @@ def signup():
                        (MASTER_ADMIN_EMAIL,)).fetchall():
         notify(r["id"], f"New join request from {name} ({email}) is awaiting your approval.",
                "onboarding", cur.lastrowid, None)
+    # A brand-new organization has no tenant admin yet, so every tenant admin
+    # is asked whether it is under their care and the first to claim it wins.
+    # The master is told as well, because they may assign it instead.
+    if new_org_created:
+        for aid in _tenant_admin_ids(c):
+            notify(aid,
+                   f"{name} ({email}) asked to join a new organization, {new_cust_name}. "
+                   f"Is it under your care?",
+                   "pending_care", customer_id, None)
+        for r in c.execute("SELECT id FROM users WHERE role='admin' AND active=1 AND lower(email)=?",
+                           (MASTER_ADMIN_EMAIL,)).fetchall():
+            notify(r["id"],
+                   f"{new_cust_name} is a new organization awaiting a care decision. "
+                   f"You can assign it to a tenant admin.",
+                   "pending_care", customer_id, None)
     c.close()
     return jsonify({"ok": True, "message": "Request submitted. An admin must approve it before you can sign in."}), 201
 
@@ -998,6 +1247,7 @@ def review_onboarding(aid):
     if app["status"] != "pending":
         c.close()
         return jsonify({"error": "This request has already been reviewed"}), 409
+    withdrawn = None
     if decision == "approve":
         if c.execute("SELECT id FROM users WHERE lower(email)=?", (app["email"],)).fetchone():
             c.close()
@@ -1013,7 +1263,23 @@ def review_onboarding(aid):
     else:
         c.execute("UPDATE onboarding_apps SET status='rejected', reviewed_by=?, reviewed_at=? WHERE id=?",
                   (u["id"], now(), aid))
+        # A rejected request must not leave its organization sitting in the
+        # pending-care list for tenant admins to claim. The organization row
+        # itself is kept: it already has a location and department, and a later
+        # signup naming the same organization reuses it.
+        if app["customer_id"]:
+            pc = c.execute("SELECT id, name FROM customers WHERE id=? AND pending_care=1",
+                           (app["customer_id"],)).fetchone()
+            if pc:
+                c.execute("UPDATE customers SET pending_care=0 WHERE id=?", (pc["id"],))
+                c.execute("DELETE FROM pending_care_declines WHERE customer_id=?", (pc["id"],))
+                withdrawn = pc["name"]
     c.commit()
+    if withdrawn:
+        for aid_ in _other_admin_ids(c, exclude_id=u["id"]):
+            notify(aid_,
+                   f"The join request for {withdrawn} was rejected, so it no longer needs a care decision.",
+                   "pending_care", app["customer_id"], None)
     c.close()
     return jsonify({"ok": True, "decision": decision})
 
@@ -1057,9 +1323,9 @@ def list_customers():
 
 @app.post("/api/customers")
 def create_customer():
-    """Create a customer organisation.
+    """Create a customer organization.
 
-    The master may create any organisation. A tenant admin may also create one;
+    The master may create any organization. A tenant admin may also create one;
     it is automatically added to that admin's care list so they can immediately
     set up locations, equipment, users and tickets for it."""
     u, err, code = require_role("admin")
@@ -1067,7 +1333,7 @@ def create_customer():
         return err, code
     b = get_body()
     if not (b.get("name") or "").strip():
-        return jsonify({"error": "Customer name is required"}), 400
+        return jsonify({"error": "Organization name is required"}), 400
     c = conn()
     cur = c.execute(
         "INSERT INTO customers (name,contact_name,email,phone,address,city,created_at) VALUES (?,?,?,?,?,?,?)",
@@ -1075,7 +1341,7 @@ def create_customer():
          b.get("address", ""), b.get("city", ""), now()),
     )
     new_id = cur.lastrowid
-    # A tenant admin who creates an organisation automatically starts caring for
+    # A tenant admin who creates an organization automatically starts caring for
     # it (the master already manages every customer).
     if is_tenant_admin(u):
         c.execute(
@@ -1124,7 +1390,7 @@ def delete_customer(cid):
             return err_t, code_t
         if u.get("customer_id") == cid:
             c.close()
-            return jsonify({"error": "You cannot delete your own primary organisation"}), 400
+            return jsonify({"error": "You cannot delete your own primary organization"}), 400
     n_equip = c.execute("SELECT COUNT(*) n FROM equipment WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_cmp = c.execute("SELECT COUNT(*) n FROM complaints WHERE customer_id=?", (cid,)).fetchone()["n"]
     n_brk = c.execute("SELECT COUNT(*) n FROM breakdowns WHERE customer_id=?", (cid,)).fetchone()["n"]
@@ -1133,9 +1399,9 @@ def delete_customer(cid):
     n_portal = c.execute("SELECT COUNT(*) n FROM portal_links WHERE customer_id=?", (cid,)).fetchone()["n"]
     if n_equip or n_cmp or n_brk or n_loc or n_pm or n_portal:
         c.close()
-        return jsonify({"error": "Customer has linked locations, equipment, tickets, PM schedules or portal links; cannot delete."}), 409
+        return jsonify({"error": "Organization has linked locations, equipment, tickets, PM schedules or portal links; cannot delete."}), 409
     c.execute("DELETE FROM customers WHERE id=?", (cid,))
-    # drop any care-list links to the removed organisation
+    # drop any care-list links to the removed organization
     c.execute("DELETE FROM admin_customer_links WHERE customer_id=?", (cid,))
     c.commit()
     c.close()
@@ -1195,7 +1461,7 @@ def create_location():
         return err, code
     b = get_body()
     if not (b.get("name") or "").strip() or not b.get("customer_id"):
-        return jsonify({"error": "Location/department name and customer are required"}), 400
+        return jsonify({"error": "Location/department name and organization are required"}), 400
     err_t, code_t = tenant_guard(u, b["customer_id"])
     if err_t:
         return err_t, code_t
@@ -1365,7 +1631,7 @@ def update_department(did):
     new_loc = c.execute("SELECT customer_id FROM locations WHERE id=?", (new_loc_id,)).fetchone() if new_loc_id else None
     if new_loc_id and (not new_loc or new_loc["customer_id"] != existing["customer_id"]):
         c.close()
-        return jsonify({"error": "Location does not belong to the selected customer"}), 400
+        return jsonify({"error": "Location does not belong to the selected organization"}), 400
     c.execute("UPDATE departments SET name=?,location_id=? WHERE id=?",
               (b.get("name", ""), new_loc_id, did))
     c.commit()
@@ -1409,45 +1675,44 @@ def delete_department(did):
 # --------------------------------------------------------------------------
 @app.get("/api/categories")
 def list_categories():
+    """Every equipment category, so the Add equipment form always offers the
+    full prepared list rather than only the categories already in use.
+
+    The list is shared, but each caller's equipment_count tallies only equipment
+    they may see — a tenant admin is not told how many instruments another
+    tenant has in a category."""
     u, err, code = require_role("admin", "engineer", "application", "customer")
     if err:
         return err, code
     c = conn()
     scope = tenant_scope(u, c)
-    if scope:
-        # tenant staff see only the categories used by their care-list customers' equipment
-        marks = ", ".join("?" for _ in scope)
-        rows = c.execute(
-            "SELECT name, "
-            f"(SELECT COUNT(*) n FROM equipment e WHERE e.category=cat.name AND e.customer_id IN ({marks})) AS n "
-            "FROM categories cat "
-            f"WHERE name IN (SELECT category FROM equipment WHERE customer_id IN ({marks})) "
-            "ORDER BY name", list(scope) + list(scope)).fetchall()
-        out = [{"name": r["name"], "equipment_count": r["n"]} for r in rows]
-    else:
-        rows = c.execute("SELECT * FROM categories ORDER BY name").fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
+    marks = ", ".join("?" for _ in scope) if scope else ""
+    rows = c.execute("SELECT * FROM categories ORDER BY name").fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        if scope:
+            d["equipment_count"] = c.execute(
+                f"SELECT COUNT(*) n FROM equipment WHERE category=? AND customer_id IN ({marks})",
+                [r["name"]] + list(scope)).fetchone()["n"]
+        else:
             d["equipment_count"] = c.execute(
                 "SELECT COUNT(*) n FROM equipment WHERE category=?", (r["name"],)).fetchone()["n"]
-            out.append(d)
+        out.append(d)
     c.close()
     return jsonify(out)
 
 
 @app.post("/api/categories")
 def create_category():
-    # Categories are global (not per customer), so only unbound provider staff
-    # (the master admin or LabCare's own engineers) may add them. Tenant-scoped
-    # staff may not create global categories.
+    # Categories are global (not per customer), and anyone who may add equipment
+    # may also add a category when the one they need is missing — otherwise they
+    # would have to mislabel the instrument as "Other" and wait for the master.
+    # Renaming and deleting stay master-only: those rewrite records belonging to
+    # every tenant, while adding one can only lengthen a shared pick-list.
     u, err, code = require_role("admin", "engineer", "application")
     if err:
         return err, code
-    if u["role"] == "admin" and not is_master_admin(u):
-        return jsonify({"error": "Only the master administrator can manage categories"}), 403
-    if u["role"]  in ("engineer", "application") and u.get("customer_id"):
-        return jsonify({"error": "Only the master administrator can manage categories"}), 403
     b = get_body()
     name = (b.get("name") or "").strip()
     if not name:
@@ -1562,7 +1827,7 @@ def create_equipment():
         return err, code
     b = get_body()
     if not (b.get("name") or "").strip() or not b.get("customer_id"):
-        return jsonify({"error": "Equipment name and customer are required"}), 400
+        return jsonify({"error": "Equipment name and organization are required"}), 400
     err_t, code_t = tenant_guard(u, b["customer_id"])
     if err_t:
         return err_t, code_t
@@ -1781,10 +2046,10 @@ def create_complaint():
         if scope:
             if customer_id not in scope:
                 c.close()
-                return jsonify({"error": "You can only raise complaints for your own organisation"}), 403
+                return jsonify({"error": "You can only raise complaints for your own organization"}), 403
             if equipment_id and eq_cust is not None and eq_cust != customer_id:
                 c.close()
-                return jsonify({"error": "Equipment does not belong to your organisation"}), 403
+                return jsonify({"error": "Equipment does not belong to your organization"}), 403
         if not assignee_allowed(u, b.get("assigned_to") or None, c):
             c.close()
             return jsonify({"error": "You can only assign to your own team"}), 403
@@ -1802,7 +2067,7 @@ def create_complaint():
 
     if not customer_id:
         c.close()
-        return jsonify({"error": "Customer is required"}), 400
+        return jsonify({"error": "Organization is required"}), 400
     ra_id, err_r, code_r = resolve_responsible_admin(c, u, customer_id, b.get("responsible_admin_id"))
     if err_r:
         c.close()
@@ -1886,6 +2151,8 @@ def get_complaint(cid):
         "SELECT cm.*, COALESCE(u.name, 'Former user') AS user_name FROM comments cm LEFT JOIN users u ON u.id=cm.user_id "
         "WHERE cm.entity_type='complaint' AND cm.entity_id=? ORDER BY cm.created_at", (cid,)).fetchall()
     out["comments"] = rows_to_dicts(comments)
+    out["feedback"] = _feedback_payload(c, "complaint", cid)
+    out["feedback_open"] = row["status"] in FEEDBACK_STATUSES["complaint"]
     c.close()
     return jsonify(out)
 
@@ -2033,12 +2300,12 @@ def update_complaint(cid):
     if scope:
         if "customer_id" in b and b["customer_id"] not in scope:
             c.close()
-            return jsonify({"error": "You cannot move this complaint to another organisation"}), 403
+            return jsonify({"error": "You cannot move this complaint to another organization"}), 403
         if "equipment_id" in b and b["equipment_id"]:
             e_row = c.execute("SELECT customer_id FROM equipment WHERE id=?", (b["equipment_id"],)).fetchone()
             if not e_row or e_row["customer_id"] not in scope:
                 c.close()
-                return jsonify({"error": "Equipment does not belong to this organisation"}), 403
+                return jsonify({"error": "Equipment does not belong to this organization"}), 403
         if "assigned_to" in b and not assignee_allowed(u, b["assigned_to"] or None, c):
             c.close()
             return jsonify({"error": "You can only assign to your own team"}), 403
@@ -2169,7 +2436,6 @@ def delete_complaint(cid):
     c.execute("UPDATE breakdowns SET complaint_id=NULL WHERE complaint_id=?", (cid,))
     c.execute("DELETE FROM comments WHERE entity_type='complaint' AND entity_id=?", (cid,))
     c.execute("DELETE FROM notifications WHERE entity_type='complaint' AND entity_id=?", (cid,))
-    c.execute("DELETE FROM attachments WHERE entity_type='complaint' AND entity_id=?", (cid,))
     c.execute("DELETE FROM audit_logs WHERE entity_type='complaint' AND entity_id=?", (cid,))
     c.execute("DELETE FROM complaints WHERE id=?", (cid,))
     c.commit()
@@ -2253,10 +2519,10 @@ def create_breakdown():
         if scope:
             if customer_id not in scope:
                 c.close()
-                return jsonify({"error": "You can only raise breakdowns for your own organisation"}), 403
+                return jsonify({"error": "You can only raise breakdowns for your own organization"}), 403
             if equipment_id and eq_cust is not None and eq_cust != customer_id:
                 c.close()
-                return jsonify({"error": "Equipment does not belong to your organisation"}), 403
+                return jsonify({"error": "Equipment does not belong to your organization"}), 403
         if not assignee_allowed(u, b.get("assigned_to") or None, c):
             c.close()
             return jsonify({"error": "You can only assign to your own team"}), 403
@@ -2273,7 +2539,7 @@ def create_breakdown():
 
     if not customer_id:
         c.close()
-        return jsonify({"error": "Customer is required"}), 400
+        return jsonify({"error": "Organization is required"}), 400
     ra_id, err_r, code_r = resolve_responsible_admin(c, u, customer_id, b.get("responsible_admin_id"))
     if err_r:
         c.close()
@@ -2317,6 +2583,8 @@ def get_breakdown(bid):
         "SELECT cm.*, COALESCE(u.name, 'Former user') AS user_name FROM comments cm LEFT JOIN users u ON u.id=cm.user_id "
         "WHERE cm.entity_type='breakdown' AND cm.entity_id=? ORDER BY cm.created_at", (bid,)).fetchall()
     out["comments"] = rows_to_dicts(comments)
+    out["feedback"] = _feedback_payload(c, "breakdown", bid)
+    out["feedback_open"] = row["status"] in FEEDBACK_STATUSES["breakdown"]
     c.close()
     return jsonify(out)
 
@@ -2339,12 +2607,12 @@ def update_breakdown(bid):
     if scope:
         if "customer_id" in b and b["customer_id"] not in scope:
             c.close()
-            return jsonify({"error": "You cannot move this breakdown to another organisation"}), 403
+            return jsonify({"error": "You cannot move this breakdown to another organization"}), 403
         if "equipment_id" in b and b["equipment_id"]:
             e_row = c.execute("SELECT customer_id FROM equipment WHERE id=?", (b["equipment_id"],)).fetchone()
             if not e_row or e_row["customer_id"] not in scope:
                 c.close()
-                return jsonify({"error": "Equipment does not belong to this organisation"}), 403
+                return jsonify({"error": "Equipment does not belong to this organization"}), 403
         if "assigned_to" in b and not assignee_allowed(u, b["assigned_to"] or None, c):
             c.close()
             return jsonify({"error": "You can only assign to your own team"}), 403
@@ -2445,7 +2713,6 @@ def delete_breakdown(bid):
         return jsonify({"error": "Not found"}), 404
     c.execute("DELETE FROM comments WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM notifications WHERE entity_type='breakdown' AND entity_id=?", (bid,))
-    c.execute("DELETE FROM attachments WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM audit_logs WHERE entity_type='breakdown' AND entity_id=?", (bid,))
     c.execute("DELETE FROM breakdowns WHERE id=?", (bid,))
     c.commit()
@@ -2525,6 +2792,237 @@ def add_comment():
         else:
             rc.close()
     return jsonify(dict(row)), 201
+
+
+# --------------------------------------------------------------------------
+# Ticket history (audit log)
+# --------------------------------------------------------------------------
+AUDIT_TABLES = {"complaint": "complaints", "breakdown": "breakdowns"}
+
+
+@app.get("/api/audit")
+def get_audit():
+    """One ticket's history timeline: who did what, when, newest first.
+
+    This is the read side of audit(). The History card on both ticket detail
+    views has always called it, but the route never existed, so every ticket
+    rendered "History unavailable." while the rows accumulated unread.
+
+    Scoped exactly like the ticket itself — a customer only their own
+    organization's tickets, tenant staff only their care list, the master
+    everything — so it cannot be used to read another organization's activity
+    by guessing an id.
+
+    Nothing is filtered out: unlike the public portal's activity feed, which
+    hides a reporter's own submissions so they are not alarmed by them, this is
+    an audit trail and shows every recorded action, including the customer's
+    own ratings and feedback."""
+    u, err, code = require_role("admin", "engineer", "application", "customer")
+    if err:
+        return err, code
+    entity = (request.args.get("entity_type") or "").strip().lower()
+    eid = _id(request.args.get("entity_id"))
+    if entity not in AUDIT_TABLES or not eid:
+        return jsonify({"error": "Invalid entity"}), 400
+    c = conn()
+    row = c.execute(
+        "SELECT customer_id, location_id, department_id FROM %s WHERE id=?"
+        % AUDIT_TABLES[entity], (eid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
+    # Newest first: the card is a timeline of recent activity, not a transcript.
+    # created_at is a text timestamp, so ties (same second) fall back to the id.
+    rows = c.execute(
+        "SELECT action, user_name, detail, created_at FROM audit_logs "
+        "WHERE entity_type=? AND entity_id=? ORDER BY created_at DESC, id DESC",
+        (entity, eid)).fetchall()
+    c.close()
+    return jsonify([dict(r) for r in rows])
+
+
+# --------------------------------------------------------------------------
+# Customer feedback on settled tickets
+# --------------------------------------------------------------------------
+# A ticket accepts feedback only once it is settled: a complaint when resolved
+# or closed, a breakdown when resolved (breakdowns have no closed status).
+# Feedback is deliberately inert — it never changes a ticket's status,
+# assignment or position in any list, and a ticket nobody rates or comments on
+# behaves exactly as it did before.
+FEEDBACK_STATUSES = {"complaint": ("resolved", "closed"), "breakdown": ("resolved",)}
+FEEDBACK_TABLES = {"complaint": "complaints", "breakdown": "breakdowns"}
+FEEDBACK_MAX_LEN = 2000
+
+
+def _feedback_ticket(c, kind, tid):
+    return c.execute("SELECT * FROM %s WHERE id=?" % FEEDBACK_TABLES[kind], (tid,)).fetchone()
+
+
+def _feedback_settled(row, kind):
+    return row["status"] in FEEDBACK_STATUSES[kind]
+
+
+def _feedback_payload(c, kind, tid):
+    """The rating and comment thread for one ticket, to embed in its payload.
+
+    Portal visitors have no user row, so a stored display name is the fallback
+    and an unnamed visitor simply reads as "Customer"."""
+    rating = c.execute(
+        "SELECT r.rating, r.updated_at, "
+        "COALESCE(NULLIF(u.name,''), NULLIF(r.rated_by_name,''), 'Customer') AS rated_by "
+        "FROM ticket_ratings r LEFT JOIN users u ON u.id=r.user_id "
+        "WHERE r.entity_type=? AND r.entity_id=?", (kind, tid)).fetchone()
+    comments = c.execute(
+        "SELECT f.id, f.text, f.created_at, "
+        "COALESCE(NULLIF(u.name,''), NULLIF(f.author_name,''), 'Customer') AS author_name "
+        "FROM ticket_feedback f LEFT JOIN users u ON u.id=f.user_id "
+        "WHERE f.entity_type=? AND f.entity_id=? ORDER BY f.created_at, f.id", (kind, tid)).fetchall()
+    return {"rating": dict(rating) if rating else None, "comments": rows_to_dicts(comments)}
+
+
+def _feedback_summary(c, kind, ids):
+    """Ratings and comment counts for a batch of tickets, in two queries."""
+    if not ids:
+        return {}
+    marks = ", ".join("?" for _ in ids)
+    out = {}
+    for r in c.execute(
+            "SELECT entity_id, rating FROM ticket_ratings "
+            "WHERE entity_type=? AND entity_id IN (%s)" % marks, [kind] + list(ids)).fetchall():
+        out.setdefault(r["entity_id"], {})["rating"] = r["rating"]
+    for r in c.execute(
+            "SELECT entity_id, COUNT(*) AS n FROM ticket_feedback "
+            "WHERE entity_type=? AND entity_id IN (%s) GROUP BY entity_id" % marks,
+            [kind] + list(ids)).fetchall():
+        out.setdefault(r["entity_id"], {})["comments"] = r["n"]
+    return out
+
+
+def _save_rating(c, kind, tid, customer_id, rating, user_id, display_name):
+    """Insert or replace the one rating a ticket has. Returns (id, created)."""
+    existing = c.execute(
+        "SELECT id FROM ticket_ratings WHERE entity_type=? AND entity_id=?", (kind, tid)).fetchone()
+    if existing:
+        c.execute("UPDATE ticket_ratings SET rating=?, user_id=?, rated_by_name=?, updated_at=? WHERE id=?",
+                  (rating, user_id, display_name, now(), existing["id"]))
+        return existing["id"], False
+    cur = c.execute(
+        "INSERT INTO ticket_ratings (entity_type,entity_id,customer_id,user_id,rated_by_name,rating,"
+        "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        (kind, tid, customer_id, user_id, display_name, rating, now(), now()))
+    return cur.lastrowid, True
+
+
+def _rating_value(b):
+    """A submitted star rating if it is a whole number of stars from 1 to 5.
+
+    Deliberately not routed through _id(): that coerces with int(), which would
+    quietly truncate 3.5 stars to 3 and store a rating nobody chose. Browsers
+    send values as strings, so "4" and 4.0 are accepted; fractions, zero,
+    negatives and anything out of range are refused."""
+    raw = b.get("rating")
+    if isinstance(raw, bool) or raw is None or raw == "":
+        return None
+    try:
+        v = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if not v.is_integer():
+        return None
+    v = int(v)
+    return v if 1 <= v <= 5 else None
+
+
+def _require_customer_side(u):
+    """Feedback is the customer's to give — staff do the work being rated.
+
+    require_role() waves any admin through whatever roles it was given, so the
+    customer-only rule has to be stated explicitly here."""
+    if u["role"] != "customer":
+        return jsonify({"error": "Only the customer side can leave feedback on a ticket"}), 403
+    return None
+
+
+def _feedback_guard(u, row, kind, c):
+    """Shared checks for the authenticated feedback endpoints."""
+    err = _require_customer_side(u)
+    if err:
+        return err
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"], c):
+        return jsonify({"error": "Not authorised"}), 403
+    if not _feedback_settled(row, kind):
+        return jsonify({"error": "Feedback opens once this ticket is resolved or closed"}), 409
+    return None
+
+
+@app.post("/api/tickets/<kind>/<int:tid>/rating")
+def rate_ticket(kind, tid):
+    """A customer rates a settled ticket from 1 to 5 stars.
+
+    Optional: nothing depends on it. Re-rating replaces the previous score, so a
+    ticket carries one current rating rather than an accumulating vote."""
+    if kind not in FEEDBACK_TABLES:
+        return jsonify({"error": "Invalid ticket type"}), 400
+    u, err, code = require_role("customer")
+    if err:
+        return err, code
+    rating = _rating_value(get_body())
+    if not rating:
+        return jsonify({"error": "Choose a rating from 1 to 5 stars"}), 400
+    c = conn()
+    row = _feedback_ticket(c, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    guard = _feedback_guard(u, row, kind, c)
+    if guard:
+        c.close()
+        return guard
+    rid, created = _save_rating(c, kind, tid, row["customer_id"], rating, u["id"], u.get("name") or "")
+    c.commit()
+    c.close()
+    audit(kind, tid, u, "rating", "%d star%s" % (rating, "" if rating == 1 else "s"))
+    return jsonify({"ok": True, "id": rid, "rating": rating, "created": created}), (201 if created else 200)
+
+
+@app.post("/api/tickets/<kind>/<int:tid>/feedback")
+def comment_ticket_feedback(kind, tid):
+    """A customer adds a comment to a settled ticket's feedback thread.
+
+    The thread stays open after the ticket is settled, so a customer can add
+    that the fix held — or that it did not — without reopening anything."""
+    if kind not in FEEDBACK_TABLES:
+        return jsonify({"error": "Invalid ticket type"}), 400
+    u, err, code = require_role("customer")
+    if err:
+        return err, code
+    text = (get_body().get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Please write your feedback"}), 400
+    if len(text) > FEEDBACK_MAX_LEN:
+        return jsonify({"error": "Feedback is limited to %d characters" % FEEDBACK_MAX_LEN}), 400
+    c = conn()
+    row = _feedback_ticket(c, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    guard = _feedback_guard(u, row, kind, c)
+    if guard:
+        c.close()
+        return guard
+    cur = c.execute(
+        "INSERT INTO ticket_feedback (entity_type,entity_id,customer_id,user_id,author_name,text,created_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (kind, tid, row["customer_id"], u["id"], u.get("name") or "", text, now()))
+    c.commit()
+    new_id = cur.lastrowid
+    c.close()
+    audit(kind, tid, u, "feedback", text[:120])
+    return jsonify({"ok": True, "id": new_id, "author_name": u.get("name") or "Customer",
+                    "text": text}), 201
 
 
 # --------------------------------------------------------------------------
@@ -2662,9 +3160,9 @@ def create_user():
             return jsonify({"error": "Only the master administrator can create admin accounts"}), 403
 
     if role == "customer":
-        customer_id = b.get("customer_id")
-        location_id = b.get("location_id")
-        department_id = b.get("department_id")
+        customer_id = _id(b.get("customer_id"))
+        location_id = _id(b.get("location_id"))
+        department_id = _id(b.get("department_id"))
         _conn_tmp = c or conn()
         if location_id and not department_id:
             dept = _conn_tmp.execute("SELECT id FROM departments WHERE location_id=?", (location_id,)).fetchone()
@@ -2677,30 +3175,37 @@ def create_user():
         if c is None:
             _conn_tmp.close()
     elif role  in ("engineer", "application"):
-        # tenant staff create engineers bound to a customer in their care list;
-        # the master may optionally bind an engineer to a customer (tenant engineer).
+        # A tenant admin may leave the organization EMPTY: the account then sits
+        # under the linked tenant admin's care and inherits that admin's care
+        # list (see tenant_scope) rather than being tied to one organization.
+        # When an organization IS named it must be on their care list.
+        # The master may optionally bind an engineer to a customer (tenant engineer).
         if scope is not None:
-            customer_id = b.get("customer_id") or (scope[0] if scope else None)
-            if customer_id not in scope:
+            customer_id = _id(b.get("customer_id"))
+            if customer_id and customer_id not in scope:
                 if c: c.close()
-                return jsonify({"error": "You can only create accounts for an organisation you care for"}), 403
+                return jsonify({"error": "You can only create accounts for an organization you care for"}), 403
         else:
             customer_id = (u.get("customer_id") if u.get("role")  in ("engineer", "application") else
-                           (b.get("customer_id") or None))
+                           _id(b.get("customer_id")))
         location_id = department_id = None
     else:  # admin — only the master may create one, and it is always a tenant admin.
         # The tenant admin may deliberately be left UNLINKED: after first login
-        # they create their own organisation (auto-added to their care list),
+        # they create their own organization (auto-added to their care list),
         # then its locations, departments, equipment and user accounts.
-        customer_id = b.get("customer_id") or None
+        customer_id = _id(b.get("customer_id"))
         location_id = department_id = None
 
-    if scope is not None and customer_id not in scope:
+    # A customer-less staff account is allowed — it belongs to the tenant admin's
+    # care instead of to one organization. Customer-role accounts still have to
+    # name one (enforced just below), and any organization that IS named must be
+    # on the actor's care list.
+    if scope is not None and customer_id and customer_id not in scope:
         if c: c.close()
-        return jsonify({"error": "You can only create accounts for an organisation you care for"}), 403
+        return jsonify({"error": "You can only create accounts for an organization you care for"}), 403
     if role == "customer" and not customer_id:
         if c: c.close()
-        return jsonify({"error": "Linked customer is required for customer accounts"}), 400
+        return jsonify({"error": "Linked organization is required for customer accounts"}), 400
 
     if c is None:
         c = conn()
@@ -2709,10 +3214,21 @@ def create_user():
         if err_r:
             c.close()
             return err_r, code_r
-    ra_id, err_r, code_r = resolve_responsible_admin(c, u, customer_id, b.get("responsible_admin_id"))
+    ra_id, err_r, code_r = resolve_responsible_admin(
+        c, u, customer_id, _id(b.get("responsible_admin_id")),
+        customerless_user=(role != "customer"))
     if err_r:
         c.close()
         return err_r, code_r
+    # A tenant admin may only hand a customer-less account to themselves or to a
+    # peer who cares for at least one of the same organizations — otherwise they
+    # could push an account into a tenant they do not manage.
+    if scope is not None and not customer_id and ra_id and ra_id != u["id"]:
+        peer = c.execute("SELECT * FROM users WHERE id=?", (ra_id,)).fetchone()
+        peer_scope = _admin_scope_ids(c, ra_id, peer) if peer else []
+        if not (set(peer_scope) & set(scope)):
+            c.close()
+            return jsonify({"error": "That tenant admin does not care for any organization you manage"}), 403
     if (b["email"] or "").strip().lower() == FORMER_USER_EMAIL:
         c.close()
         return jsonify({"error": "That email is reserved for the system placeholder account"}), 400
@@ -2751,7 +3267,7 @@ def update_user(uid):
             return jsonify({"error": "The Master System Admin account cannot change role"}), 403
         if "customer_id" in b and b["customer_id"]:
             c.close()
-            return jsonify({"error": "The Master System Admin account cannot be linked to a customer"}), 403
+            return jsonify({"error": "The Master System Admin account cannot be linked to an organization"}), 403
         if b.get("active") is not None and b["active"] != 1:
             c.close()
             return jsonify({"error": "The Master System Admin account cannot be disabled"}), 403
@@ -2762,16 +3278,28 @@ def update_user(uid):
             c.close()
             return jsonify({"error": "Only the master administrator can manage admin accounts"}), 403
         scope = tenant_scope(u, c)
-        if existing["customer_id"] not in scope:
-            c.close()
-            return jsonify({"error": "Not authorised — user belongs to an organisation you do not care for"}), 403
         new_role = b.get("role", existing["role"])
+        # An account with no organization of its own belongs to whichever tenant
+        # admin it is linked to, so it stays manageable by that admin (or a peer
+        # who shares an organization with them) rather than falling out of scope.
+        in_care = (existing["customer_id"] in scope if existing["customer_id"]
+                   else _staff_in_tenant_care(c, u["id"], existing, scope))
+        if not in_care:
+            c.close()
+            return jsonify({"error": "Not authorised — user belongs to an organization you do not care for"}), 403
         if new_role == "admin":
             c.close()
             return jsonify({"error": "Only the master administrator can create admin accounts"}), 403
-        if "customer_id" in b and b["customer_id"] not in scope:
-            c.close()
-            return jsonify({"error": "You can only link accounts to an organisation you care for"}), 403
+        if "customer_id" in b:
+            wanted = _id(b["customer_id"])
+            if wanted and wanted not in scope:
+                c.close()
+                return jsonify({"error": "You can only link accounts to an organization you care for"}), 403
+            # Clearing the organization is fine for staff (they move under the
+            # linked tenant admin's care) but not for a customer-role account.
+            if not wanted and new_role == "customer":
+                c.close()
+                return jsonify({"error": "Linked organization is required for customer accounts"}), 400
     elif u["role"]  in ("engineer", "application") and u.get("customer_id"):
         # tenant engineers: same restrictions, single customer
         if existing["role"] == "admin":
@@ -2779,7 +3307,7 @@ def update_user(uid):
             return jsonify({"error": "Only the master administrator can manage admin accounts"}), 403
         if existing["customer_id"] != u["customer_id"]:
             c.close()
-            return jsonify({"error": "Not authorised — user belongs to another organisation"}), 403
+            return jsonify({"error": "Not authorised — user belongs to another organization"}), 403
         if b.get("role") == "admin":
             c.close()
             return jsonify({"error": "Only the master administrator can create admin accounts"}), 403
@@ -2788,7 +3316,7 @@ def update_user(uid):
     # validate any location/department pairing even when role stays 'customer'/'engineer'.
     new_customer_id = existing["customer_id"]
     if "customer_id" in b:
-        new_customer_id = b["customer_id"]
+        new_customer_id = _id(b["customer_id"])
     elif "role" in b:
         if b["role"]  in ("engineer", "application"):
             new_customer_id = u.get("customer_id") if u.get("role")  in ("engineer", "application") else None
@@ -2813,8 +3341,11 @@ def update_user(uid):
             return err_r, code_r
 
     # validate the responsible tenant admin against the resulting customer scope
-    ra_id = b.get("responsible_admin_id", existing["responsible_admin_id"])
-    err_r, code_r = validate_responsible_admin(c, new_customer_id, ra_id)
+    ra_id = (_id(b["responsible_admin_id"]) if "responsible_admin_id" in b
+             else existing["responsible_admin_id"])
+    err_r, code_r = validate_responsible_admin(
+        c, new_customer_id, ra_id,
+        customerless_user=(b.get("role", existing["role"]) != "customer"))
     if err_r:
         c.close()
         return err_r, code_r
@@ -2832,10 +3363,14 @@ def update_user(uid):
             c.close()
             return jsonify({"error": "Email already in use"}), 409
     fields, params = [], []
+    # Id columns are coerced so a string from a <select> is never written as TEXT
+    # (which would silently stop matching integer scope lists). `active` is not an
+    # id and must keep 0 as a real value, so it is deliberately excluded.
+    id_fields = ("customer_id", "location_id", "department_id", "responsible_admin_id")
     for f in ("name", "phone", "role", "customer_id", "location_id", "department_id", "active", "responsible_admin_id"):
         if f in b:
             fields.append(f"{f}=?")
-            params.append(b[f])
+            params.append(_id(b[f]) if f in id_fields else b[f])
     if "email" in b:
         fields.append("email=?")
         params.append(b["email"].strip().lower())
@@ -2922,7 +3457,7 @@ def delete_user(uid):
             "VALUES ('Former user', ?, '', '!no-login!', 'customer', NULL, NULL, NULL, 0, 0, ?)",
             (FORMER_USER_EMAIL, now())).lastrowid
     for table, col in (("complaints", "created_by"), ("breakdowns", "reported_by"),
-                       ("comments", "user_id"), ("attachments", "uploaded_by"),
+                       ("comments", "user_id"),
                        ("pm_logs", "performed_by")):
         c.execute(f"UPDATE {table} SET {col}=? WHERE {col}=?", (former_id, uid))
     for table, col in (
@@ -3106,6 +3641,21 @@ def dashboard():
     te_sql += " GROUP BY e.name ORDER BY n DESC LIMIT 5"
     top_equip = c.execute(te_sql, te_pp).fetchall()
 
+    # Customer satisfaction on settled tickets. Ratings are all-time rather than
+    # windowed like the counts above: this is a cumulative service-quality
+    # figure, and letting it slide over a 3-month window would make the average
+    # move as tickets age out rather than as service changes.
+    fb_ratings = []
+    for fb_kind, fb_table in (("complaint", "complaints"), ("breakdown", "breakdowns")):
+        fb_sql, fb_pp = scoped(
+            "SELECT r.rating AS rating FROM ticket_ratings r "
+            "JOIN %s t ON t.id=r.entity_id AND r.entity_type='%s'" % (fb_table, fb_kind),
+            cols={"customer_id": "t.customer_id", "location_id": "t.location_id",
+                  "department_id": "t.department_id"})
+        fb_ratings += [x["rating"] for x in c.execute(fb_sql, fb_pp).fetchall()]
+    fb_count = len(fb_ratings)
+    fb_avg = round(sum(fb_ratings) / float(fb_count), 2) if fb_count else None
+
     # recent activity (3-month window)
     rc_sql, rc_pp = scoped(
         "SELECT cmp.id, cmp.code, cmp.subject, cmp.status, cmp.priority, cmp.created_at, cmp.customer_id, "
@@ -3141,6 +3691,10 @@ def dashboard():
         "top_equipment": [dict(r) for r in top_equip],
         "recent_complaints": [dict(r) for r in recent_cmp],
         "recent_breakdowns": [dict(r) for r in recent_brk],
+        "customer_feedback": {
+            "average_rating": fb_avg,
+            "rating_count": fb_count,
+        },
     })
 
 
@@ -3174,9 +3728,30 @@ def list_notifications():
                 f"SELECT id FROM breakdowns WHERE id IN ({marks}) AND accepted_by IS NOT NULL",
                 br_ids).fetchall():
             accepted.add(("breakdown", rr["id"]))
+    # Care decisions: say whether the organization is still unclaimed, who took
+    # it, or whether the request was withdrawn — so the notification stops
+    # offering buttons for a decision that is already settled.
+    pc_ids = [r["entity_id"] for r in out if r.get("entity_type") == "pending_care" and r.get("entity_id")]
+    care = {}
+    if pc_ids:
+        marks = ", ".join("?" for _ in pc_ids)
+        for rr in c.execute(f"SELECT id, pending_care FROM customers WHERE id IN ({marks})", pc_ids).fetchall():
+            care[rr["id"]] = {"pending": bool(rr["pending_care"]), "claimed_by": None}
+        still = [i for i, v in care.items() if not v["pending"]]
+        if still:
+            marks2 = ", ".join("?" for _ in still)
+            for rr in c.execute(
+                    f"SELECT l.customer_id, u.name AS admin_name FROM admin_customer_links l "
+                    f"LEFT JOIN users u ON u.id=l.admin_id WHERE l.customer_id IN ({marks2}) "
+                    f"ORDER BY l.created_at DESC", still).fetchall():
+                if not care[rr["customer_id"]]["claimed_by"]:
+                    care[rr["customer_id"]]["claimed_by"] = rr["admin_name"] or "another admin"
     c.close()
     for r in out:
         r["accepted"] = (r.get("entity_type"), r.get("entity_id")) in accepted
+        st = care.get(r.get("entity_id")) if r.get("entity_type") == "pending_care" else None
+        r["care_pending"] = bool(st and st["pending"])
+        r["care_claimed_by"] = (st or {}).get("claimed_by")
     return jsonify(out)
 
 
@@ -3318,204 +3893,6 @@ def app_config():
 
 
 # --------------------------------------------------------------------------
-# Attachments (photos)
-# --------------------------------------------------------------------------
-def _attachments_meta(c, entity, entity_id):
-    rows = c.execute(
-        "SELECT id, filename, mime, size, uploaded_by, created_at FROM attachments "
-        "WHERE entity_type=? AND entity_id=? ORDER BY created_at", (entity, entity_id)).fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        up = c.execute("SELECT name FROM users WHERE id=?", (r["uploaded_by"],)).fetchone()
-        d["uploaded_by_name"] = up["name"] if up else None
-        out.append(d)
-    return out
-
-
-@app.post("/api/attachments")
-def upload_attachment():
-    u, err, code = require_role("admin", "engineer", "application", "customer")
-    if err:
-        return err, code
-    entity = request.form.get("entity_type")
-    eid = request.form.get("entity_id")
-    if entity not in ("complaint", "breakdown") or not eid:
-        return jsonify({"error": "Invalid entity"}), 400
-    eid = int(eid)
-    # authorisation: scope the actor to the ticket (customer, tenant staff, or master)
-    c = conn()
-    if entity == "complaint":
-        row = c.execute("SELECT customer_id, location_id, department_id FROM complaints WHERE id=?", (eid,)).fetchone()
-    else:
-        row = c.execute("SELECT customer_id, location_id, department_id FROM breakdowns WHERE id=?", (eid,)).fetchone()
-    c.close()
-    if not row or not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
-        return jsonify({"error": "Not authorised"}), 403
-
-    f = request.files.get("file")
-    if not f or not f.filename:
-        return jsonify({"error": "No file uploaded"}), 400
-    data = f.read()
-    # Some mobile browsers send a blank/generic content type. Derive the real
-    # type from the filename extension when the client's MIME is unreliable.
-    mime = (f.mimetype or "").strip().lower() or None
-    if not mime or mime == "application/octet-stream" or mime == "binary/octet-stream":
-        guessed = mimetypes.guess_type(f.filename or "")[0]
-        if guessed:
-            mime = guessed.lower()
-    if not mime:
-        mime = "application/octet-stream"
-    allowed = (
-        "image/",
-        "application/pdf",
-        # Office documents (service reports, worksheets, slides)
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-powerpoint",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "text/csv",
-        "text/plain",
-    )
-    if not any(mime.startswith(x) for x in allowed):
-        return jsonify({"error": "Unsupported file type (use an image, PDF, or Office document)"}), 400
-    if len(data) > 8 * 1024 * 1024:
-        return jsonify({"error": "File too large (max 8 MB)"}), 400
-
-    c = conn()
-    cur = c.execute(
-        "INSERT INTO attachments (entity_type,entity_id,filename,mime,size,uploaded_by,data,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        (entity, eid, f.filename[:200], mime, len(data), u["id"], data, now()),
-    )
-    c.commit()
-    row = c.execute("SELECT id, filename, mime, size, uploaded_by, created_at FROM attachments WHERE id=?",
-                    (cur.lastrowid,)).fetchone()
-    d = dict(row)
-    d["uploaded_by_name"] = u["name"]
-    c.close()
-
-    audit(entity, eid, u, "attachment", f"Added {f.filename[:120]}")
-
-    # notify followers
-    if entity == "complaint":
-        rc = conn()
-        raw = rc.execute("SELECT * FROM complaints WHERE id=?", (eid,)).fetchone()
-        if raw:
-            rec = complaint_payload(rc, raw)
-            rc.close()
-            ping_followers("complaint", u["id"], rec,
-                           f"{u['name']} attached a file to complaint {rec['code']}",
-                           lambda r: email_mod.email_comment("complaint", r, rec, u["name"], "📎 Attached a file."))
-        else:
-            rc.close()
-    else:
-        rc = conn()
-        raw = rc.execute("SELECT * FROM breakdowns WHERE id=?", (eid,)).fetchone()
-        if raw:
-            rec = breakdown_payload(rc, raw)
-            rc.close()
-            ping_followers("breakdown", u["id"], rec,
-                           f"{u['name']} attached a file to breakdown {rec['code']}",
-                           lambda r: email_mod.email_comment("breakdown", r, rec, u["name"], "📎 Attached a file."))
-        else:
-            rc.close()
-    return jsonify(d), 201
-
-
-@app.get("/api/attachments")
-def list_attachments():
-    u, err, code = require_role("admin", "engineer", "application", "customer")
-    if err:
-        return err, code
-    entity = request.args.get("entity_type")
-    eid = request.args.get("entity_id", type=int)
-    if entity not in ("complaint", "breakdown") or not eid:
-        return jsonify({"error": "Invalid entity"}), 400
-    c = conn()
-    row = c.execute(f"SELECT customer_id, location_id, department_id FROM {entity}s WHERE id=?", (eid,)).fetchone()
-    if not row:
-        c.close()
-        return jsonify({"error": "Not found"}), 404
-    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
-        c.close()
-        return jsonify({"error": "Not authorised"}), 403
-    out = _attachments_meta(c, entity, eid)
-    c.close()
-    return jsonify(out)
-
-
-@app.get("/api/audit")
-def list_audit():
-    """Per-ticket history log: who did what and when."""
-    u, err, code = require_role("admin", "engineer", "application", "customer")
-    if err:
-        return err, code
-    entity = request.args.get("entity_type")
-    eid = request.args.get("entity_id", type=int)
-    if entity not in ("complaint", "breakdown") or not eid:
-        return jsonify({"error": "Invalid entity"}), 400
-    # authorization: customers only on their own in-scope tickets
-    c = conn()
-    row = c.execute(f"SELECT customer_id, location_id, department_id FROM {entity}s WHERE id=?", (eid,)).fetchone()
-    if not row:
-        c.close()
-        return jsonify({"error": "Not found"}), 404
-    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
-        c.close()
-        return jsonify({"error": "Not authorised"}), 403
-    rows = c.execute(
-        "SELECT * FROM audit_logs WHERE entity_type=? AND entity_id=? ORDER BY id", (entity, eid)).fetchall()
-    c.close()
-    return jsonify(rows_to_dicts(rows))
-
-
-@app.get("/api/attachments/<int:aid>/file")
-def attachment_file(aid):
-    u, err, code = require_role("admin", "engineer", "application", "customer")
-    if err:
-        return err, code
-    c = conn()
-    row = c.execute("SELECT * FROM attachments WHERE id=?", (aid,)).fetchone()
-    if not row:
-        c.close()
-        return jsonify({"error": "Not found"}), 404
-    tbl = row["entity_type"]
-    trow = c.execute(f"SELECT customer_id, location_id, department_id FROM {tbl}s WHERE id=?", (row["entity_id"],)).fetchone()
-    if not trow or not _customer_allowed(u, trow["customer_id"], trow["location_id"], trow["department_id"]):
-        c.close()
-        return jsonify({"error": "Not authorised"}), 403
-    data = row["data"]
-    mime = row["mime"]
-    c.close()
-    return Response(data, mimetype=mime, headers={
-        "Content-Disposition": f'inline; filename="{row["filename"]}"'})
-
-
-@app.delete("/api/attachments/<int:aid>")
-def delete_attachment(aid):
-    u, err, code = require_role("admin", "engineer", "application")
-    if err:
-        return err, code
-    c = conn()
-    row = c.execute("SELECT * FROM attachments WHERE id=?", (aid,)).fetchone()
-    if not row:
-        c.close()
-        return jsonify({"error": "Not found"}), 404
-    tbl = row["entity_type"]
-    trow = c.execute(f"SELECT customer_id FROM {tbl}s WHERE id=?", (row["entity_id"],)).fetchone()
-    if not trow or not _customer_allowed(u, trow["customer_id"]):
-        c.close()
-        return jsonify({"error": "Not authorised"}), 403
-    c.execute("DELETE FROM attachments WHERE id=?", (aid,))
-    c.commit()
-    c.close()
-    return jsonify({"ok": True})
-
-
-# --------------------------------------------------------------------------
 # Reports & export
 # --------------------------------------------------------------------------
 @app.get("/api/export.csv")
@@ -3564,16 +3941,6 @@ def export_csv():
         "Content-Disposition": f"attachment; filename={fname}"})
 
 
-def _load_ticket_photos(entity_type, entity_id):
-    """Return raw photo bytes for a ticket's attachments."""
-    from database import conn as _c
-    c = _c()
-    rows = c.execute("SELECT data FROM attachments WHERE entity_type=? AND entity_id=? ORDER BY created_at LIMIT 4",
-                     (entity_type, entity_id)).fetchall()
-    c.close()
-    return [r["data"] for r in rows]
-
-
 @app.get("/api/complaints/<int:cid>/report.pdf")
 def complaint_report_pdf(cid):
     u, err, code = require_role("admin", "engineer", "application", "customer")
@@ -3593,12 +3960,46 @@ def complaint_report_pdf(cid):
     comments = rows_to_dicts(c.execute(
         "SELECT cm.*, u.name AS user_name FROM comments cm JOIN users u ON u.id=cm.user_id "
         "WHERE cm.entity_type='complaint' AND cm.entity_id=? ORDER BY cm.created_at", (cid,)).fetchall())
+    feedback = _feedback_payload(c, "complaint", cid)
     c.close()
 
-    photos = _load_ticket_photos("complaint", cid)
-    pdf = report_mod.service_report(comp, breakdowns, comments, photos)
+    pdf = report_mod.service_report(comp, breakdowns, comments, feedback=feedback)
     return Response(pdf, mimetype="application/pdf", headers={
         "Content-Disposition": f'inline; filename="service_report_{comp["code"]}.pdf"'})
+
+
+@app.get("/api/breakdowns/<int:bid>/report.pdf")
+def breakdown_report_pdf(bid):
+    """Service report PDF for a single breakdown ticket — the breakdown
+    counterpart of complaint_report_pdf(). Breakdown tickets no longer take
+    file attachments, so this report is what the ticket offers instead."""
+    u, err, code = require_role("admin", "engineer", "application", "customer")
+    if err:
+        return err, code
+    c = conn()
+    row = c.execute("SELECT * FROM breakdowns WHERE id=?", (bid,)).fetchone()
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _customer_allowed(u, row["customer_id"], row["location_id"], row["department_id"]):
+        c.close()
+        return jsonify({"error": "Not authorised"}), 403
+    brk = breakdown_payload(c, row)
+    comments = rows_to_dicts(c.execute(
+        "SELECT cm.*, u.name AS user_name FROM comments cm JOIN users u ON u.id=cm.user_id "
+        "WHERE cm.entity_type='breakdown' AND cm.entity_id=? ORDER BY cm.created_at", (bid,)).fetchall())
+    # Name the complaint this work order was raised from, if there is one.
+    src = None
+    if row["complaint_id"]:
+        crow = c.execute("SELECT code, subject FROM complaints WHERE id=?",
+                         (row["complaint_id"],)).fetchone()
+        src = dict(crow) if crow else None
+    feedback = _feedback_payload(c, "breakdown", bid)
+    c.close()
+
+    pdf = report_mod.breakdown_report(brk, comments, src, feedback=feedback)
+    return Response(pdf, mimetype="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="service_report_{brk["code"]}.pdf"'})
 
 
 @app.get("/api/reports/trend.pdf")
@@ -3745,7 +4146,7 @@ def create_pm():
     if not (b.get("title") or "").strip():
         return jsonify({"error": "Title is required"}), 400
     if not b.get("customer_id"):
-        return jsonify({"error": "Customer is required"}), 400
+        return jsonify({"error": "Organization is required"}), 400
     err_t, code_t = tenant_guard(u, b["customer_id"])
     if err_t:
         return err_t, code_t
@@ -3949,7 +4350,7 @@ def create_portal_link():
         return err, code
     b = get_body()
     if not b.get("customer_id"):
-        return jsonify({"error": "Customer is required"}), 400
+        return jsonify({"error": "Organization is required"}), 400
     err_t, code_t = tenant_guard(u, b["customer_id"])
     if err_t:
         return err_t, code_t
@@ -4197,10 +4598,137 @@ def portal_history(token):
         "b.accepted_by, b.accepted_at, b.accept_reply, u.name AS accepted_by_name "
         "FROM breakdowns b LEFT JOIN users u ON u.id=b.accepted_by "
         "WHERE b.customer_id=? ORDER BY b.created_at DESC LIMIT 20", (row["customer_id"],)).fetchall()
-    c.close()
     out = [dict(r, kind="complaint") for r in cmp_rows] + [dict(r, kind="breakdown") for r in brk_rows]
     out.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-    return jsonify(out[:20])
+    out = out[:20]
+    # Satisfaction rides along with the history rows so the portal can show a
+    # rating and offer the feedback form without a request per ticket.
+    for kind in ("complaint", "breakdown"):
+        ids = [r["id"] for r in out if r["kind"] == kind]
+        summ = _feedback_summary(c, kind, ids)
+        for r in out:
+            if r["kind"] != kind:
+                continue
+            s = summ.get(r["id"], {})
+            r["rating"] = s.get("rating")
+            r["feedback_comments"] = s.get("comments", 0)
+            r["feedback_open"] = r["status"] in FEEDBACK_STATUSES[kind]
+    c.close()
+    return jsonify(out)
+
+def _portal_link(c, token):
+    return c.execute("SELECT * FROM portal_links WHERE token=? AND active=1", (token,)).fetchone()
+
+
+def _portal_ticket(c, link, kind, tid):
+    """The ticket a portal visitor may give feedback on, or None.
+
+    Scoped exactly like the portal's own history list — every ticket belonging
+    to the link's organization — so a visitor can respond to any settled ticket
+    they are shown, and never to another organization's."""
+    if kind not in FEEDBACK_TABLES:
+        return None
+    row = _feedback_ticket(c, kind, tid)
+    if not row or row["customer_id"] != link["customer_id"]:
+        return None
+    return row
+
+
+@app.get("/api/portal/<token>/feedback")
+def portal_feedback(token):
+    """One settled ticket's rating and feedback thread, for the public portal."""
+    kind = (request.args.get("kind") or "complaint").strip().lower()
+    tid = _id(request.args.get("id"))
+    if kind not in FEEDBACK_TABLES or not tid:
+        return jsonify({"error": "Invalid ticket"}), 400
+    c = conn()
+    link = _portal_link(c, token)
+    if not link:
+        c.close()
+        return jsonify({"error": "Invalid or expired link"}), 404
+    row = _portal_ticket(c, link, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    out = _feedback_payload(c, kind, tid)
+    out["settled"] = _feedback_settled(row, kind)
+    out["status"] = row["status"]
+    out["code"] = row["code"]
+    c.close()
+    return jsonify(out)
+
+
+@app.post("/api/portal/<token>/rating")
+def portal_rate(token):
+    """Rate a settled ticket from the QR portal — no account needed.
+
+    The visitor's name is optional; without one the rating is attributed to
+    "Customer"."""
+    body = get_body()
+    kind = (body.get("kind") or "complaint").strip().lower()
+    tid = _id(body.get("id"))
+    if kind not in FEEDBACK_TABLES or not tid:
+        return jsonify({"error": "Invalid ticket"}), 400
+    rating = _rating_value(body)
+    if not rating:
+        return jsonify({"error": "Choose a rating from 1 to 5 stars"}), 400
+    c = conn()
+    link = _portal_link(c, token)
+    if not link:
+        c.close()
+        return jsonify({"error": "Invalid or expired link"}), 404
+    row = _portal_ticket(c, link, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _feedback_settled(row, kind):
+        c.close()
+        return jsonify({"error": "Feedback opens once this ticket is resolved or closed"}), 409
+    name = (body.get("name") or "").strip()[:80]
+    rid, created = _save_rating(c, kind, tid, row["customer_id"], rating, None, name)
+    c.commit()
+    c.close()
+    audit(kind, tid, {"id": None, "name": name or "Customer"}, "rating",
+          "%d star%s" % (rating, "" if rating == 1 else "s"))
+    return jsonify({"ok": True, "id": rid, "rating": rating, "created": created}), (201 if created else 200)
+
+
+@app.post("/api/portal/<token>/feedback")
+def portal_comment(token):
+    """Add a comment to a settled ticket's feedback thread from the QR portal."""
+    body = get_body()
+    kind = (body.get("kind") or "complaint").strip().lower()
+    tid = _id(body.get("id"))
+    if kind not in FEEDBACK_TABLES or not tid:
+        return jsonify({"error": "Invalid ticket"}), 400
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Please write your feedback"}), 400
+    if len(text) > FEEDBACK_MAX_LEN:
+        return jsonify({"error": "Feedback is limited to %d characters" % FEEDBACK_MAX_LEN}), 400
+    c = conn()
+    link = _portal_link(c, token)
+    if not link:
+        c.close()
+        return jsonify({"error": "Invalid or expired link"}), 404
+    row = _portal_ticket(c, link, kind, tid)
+    if not row:
+        c.close()
+        return jsonify({"error": "Not found"}), 404
+    if not _feedback_settled(row, kind):
+        c.close()
+        return jsonify({"error": "Feedback opens once this ticket is resolved or closed"}), 409
+    name = (body.get("name") or "").strip()[:80]
+    cur = c.execute(
+        "INSERT INTO ticket_feedback (entity_type,entity_id,customer_id,user_id,author_name,text,created_at) "
+        "VALUES (?,?,?,?,?,?,?)", (kind, tid, row["customer_id"], None, name, text, now()))
+    c.commit()
+    new_id = cur.lastrowid
+    c.close()
+    audit(kind, tid, {"id": None, "name": name or "Customer"}, "feedback", text[:120])
+    return jsonify({"ok": True, "id": new_id, "author_name": name or "Customer",
+                    "text": text}), 201
+
 
 
 @app.get("/api/portal/<token>/events")
@@ -4251,7 +4779,7 @@ def portal_events(token):
 # --------------------------------------------------------------------------
 # Version check
 # --------------------------------------------------------------------------
-APP_VERSION = "45"
+APP_VERSION = "49"
 
 @app.get("/api/version")
 def api_version():

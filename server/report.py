@@ -8,8 +8,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import (BaseDocTemplate, Frame, PageTemplate, Paragraph,
-                                Spacer, Table, TableStyle, Image, HRFlowable)
-from reportlab.lib.utils import ImageReader
+                                Spacer, Table, TableStyle, HRFlowable)
 
 BRAND = HexColor("#0F766E")
 BRAND_DARK = HexColor("#134E4A")
@@ -104,11 +103,62 @@ def status_cell(status):
     return t
 
 
-def service_report(complaint, breakdowns, comments, photos):
-    """Build a single-ticket service report PDF and return raw bytes.
+def _log_table(comments):
+    """Two-column who-said-what log, shared by both single-ticket reports."""
+    rows = [[Paragraph(f'<b>{c.get("user_name", "")}</b><br/>'
+                       f'<font size="7" color="#64748B">{c.get("created_at", "")}</font>', BODY),
+             Paragraph(c.get("text", "") or "", BODY)] for c in comments]
+    t = Table(rows, colWidths=[38 * mm, 126 * mm])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, BG]),
+        ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    return t
 
-    photos: list of raw image bytes (up to 4 shown as a thumbnail row).
-    """
+
+def _feedback_flowables(feedback):
+    """The customer's rating and comments on a settled ticket.
+
+    Returns nothing when the customer left no rating and no comment: feedback is
+    optional, so an unrated ticket simply has no section rather than an empty one
+    drawing attention to the absence.
+
+    Stars are drawn as ASCII because the built-in Helvetica encoding has no star
+    glyph; the on-screen UI uses the real characters."""
+    if not feedback:
+        return []
+    rating = feedback.get("rating")
+    comments = feedback.get("comments") or []
+    if not rating and not comments:
+        return []
+    out = [Paragraph("Customer feedback", H2)]
+    if rating:
+        stars = int(rating.get("rating") or 0)
+        stars = max(0, min(5, stars))
+        out.append(Paragraph(
+            '<b>%d / 5</b> <font face="Courier" size="11">%s</font>'
+            % (stars, "*" * stars + "." * (5 - stars)), BODY))
+        out.append(Paragraph(
+            '<font size="8" color="#64748B">rated by %s</font>'
+            % (rating.get("rated_by") or "Customer"), BODY))
+    else:
+        out.append(Paragraph("No rating given.", BODY))
+    out.append(Spacer(1, 6))
+    if comments:
+        out.append(_log_table([
+            {"user_name": c.get("author_name") or "Customer",
+             "created_at": c.get("created_at", ""),
+             "text": c.get("text", "")} for c in comments]))
+    return out
+
+
+def service_report(complaint, breakdowns, comments, feedback=None):
+    """Build a single-ticket service report PDF and return raw bytes."""
     buf = io.BytesIO()
     doc = init_doc(buf, f"Service Report {complaint.get('code', '')}")
 
@@ -121,7 +171,7 @@ def service_report(complaint, breakdowns, comments, photos):
         _kv_table([
             ("Report no.", complaint.get("code")),
             ("Date issued", now_dt().strftime("%d %b %Y %H:%M (MYT)")),
-            ("Customer", complaint.get("customer_name")),
+            ("Organization", complaint.get("customer_name")),
             ("Equipment", complaint.get("equipment_name") or "General"),
             ("Category", complaint.get("category") or "General"),
             ("Priority", (complaint.get("priority") or "").title()),
@@ -164,44 +214,104 @@ def service_report(complaint, breakdowns, comments, photos):
 
     # comments
     story.append(Paragraph("Conversation log", H2))
-    if comments:
-        rows = [[Paragraph(f'<b>{c.get("user_name", "")}</b><br/><font size="7" color="#64748B">{c.get("created_at", "")}</font>', BODY),
-                 Paragraph(c.get("text", ""), BODY)] for c in comments]
-        t = Table(rows, colWidths=[38 * mm, 126 * mm])
-        t.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, BG]),
-            ("GRID", (0, 0), (-1, -1), 0.4, LINE),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ]))
-        story.append(t)
-    else:
-        story.append(Paragraph("No comments.", BODY))
+    story.append(_log_table(comments) if comments else Paragraph("No comments.", BODY))
 
-    # attached photos (thumbnail row)
-    if photos:
-        story.append(Paragraph("Attached photos", H2))
-        imgs = []
-        for raw in photos[:4]:
-            try:
-                ir = ImageReader(io.BytesIO(raw))
-                w, h = ir.getSize()
-                imgs.append(Image(ir, width=38 * mm if w >= h else 38 * mm * (w / max(h, 1)),
-                                  height=38 * mm if h < w else 38 * mm * (h / max(w, 1))))
-            except Exception:
-                pass
-        if imgs:
-            row = Table([imgs], colWidths=[42 * mm] * len(imgs))
-            row.setStyle(TableStyle([
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 2),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-            ]))
-            story.append(row)
+    # the customer's own verdict, when they chose to give one
+    story.extend(_feedback_flowables(feedback))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def breakdown_report(breakdown, comments, source_complaint=None, feedback=None):
+    """Build a single-breakdown service report PDF and return raw bytes.
+
+    The breakdown counterpart of service_report(): the same LabCare letterhead,
+    the same summary block and log table, then the fault, root cause,
+    resolution and work log for this one work order.
+
+    Neither ticket type carries file attachments any more — that function was
+    replaced by these PDFs — so neither report has an attached-photos row.
+    """
+    buf = io.BytesIO()
+    doc = init_doc(buf, f"Service Report {breakdown.get('code', '')}")
+
+    equipment = breakdown.get("equipment_name") or "General"
+    location = breakdown.get("location_name") or breakdown.get("department_name")
+
+    accepted = breakdown.get("accepted_by_name")
+    if accepted and breakdown.get("accepted_at"):
+        accepted = f"{accepted} · {breakdown['accepted_at']}"
+
+    # Optional rows are omitted rather than printed as a bare em-dash.
+    pairs = [
+        ("Report no.", breakdown.get("code")),
+        ("Date issued", now_dt().strftime("%d %b %Y %H:%M (MYT)")),
+        ("Organization", breakdown.get("customer_name")),
+    ]
+    if location:
+        pairs.append(("Location/Department", location))
+    pairs.append(("Equipment", equipment))
+    if breakdown.get("equipment_serial"):
+        pairs.append(("Serial number", breakdown["equipment_serial"]))
+    pairs += [
+        ("Priority", (breakdown.get("priority") or "").title()),
+        ("Status", (breakdown.get("status") or "").replace("_", " ").title()),
+        ("Reported by", breakdown.get("reported_by_name")),
+    ]
+    if breakdown.get("reporter_name"):
+        pairs.append(("Reporter", breakdown["reporter_name"]))
+    if breakdown.get("reporter_phone"):
+        pairs.append(("Contact", breakdown["reporter_phone"]))
+    pairs.append(("Assigned to", breakdown.get("assigned_to_name") or "Unassigned"))
+    if accepted:
+        pairs.append(("Accepted by", accepted))
+    if breakdown.get("accept_reply"):
+        pairs.append(("Reply to sender", f"“{breakdown['accept_reply']}”"))
+    if breakdown.get("responsible_admin_name"):
+        pairs.append(("Tenant admin in charge", breakdown["responsible_admin_name"]))
+    pairs += [
+        ("Opened", breakdown.get("created_at")),
+        ("Resolved", breakdown.get("resolved_at") or "—"),
+    ]
+    if breakdown.get("closed_by_name"):
+        pairs.append(("Resolved by", breakdown["closed_by_name"]))
+
+    story = [
+        Paragraph(f"Service Report — {breakdown.get('code', '')}", H1),
+        Paragraph(f"Equipment breakdown · {equipment}", SUB),
+        Spacer(1, 4),
+        HRFlowable(width="100%", thickness=1, color=BRAND),
+        Spacer(1, 10),
+        _kv_table(pairs),
+        Spacer(1, 14),
+        Paragraph("Fault description", H2),
+        Paragraph(breakdown.get("fault_description") or "No fault description provided.", BODY),
+    ]
+
+    # Where this work order came from, when it was raised off a complaint.
+    if source_complaint:
+        story.append(Paragraph("Source complaint", H2))
+        story.append(Paragraph(
+            f'{source_complaint.get("code", "")} — {source_complaint.get("subject", "")}', BODY))
+
+    if breakdown.get("root_cause"):
+        story.append(Paragraph("Root cause", H2))
+        story.append(Paragraph(breakdown["root_cause"], BODY))
+
+    if breakdown.get("resolution_notes"):
+        story.append(Paragraph("Resolution notes", H2))
+        story.append(Paragraph(breakdown["resolution_notes"], BODY))
+    elif (breakdown.get("status") or "") == "resolved":
+        story.append(Paragraph("Resolution notes", H2))
+        story.append(Paragraph("Marked resolved with no notes recorded.", BODY))
+
+    story.append(Paragraph("Work log", H2))
+    story.append(_log_table(comments) if comments
+                 else Paragraph("No work log entries.", BODY))
+
+    # the customer's own verdict, when they chose to give one
+    story.extend(_feedback_flowables(feedback))
 
     doc.build(story)
     return buf.getvalue()

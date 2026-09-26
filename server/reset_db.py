@@ -11,7 +11,7 @@ if not DSN:
     sys.exit(2)
 
 TABLES = [
-    "sessions", "notification_pings", "notifications", "attachments",
+    "sessions", "notification_pings", "notifications",
     "audit_logs", "comments", "pm_logs", "pm_schedules", "portal_links",
     "breakdowns", "complaints", "equipment", "categories", "departments",
     "locations", "admin_customer_links", "onboarding_apps", "users",

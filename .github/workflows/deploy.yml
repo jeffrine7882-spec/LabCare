@@ -3,9 +3,11 @@
 #
 # Why this exists: the coding sandbox this repo is worked on from cannot reach
 # InsForge/Fly.io (egress firewall), so production deploys run on GitHub's
-# runners, which can. Triggers:
-#   * every push to the Arena working branch (arena/01a0d728-labcare)
-#   * every push to main
+# runners, which can. Triggers (opt-in — a deploy ships to production and runs
+# the database migrations against live data, so it is never a side effect of an
+# ordinary push):
+#   * a push to the Arena working branch or main whose commit message carries
+#     the deploy tag (see the `if:` on the job below)
 #   * manual "Run workflow" (Actions tab)
 #
 # Required repository secret:
@@ -46,6 +48,13 @@ env:
 
 jobs:
   deploy:
+    # Opt-in, mirroring the gate release.yml uses for installers. A deploy ships
+    # to production and runs database.py's migrations against the live Postgres
+    # — some of which delete data — so it should be a deliberate act, not a side
+    # effect of any push to a working branch. Put the deploy tag in the commit
+    # message (same spelling as the release tag, but "deploy"), or use
+    # Actions → Deploy to InsForge → Run workflow.
+    if: contains(github.event.head_commit.message, '[deploy]') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
