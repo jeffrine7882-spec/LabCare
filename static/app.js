@@ -1284,8 +1284,9 @@ async function viewOrg(v, tab) {
     </div>
     ${addBtn ? `<div class="btn-row" style="margin-bottom:12px">${addBtn}</div>` : ""}
     <div id="locList" class="${t === "locations" ? "" : "hidden"}"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>
+    <div id="pendingCare" class="${t === "customers" ? "" : "hidden"}"></div>
     <div id="custList" class="${t === "customers" ? "" : "hidden"}"><div class="empty"><div class="spinner" style="margin:0 auto"></div></div></div>`;
-  if (t === "customers") await refreshCustomers();
+  if (t === "customers") { await refreshPendingCare(); await refreshCustomers(); }
   else await refreshLocations();
 }
 
@@ -1759,6 +1760,136 @@ async function removeCareCustomer(id) {
     } catch (e) { toast(e.message, "error"); }
     hideLoading();
   });
+}
+
+// ------------------------------------------- Pending care (new join requests)
+// A signup that creates a brand-new organization leaves it with no tenant
+// admin. Every tenant admin is asked whether it is under their care; the first
+// to claim it wins. The master may assign it to a chosen admin instead.
+async function refreshPendingCare() {
+  const host = $("#pendingCare");
+  if (!host) return;
+  if (!isAdmin()) { host.innerHTML = ""; return; }
+  let data = null;
+  try { data = await API.get("/api/customers/pending-care"); }
+  catch (e) { host.innerHTML = ""; return; }
+  state.pendingCare = data || { customers: [] };
+  const list = state.pendingCare.customers || [];
+  if (!list.length) { host.innerHTML = ""; return; }
+  const master = isMaster();
+  host.innerHTML = `
+    <div class="action-panel" style="margin-bottom:12px">
+      <div class="section-title">New organizations awaiting care</div>
+      <p style="font-size:12.5px;color:var(--ink-soft);margin:2px 0 10px">
+        ${master
+          ? "A join request created these and no tenant admin has claimed them yet. Assign one, or let the tenant admins claim it themselves."
+          : "A join request created these and nobody is looking after them yet. Take one into your care — the first admin to claim it wins."}
+      </p>
+      ${list.map((cu) => `
+        <div class="item" style="margin-bottom:8px">
+          <div class="item-top">
+            <div class="c-avatar" style="width:40px;height:40px;font-size:14px">${esc(initials(cu.name))}</div>
+            <div class="item-main">
+              <div class="item-title">${esc(cu.name)}</div>
+              <div class="item-sub">${esc(cu.requested_by || cu.contact_name || "—")}${cu.requested_by_email ? " · " + esc(cu.requested_by_email) : ""}${cu.phone ? " · " + esc(cu.phone) : ""}</div>
+            </div>
+          </div>
+          <div class="btn-row" style="margin-top:8px">
+            ${master
+              ? `<button class="btn btn-primary btn-sm" onclick="openAssignCare(${cu.id})">Assign to an admin…</button>`
+              : `<button class="btn btn-primary btn-sm" onclick="takeCare(${cu.id})">Take into my care</button>
+                 <button class="btn btn-ghost btn-sm" onclick="declineCare(${cu.id})">Not mine</button>`}
+          </div>
+          ${cu.declines ? `<div style="font-size:11px;color:var(--ink-soft);margin-top:6px">${cu.declines} tenant admin${cu.declines > 1 ? "s" : ""} already said not theirs</div>` : ""}
+        </div>`).join("")}
+    </div>`;
+}
+
+async function takeCare(id) {
+  showLoading();
+  try {
+    await API.post("/api/customers/" + id + "/take-care");
+    toast("Taken into your care", "success");
+    state.user = await API.get("/api/me");
+    await refreshPendingCare();
+    await refreshCustomers();
+  } catch (e) {
+    toast(e.message, "error");
+    await refreshPendingCare();
+  }
+  hideLoading();
+}
+
+async function declineCare(id, fromNotif) {
+  confirmDialog("Not under your care",
+    "It leaves your list, but the other tenant admins and the master can still claim or assign it.",
+    "Not mine", async () => {
+      showLoading();
+      try {
+        await API.post("/api/customers/" + id + "/decline-care");
+        toast("Removed from your pending list", "success");
+        if (fromNotif) { await openNotifications(); refreshBell(); }
+        else await refreshPendingCare();
+      } catch (e) {
+        toast(e.message, "error");
+        if (fromNotif) await openNotifications(); else await refreshPendingCare();
+      }
+      hideLoading();
+    });
+}
+
+// Answering straight from the bell, without leaving the notification sheet.
+async function careDecision(id, action) {
+  if (action === "decline") { closeSheet(); return declineCare(id, true); }
+  showLoading();
+  try {
+    await API.post("/api/customers/" + id + "/take-care");
+    toast("Taken into your care", "success");
+    state.user = await API.get("/api/me");
+    await openNotifications();
+    refreshBell();
+  } catch (e) {
+    toast(e.message, "error");
+    await openNotifications();
+  }
+  hideLoading();
+}
+
+function openAssignCare(id) {
+  const admins = (state.pendingCare && state.pendingCare.tenant_admins) || [];
+  const cu = ((state.pendingCare && state.pendingCare.customers) || [])
+    .find((x) => String(x.id) === String(id));
+  if (!admins.length) { toast("There is no tenant admin to assign this to yet", "error"); return; }
+  openSheet(`
+    <div class="sheet-head"><h3>Assign care</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <p style="font-size:14px;color:var(--ink-soft);margin-top:0">Which tenant admin looks after <b>${esc(cu ? cu.name : "this organization")}</b>?</p>
+      <label class="field"><span>Tenant admin</span>
+        <select id="assignCareSel">
+          ${admins.map((a) => `<option value="${a.id}">${esc(a.name)} — ${esc(a.email)}</option>`).join("")}
+        </select>
+      </label>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary" onclick="assignCare(${id}, document.getElementById('assignCareSel').value)">Assign</button>
+    </div>`);
+}
+
+async function assignCare(id, adminId) {
+  closeSheet();
+  if (!adminId) { toast("Choose a tenant admin", "error"); return; }
+  showLoading();
+  try {
+    await API.post("/api/customers/" + id + "/assign-care", { admin_id: adminId });
+    toast("Assigned", "success");
+    await refreshPendingCare();
+    await refreshCustomers();
+  } catch (e) {
+    toast(e.message, "error");
+    await refreshPendingCare();
+  }
+  hideLoading();
 }
 
 function viewMore(v) {
@@ -3437,15 +3568,34 @@ async function openNotifications() {
   try {
     const n = await API.get("/api/notifications");
     list.innerHTML = n.length
-      ? n.map((x) => `
+      ? n.map((x) => {
+          // A pending-care notification is actionable: the tenant admin can
+          // answer it right here instead of hunting for the organization.
+          const isCare = x.entity_type === "pending_care";
+          let careExtra = "";
+          if (isCare && x.care_pending) {
+            careExtra = isMaster()
+              ? `<div class="btn-row" style="margin-top:8px">
+                  <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();closeSheet();navigate('customers')">Review in Organizations</button>
+                </div>`
+              : `<div class="btn-row" style="margin-top:8px">
+                  <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();careDecision(${x.entity_id}, 'take')">Take into my care</button>
+                  <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();careDecision(${x.entity_id}, 'decline')">Not mine</button>
+                </div>`;
+          } else if (isCare) {
+            careExtra = `<div class="n-accepted">✔ ${x.care_claimed_by ? `Under the care of ${esc(x.care_claimed_by)}` : "No longer awaiting a decision"}</div>`;
+          }
+          return `
         <div class="notif ${x.read ? "" : "unread"}" onclick="openNotif(${x.id}, '${esc(x.entity_type)}', ${x.entity_id || "null"})">
           <div class="c-avatar">🔔</div>
           <div class="n-body">
             <div class="n-text">${esc(x.text)}</div>
             <div class="n-time">${timeAgo(x.created_at)}</div>
             ${x.accepted ? `<div class="n-accepted">✔ Accepted</div>` : ""}
+            ${careExtra}
           </div>
-        </div>`).join("")
+        </div>`;
+        }).join("")
       : `<div class="empty"><p>You're all caught up 🎉</p></div>`;
   } catch (e) {
     list.innerHTML = `<div class="empty"><p>Couldn't load notifications</p></div>`;
@@ -3458,6 +3608,7 @@ async function openNotif(nid, entityType, entityId) {
   refreshBell();
   if (entityType === "complaint" && entityId) navigate("complaintDetail", { id: entityId });
   else if (entityType === "breakdown" && entityId) navigate("breakdownDetail", { id: entityId });
+  else if (entityType === "pending_care") navigate("customers");
 }
 
 async function markAllRead() {
@@ -3595,6 +3746,18 @@ $("#joinForm").addEventListener("submit", async (e) => {
     password: $("#jnPassword").value,
     role,
   };
+  if (!body.name || !body.email || !body.password) {
+    const el = $("#joinError");
+    el.textContent = "Please fill in your full name, email and password";
+    el.classList.remove("hidden");
+    return;
+  }
+  if (!body.phone) {
+    const el = $("#joinError");
+    el.textContent = "Please enter your phone number";
+    el.classList.remove("hidden");
+    return;
+  }
   if (role === "customer") {
     const custVal = $("#jnCustomer").value;
     if (custVal === "__new__") {
@@ -3709,6 +3872,7 @@ Object.assign(window, {
   openEquipmentEditor, saveEquipment, deleteEquipment, openCustomerEditor, saveCustomer, deleteCustomer,
   openUserEditor, saveUser, deleteUser, toggleCustomerSelect, logout,
   renderCareList, addCareCustomer, removeCareCustomer,
+  refreshPendingCare, takeCare, declineCare, careDecision, openAssignCare, assignCare,
   viewOnboarding, reviewJoin, toggleAlertSound, playAlertSound,
   openAlertSheet, pickAlertPreset, onAlertCustomPicked, clearAlertCustom, alertPreviewCustom,
   downloadReport, openExportSheet,
@@ -3728,7 +3892,7 @@ Object.assign(window, {
   togglePushAlerts, syncPushAlerts, pushStateLabel,
 });
 
-const BUILD_VERSION = "45";
+const BUILD_VERSION = "46";
 
 async function boot() {
   // Bust stale WebView or browser caches automatically if a newer version was deployed

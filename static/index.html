@@ -85,11 +85,11 @@
       <!-- Join request form (hidden until toggled) -->
       <div id="joinPanel" class="hidden" style="margin-top:14px;text-align:left">
         <div class="section-title">Request account</div>
-        <p id="joinHint" class="join-hint">Technician and customer accounts are approved by an admin before you can sign in.</p>
+        <p id="joinHint" class="join-hint">Engineer and customer accounts are approved by an admin before you can sign in.</p>
         <form id="joinForm" autocomplete="off">
           <label class="field"><span>Full name *</span><input id="jnName" placeholder="Your name" required></label>
           <label class="field"><span>Email *</span><input id="jnEmail" type="email" placeholder="you@lab.com" required></label>
-          <label class="field"><span>Phone</span><input id="jnPhone" placeholder="optional"></label>
+          <label class="field"><span>Phone *</span><input id="jnPhone" type="tel" placeholder="+60 12-345 6789" required></label>
           <label class="field"><span>I am a…</span>
             <select id="jnRole">
               <option value="customer">Customer (lab staff)</option>
@@ -98,11 +98,11 @@
             </select>
           </label>
           <div id="jnCustomerBlock">
-            <label class="field"><span>Organisation *</span>
-              <select id="jnCustomer" onchange="onJoinCust()"><option value="">— Select your organisation —</option></select>
+            <label class="field"><span>Organization *</span>
+              <select id="jnCustomer" onchange="onJoinCust()"><option value="">— Select your organization —</option></select>
             </label>
             <div id="jnNewCustomerWrap" class="hidden" style="margin-top:6px">
-              <label class="field"><span>New organisation name *</span>
+              <label class="field"><span>New organization name *</span>
                 <input id="jnNewCustomer" placeholder="e.g. Hospital/Clinic">
               </label>
             </div>
@@ -136,6 +136,6 @@
   <!-- Modal host -->
   <div id="modalHost" class="modal-host hidden"></div>
 
-  <script src="/app.js?v=45"></script>
+  <script src="/app.js?v=46"></script>
 </body>
 </html>
