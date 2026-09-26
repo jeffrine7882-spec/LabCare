@@ -2595,7 +2595,8 @@ async function openCustomerEditor(edit) {
       <label class="field"><span>Customer full name</span><input id="cuLoginName" placeholder="e.g. Lab Manager"></label>
       <label class="field"><span>Customer login email</span><input id="cuLoginEmail" type="email" placeholder="customer@hospital.com"></label>
       <label class="field"><span>Customer login password</span><input id="cuLoginPassword" type="password" placeholder="Min 6 characters"></label>
-      <small style="display:block;margin-top:4px;color:var(--ink-soft);font-size:12px">If you set a password, a customer account will be created with location Main Lab and can log in immediately to see only this organization+location tickets.</small>
+      <label class="field"><span>Location/Department for customer (optional, defaults to Main Lab)</span><input id="cuLoginLocation" placeholder="e.g. Molecular Lab"></label>
+      <small style="display:block;margin-top:4px;color:var(--ink-soft);font-size:12px">If you set a password, a customer account will be created and can log in immediately to see only this organization+location tickets.</small>
       ` : ""}
     </div>
     <div class="sheet-foot">
@@ -2634,7 +2635,7 @@ async function saveCustomer(id) {
   const loginName = isNew ? $("#cuLoginName")?.value.trim() : "";
   const loginEmail = isNew ? $("#cuLoginEmail")?.value.trim() : "";
   const loginPassword = isNew ? $("#cuLoginPassword")?.value : "";
-
+  const loginLocation = isNew ? $("#cuLoginLocation")?.value.trim() : "";
   if (isNew && loginPassword && loginPassword.length < 6) {
     toast("Customer password must be at least 6 characters", "error");
     return;
@@ -2659,7 +2660,7 @@ async function saveCustomer(id) {
       try {
         // Create or get location for this customer
         let locId = null, deptId = null;
-        const locName = "Main Lab";
+        const locName = loginLocation || "Main Lab";
         // Try to find existing location with same name for this customer, or create
         try {
           const locs = await API.get(`/api/locations?customer_id=${orgId}`);
