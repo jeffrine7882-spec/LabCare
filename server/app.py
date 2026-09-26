@@ -307,10 +307,22 @@ def require_master():
 def tenant_guard(u, customer_id, c=None):
     """Reject tenant-scoped staff touching a customer outside their care list.
     Returns (error_json, code) or (None, None)."""
+    # Normalize customer_id to int for comparison (frontend sends string)
+    try:
+        cid_int = int(customer_id) if customer_id is not None and str(customer_id).strip() != "" else None
+    except (ValueError, TypeError):
+        cid_int = None
+    # For non-admin roles, compare against their bound customer
     if u.get("role") != "admin":
         bound = scoped_customer_id(u)
-        if bound and customer_id != bound:
+        # Normalize bound too
+        try:
+            bound_int = int(bound) if bound is not None else None
+        except (ValueError, TypeError):
+            bound_int = bound
+        if bound_int is not None and cid_int is not None and cid_int != bound_int:
             return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
+        # If bound is None (unscoped engineer), allow
         return None, None
     if is_master_admin(u):
         return None, None
@@ -319,8 +331,39 @@ def tenant_guard(u, customer_id, c=None):
         c = conn()
     try:
         scope = tenant_scope(u, c)
-        if customer_id not in (scope or []):
-            return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
+        # Normalize scope to ints
+        scope_ints = []
+        if scope:
+            for s in scope:
+                try:
+                    scope_ints.append(int(s))
+                except (ValueError, TypeError):
+                    scope_ints.append(s)
+        # Check both original and int version for safety
+        if scope_ints:
+            if cid_int is not None and cid_int not in scope_ints and customer_id not in scope_ints and str(customer_id) not in [str(x) for x in scope_ints]:
+                # Also check original scope for backward compat
+                if customer_id not in (scope or []) and cid_int not in (scope or []):
+                    return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
+        else:
+            # Empty scope -> tenant admin with no orgs yet
+            if cid_int is not None:
+                # Allow if they are trying to create first org? No, locations require existing org, so block
+                # But we check scope empty -> they have nothing, so any customer_id is not allowed
+                # However we already handled scope empty case below
+                pass
+            if not scope:
+                # If scope is empty list, they have no organizations yet -> cannot create location for any org
+                # But if scope is None (master), we already returned
+                # For empty list, block any attempt
+                if scope == []:
+                    return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
+        # Final check with original scope for safety
+        if scope is not None and scope != []:
+            if customer_id not in scope and (cid_int not in scope if cid_int is not None else True):
+                # If still not found, try string comparison
+                if str(customer_id) not in [str(x) for x in scope]:
+                    return jsonify({"error": "Not authorised — this record belongs to another organization"}), 403
         return None, None
     finally:
         if own:
@@ -1485,20 +1528,25 @@ def create_location():
     b = get_body()
     if not (b.get("name") or "").strip() or not b.get("customer_id"):
         return jsonify({"error": "Location/department name and organization are required"}), 400
-    err_t, code_t = tenant_guard(u, b["customer_id"])
+    # Normalize customer_id to int (frontend sends string)
+    try:
+        cust_id = int(b["customer_id"])
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid organization id"}), 400
+    err_t, code_t = tenant_guard(u, cust_id)
     if err_t:
         return err_t, code_t
     c = conn()
     name = b["name"].strip()
     cur = c.execute(
         "INSERT INTO locations (customer_id,name,address,city,created_at) VALUES (?,?,?,?,?)",
-        (b["customer_id"], name, b.get("address", ""), b.get("city", ""), now()),
+        (cust_id, name, b.get("address", ""), b.get("city", ""), now()),
     )
     loc_id = cur.lastrowid
     # Location and department are the same: automatically create corresponding department
     c.execute(
         "INSERT INTO departments (customer_id,location_id,name,created_at) VALUES (?,?,?,?)",
-        (b["customer_id"], loc_id, name, now()),
+        (cust_id, loc_id, name, now()),
     )
     c.commit()
     row = c.execute("SELECT l.*, cu.name AS customer_name FROM locations l JOIN customers cu ON cu.id=l.customer_id WHERE l.id=?",
@@ -1523,7 +1571,12 @@ def update_location(lid):
     if err_t:
         c.close()
         return err_t, code_t
-    new_customer_id = b.get("customer_id", existing["customer_id"])
+    raw_new_cid = b.get("customer_id", existing["customer_id"])
+    try:
+        new_customer_id = int(raw_new_cid) if raw_new_cid is not None else existing["customer_id"]
+    except (ValueError, TypeError):
+        c.close()
+        return jsonify({"error": "Invalid organization id"}), 400
     err_t, code_t = tenant_guard(u, new_customer_id)
     if err_t:
         c.close()

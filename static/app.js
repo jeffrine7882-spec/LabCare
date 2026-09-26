@@ -1580,33 +1580,38 @@ async function openLocationEditor(edit, id) {
   let customers = [];
   try { customers = await API.get("/api/customers"); } catch (e) {}
   const l = edit ? state.locations?.find((x) => x.id === id) : null;
+  const hasCustomers = customers && customers.length > 0;
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit location/department" : "Add location/department"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
     <div class="sheet-body">
       <label class="field"><span>Location/Department name *</span><input id="locName" value="${esc(l ? l.name : "")}" placeholder="e.g. Molecular Lab"></label>
       <label class="field"><span>Organization *</span>
-        <select id="locCustomer">
-          ${customers.map((x) => `<option value="${x.id}" ${l && l.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
-        </select></label>
+        ${hasCustomers ? `<select id="locCustomer">
+          ${customers.map((x) => `<option value="${x.id}" ${l && String(l.customer_id) === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select>` : `<div style="padding:12px;border:1.5px dashed var(--line);border-radius:12px;background:var(--bg);color:var(--ink-soft);font-size:13px">
+          No organizations found. As Tenant Admin, please create an Organization first via <b>Organizations & locations/departments → ＋ Add organization</b>, then add its Location/Department here. The new organization will automatically be linked to your account.
+        </div><input type="hidden" id="locCustomer" value="">`}
+        </label>
       <label class="field"><span>City</span><input id="locCity" value="${esc(l ? l.city : "")}" placeholder="e.g. Kuala Lumpur"></label>
       <label class="field"><span>Address</span><input id="locAddress" value="${esc(l ? l.address : "")}"></label>
     </div>
     <div class="sheet-foot">
       ${edit ? `<button class="btn btn-danger" style="flex:0 0 auto;padding:11px 16px" onclick="deleteLocation(${l.id})">Delete</button>` : ""}
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
-      <button class="btn btn-primary-2" onclick="saveLocation(${edit ? l.id : "null"})">${edit ? "Save" : "Add location/department"}</button>
+      <button class="btn btn-primary-2" ${!hasCustomers && !edit ? "disabled style='opacity:.5;pointer-events:none'" : ""} onclick="saveLocation(${edit ? l.id : "null"})">${edit ? "Save" : "Add location/department"}</button>
     </div>`);
 }
 
 async function saveLocation(id) {
+  const rawCid = $("#locCustomer")?.value;
   const body = {
     name: $("#locName").value.trim(),
-    customer_id: $("#locCustomer").value,
+    customer_id: rawCid ? parseInt(rawCid, 10) : null,
     city: $("#locCity").value.trim(),
     address: $("#locAddress").value.trim(),
   };
   if (!body.name) { toast("Location/department name is required", "error"); return; }
-  if (!body.customer_id) { toast("Organization is required", "error"); return; }
+  if (!body.customer_id) { toast("Organization is required — create an Organization first", "error"); return; }
   closeSheet();
   showLoading();
   try {
