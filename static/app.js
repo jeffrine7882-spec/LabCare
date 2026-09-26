@@ -708,7 +708,6 @@ function complaintDetailHtml(c) {
       <div class="kv"><span class="k">Assigned to</span><span class="v">${c.assigned_to_name ? personWithPhoneHtml(c.assigned_to_name, c.assigned_to_phone) : "Unassigned"}</span></div>
       ${c.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${personWithPhoneHtml(c.accepted_by_name, c.accepted_by_phone)}${c.accepted_at ? " · " + fmtDate(c.accepted_at) : ""}</span></div>` : ""}
       ${c.accept_reply ? `<div class="kv"><span class="k">Reply to sender</span><span class="v">“${esc(c.accept_reply)}”</span></div>` : ""}
-      ${c.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(c.responsible_admin_name)}</span></div>` : ""}
       ${c.closed_by_name ? `<div class="kv"><span class="k">${c.status === "closed" ? "Closed by" : "Resolved by"}</span><span class="v">${esc(c.closed_by_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Created</span><span class="v">${fmtDate(c.created_at)}</span></div>
       ${c.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(c.resolved_at)}</span></div>` : ""}
@@ -1186,7 +1185,6 @@ function breakdownDetailHtml(b) {
       <div class="kv"><span class="k">Assigned to</span><span class="v">${b.assigned_to_name ? personWithPhoneHtml(b.assigned_to_name, b.assigned_to_phone) : "Unassigned"}</span></div>
       ${b.accepted_by_name ? `<div class="kv"><span class="k">Accepted by</span><span class="v">${personWithPhoneHtml(b.accepted_by_name, b.accepted_by_phone)}${b.accepted_at ? " · " + fmtDate(b.accepted_at) : ""}</span></div>` : ""}
       ${b.accept_reply ? `<div class="kv"><span class="k">Reply to sender</span><span class="v">“${esc(b.accept_reply)}”</span></div>` : ""}
-      ${b.responsible_admin_name ? `<div class="kv"><span class="k">Tenant admin in charge</span><span class="v">${esc(b.responsible_admin_name)}</span></div>` : ""}
       ${b.closed_by_name ? `<div class="kv"><span class="k">Resolved by</span><span class="v">${esc(b.closed_by_name)}</span></div>` : ""}
       <div class="kv"><span class="k">Reported</span><span class="v">${fmtDate(b.created_at)}</span></div>
       ${b.resolved_at ? `<div class="kv"><span class="k">Resolved</span><span class="v">${fmtDate(b.resolved_at)}</span></div>` : ""}
@@ -2101,7 +2099,6 @@ async function openComplaintEditor(edit) {
   state.equipment = equipment;
   const c = edit ? state.complaintDetail : null;
   const defCust = c && c.customer_id ? c.customer_id : (customers.length ? customers[0].id : "");
-  const respAdmins = isTech() && isUnboundStaff() && defCust ? await adminsForCustomer(defCust) : [];
 
   openSheet(`
     <div class="sheet-head"><h3>${edit ? "Edit complaint" : "Log complaint"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
@@ -2113,11 +2110,6 @@ async function openComplaintEditor(edit) {
         <select id="fCustomer" onchange="onCustPickComplaint()">
           ${customers.map((x) => `<option value="${x.id}" ${c && c.customer_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
-      ${isUnboundStaff() ? `
-      <label class="field" id="fRespAdminField" style="${defCust ? "" : "display:none"}"><span>Responsible tenant admin</span>
-        <select id="fRespAdmin">
-          ${respAdminOpts(respAdmins, c && c.responsible_admin_id, true)}
-        </select></label>` : ""}
       <label class="field"><span>Location/Department</span>
         <select id="fLocation" onchange="onLocPickComplaint()">
           ${locOpts(state.locations || [], c && c.location_id, defCust)}
@@ -2168,12 +2160,12 @@ async function saveComplaint(id) {
     priority: ($("#fPriority button.active")?.dataset.p || "medium"),
   };
   if (isTech()) {
-    body.customer_id = $("#fCustomer").value;
-    body.location_id = $("#fLocation").value || null;
+    body.customer_id = $("#fCustomer").value ? parseInt($("#fCustomer").value, 10) : null;
+    body.location_id = $("#fLocation").value ? parseInt($("#fLocation").value, 10) : null;
     const deptMatch = (state.departments || []).find((d) => String(d.location_id) === String(body.location_id));
-    body.department_id = $("#fDepartment")?.value || deptMatch?.id || body.location_id || null;
-    body.assigned_to = ($("#fAssignee").value || null);
-    if (isUnboundStaff() && $("#fRespAdmin")) body.responsible_admin_id = $("#fRespAdmin").value || null;
+    body.department_id = $("#fDepartment")?.value ? parseInt($("#fDepartment").value, 10) : (deptMatch?.id ? parseInt(deptMatch.id, 10) : (body.location_id || null));
+    body.assigned_to = ($("#fAssignee").value ? parseInt($("#fAssignee").value, 10) : null);
+    // Responsible tenant admin auto-resolved by backend based on organization — no manual picker
   }
   if (!body.subject) { toast("Subject is required", "error"); return; }
   if (isTech() && !body.customer_id) { toast("Organization is required", "error"); return; }
@@ -2210,7 +2202,6 @@ async function openBreakdownEditor(edit, prefill) {
   const b = edit && !prefill ? state.breakdownDetail : null;
   const p = prefill || {};
   const defCust = (b ? b.customer_id : p.customer_id) || (isTech() && customers.length ? customers[0].id : "");
-  const respAdmins = isTech() && isUnboundStaff() && defCust ? await adminsForCustomer(defCust) : [];
 
   openSheet(`
     <div class="sheet-head"><h3>${edit && !prefill ? "Edit breakdown" : "Report breakdown"}</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
@@ -2224,11 +2215,6 @@ async function openBreakdownEditor(edit, prefill) {
         <select id="bCustomer" onchange="onCustPickBreakdown()">
           ${customers.map((x) => `<option value="${x.id}" ${(b ? b.customer_id === x.id : p.customer_id === x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
         </select></label>
-      ${isUnboundStaff() ? `
-      <label class="field" id="bRespAdminField" style="${defCust ? "" : "display:none"}"><span>Responsible tenant admin</span>
-        <select id="bRespAdmin">
-          ${respAdminOpts(respAdmins, b && b.responsible_admin_id, true)}
-        </select></label>` : ""}
       <label class="field"><span>Location/Department</span>
         <select id="bLocation" onchange="onLocPickBreakdown()">
           ${locOpts(state.locations || [], (b && b.location_id) || null, defCust)}
@@ -2273,13 +2259,13 @@ async function saveBreakdown(id) {
     priority: ($("#bPriority button.active")?.dataset.p || "medium"),
   };
   if (isTech()) {
-    body.customer_id = $("#bCustomer").value;
-    body.location_id = $("#bLocation").value || null;
+    body.customer_id = $("#bCustomer").value ? parseInt($("#bCustomer").value, 10) : null;
+    body.location_id = $("#bLocation").value ? parseInt($("#bLocation").value, 10) : null;
     const deptMatch = (state.departments || []).find((d) => String(d.location_id) === String(body.location_id));
-    body.department_id = $("#bDepartment")?.value || deptMatch?.id || body.location_id || null;
-    body.complaint_id = $("#bComplaint").value || null;
-    body.assigned_to = ($("#bAssignee").value || null);
-    if (isUnboundStaff() && $("#bRespAdmin")) body.responsible_admin_id = $("#bRespAdmin").value || null;
+    body.department_id = $("#bDepartment")?.value ? parseInt($("#bDepartment").value, 10) : (deptMatch?.id ? parseInt(deptMatch.id, 10) : (body.location_id || null));
+    body.complaint_id = $("#bComplaint").value ? parseInt($("#bComplaint").value, 10) : null;
+    body.assigned_to = ($("#bAssignee").value ? parseInt($("#bAssignee").value, 10) : null);
+    // Responsible tenant admin auto-resolved by backend
   }
   if (!body.fault_description) { toast("Fault description is required", "error"); return; }
   if (isTech() && !body.customer_id) { toast("Organization is required", "error"); return; }
@@ -2503,7 +2489,6 @@ function onCustPickComplaint() {
     $("#fEquipment").innerHTML = eqOpts(state.equipment || [], null, cust, "— None / general —");
     $("#fEquipment").value = "";
   }
-  if ($("#fRespAdmin")) onRespCustomerPick("fCustomer", "fRespAdmin");
 }
 
 function onLocPickComplaint() {
@@ -2527,7 +2512,6 @@ function onCustPickBreakdown() {
     $("#bEquipment").innerHTML = eqOpts(state.equipment || [], null, cust, "— Select —");
     $("#bEquipment").value = "";
   }
-  if ($("#bRespAdmin")) onRespCustomerPick("bCustomer", "bRespAdmin");
 }
 
 function onLocPickBreakdown() {
